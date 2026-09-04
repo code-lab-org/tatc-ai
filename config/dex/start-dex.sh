@@ -1,3 +1,11 @@
+#!/bin/sh
+set -eu
+
+: "${DEX_DEV_PASSWORD_HASH:?DEX_DEV_PASSWORD_HASH is required}"
+: "${DEX_LIBRECHAT_CLIENT_SECRET:?DEX_LIBRECHAT_CLIENT_SECRET is required}"
+: "${DEX_MCP_CLIENT_SECRET:?DEX_MCP_CLIENT_SECRET is required}"
+
+cat > /tmp/dex-config.yaml <<CONFIG
 issuer: http://auth.localtest.me
 storage:
   type: sqlite3
@@ -24,3 +32,6 @@ staticClients:
     redirectURIs:
       - "http://mcp.localtest.me/oauth/callback"
     secret: "${DEX_MCP_CLIENT_SECRET}"
+CONFIG
+
+exec dex serve /tmp/dex-config.yaml

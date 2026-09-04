@@ -11,7 +11,7 @@ Stub monorepo for an application stack with:
 - `apps/librechat` - LibreChat environment stub
 - `docker-compose.dev.yml` - local development stack with direct ports
 - `docker-compose.deploy.yml` - deployment stack using image-based services, Traefik, and Dex
-- `config/dex/config.yaml` - Dex IdP config
+- `config/dex/start-dex.sh` - Dex startup script that renders config from environment variables
 
 ## MCP server
 

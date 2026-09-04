@@ -20,9 +20,13 @@ services:
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
     container_name: tat-ai-dex
-    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    command: ["/bin/sh", "/etc/dex/start-dex.sh"]
+    environment:
+      DEX_DEV_PASSWORD_HASH: ${DEX_DEV_PASSWORD_HASH}
+      DEX_LIBRECHAT_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
+      DEX_MCP_CLIENT_SECRET: ${DEX_MCP_CLIENT_SECRET}
     volumes:
-      - ./config/dex/config.yaml:/etc/dex/config.yaml:ro
+      - ./config/dex/start-dex.sh:/etc/dex/start-dex.sh:ro
       - dex-data:/var/dex
     labels:
       - "traefik.enable=true"
@@ -48,11 +52,9 @@ services:
   librechat:
     image: ghcr.io/danny-avila/librechat:latest
     container_name: tat-ai-librechat
+    env_file:
+      - apps/librechat/.env.example
     environment:
-      HOST: 0.0.0.0
-      PORT: 3080
-      MONGO_URI: mongodb://mongodb:27017/librechat
-      MCP_SERVER_URL: http://mcp-server:8000/mcp
       OIDC_ISSUER: http://auth.localtest.me
       OIDC_CLIENT_ID: librechat
       OIDC_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
