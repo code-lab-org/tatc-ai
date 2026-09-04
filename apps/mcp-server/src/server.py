@@ -1,6 +1,6 @@
 from fastmcp import FastMCP
 
-mcp = FastMCP("tat-ai-mcp-server")
+mcp = FastMCP("tatc-ai-mcp-server")
 
 
 @mcp.tool()
