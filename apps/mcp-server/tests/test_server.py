@@ -54,7 +54,7 @@ class ServerModuleTests(unittest.TestCase):
     def test_server_registers_echo_tool(self):
         module = self.load_server_module()
 
-        self.assertEqual(module.mcp.name, "tat-ai-mcp-server")
+        self.assertEqual(module.mcp.name, "tatc-ai-mcp-server")
         self.assertIn("echo", module.mcp.registered_tools)
         self.assertEqual(module.echo("hello"), "hello")
 

@@ -18,7 +18,7 @@ Stub monorepo for an application stack with:
 Build the MCP server image:
 
 ```bash
-docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tat-ai-mcp-server:latest
+docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:latest
 ```
 
 For deployment, push this image (or update `docker-compose.deploy.yml` with your own published image tag).
