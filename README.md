@@ -1,4 +1,4 @@
-# tat-ai
+# tatc-ai
 
 Stub monorepo for an application stack with:
 - a FastMCP-based MCP server
