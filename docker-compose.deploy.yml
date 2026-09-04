@@ -13,7 +13,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      - proxy
+      proxy:
+        aliases:
+          - auth.localtest.me
 
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
@@ -28,10 +30,8 @@ services:
       - "traefik.http.routers.dex.entrypoints=web"
       - "traefik.http.services.dex.loadbalancer.server.port=5556"
     networks:
-      proxy: {}
-      app:
-        aliases:
-          - auth.localtest.me
+      - proxy
+      - app
 
   mcp-server:
     image: ghcr.io/code-lab-org/tat-ai-mcp-server:latest
@@ -55,7 +55,7 @@ services:
       MCP_SERVER_URL: http://mcp-server:8000/mcp
       OIDC_ISSUER: http://auth.localtest.me
       OIDC_CLIENT_ID: librechat
-      OIDC_CLIENT_SECRET: librechat-secret
+      OIDC_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
     depends_on:
       - mongodb
       - mcp-server

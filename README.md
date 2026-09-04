@@ -45,5 +45,10 @@ Runs with reverse proxy and OAuth IdP:
 Run:
 
 ```bash
+export DEX_LIBRECHAT_CLIENT_SECRET=replace-me
+export DEX_MCP_CLIENT_SECRET=replace-me
+export DEX_DEV_PASSWORD_HASH=replace-me-with-bcrypt-hash
 docker compose -f docker-compose.deploy.yml up -d
 ```
+
+The deployment compose file aliases `auth.localtest.me` to the Traefik container on the internal network so OIDC clients and browser traffic use the same issuer URL.
