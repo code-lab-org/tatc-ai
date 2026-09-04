@@ -26,7 +26,7 @@ staticClients:
   - id: librechat
     name: LibreChat
     redirectURIs:
-      - "https://chat.${DOMAIN}/oauth/callback"
+      - "https://chat.${DOMAIN}/oauth/openid/callback"
     secret: "${DEX_LIBRECHAT_CLIENT_SECRET}"
   - id: mcp-server
     name: MCP Server
