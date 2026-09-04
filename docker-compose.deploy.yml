@@ -69,7 +69,11 @@ services:
     env_file:
       - apps/librechat/.env
     environment:
+      # Dex is the identity provider for this deployment: disable local
+      # email/password signup and let OIDC logins auto-create accounts.
+      ALLOW_REGISTRATION: "false"
       ALLOW_SOCIAL_LOGIN: "true"
+      ALLOW_SOCIAL_REGISTRATION: "true"
       OPENID_ISSUER: https://auth.${DOMAIN}
       OPENID_CLIENT_ID: librechat
       OPENID_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
