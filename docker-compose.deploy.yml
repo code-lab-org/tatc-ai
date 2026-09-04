@@ -16,6 +16,9 @@ services:
       proxy:
         aliases:
           - auth.localtest.me
+      app:
+        aliases:
+          - auth.localtest.me
 
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
