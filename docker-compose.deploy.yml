@@ -1,7 +1,7 @@
 services:
   traefik:
     image: traefik:v3.1
-    container_name: tat-ai-traefik
+    container_name: tatc-ai-traefik
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
@@ -22,7 +22,7 @@ services:
 
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
-    container_name: tat-ai-dex
+    container_name: tatc-ai-dex
     command: ["/bin/sh", "/etc/dex/start-dex.sh"]
     environment:
       DEX_DEV_PASSWORD_HASH: ${DEX_DEV_PASSWORD_HASH}
@@ -42,8 +42,8 @@ services:
       - app
 
   mcp-server:
-    image: ghcr.io/code-lab-org/tat-ai-mcp-server:latest
-    container_name: tat-ai-mcp-server
+    image: ghcr.io/code-lab-org/tatc-ai-mcp-server:latest
+    container_name: tatc-ai-mcp-server
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.mcp.rule=Host(`mcp.localtest.me`)"
@@ -56,7 +56,7 @@ services:
 
   librechat:
     image: ghcr.io/danny-avila/librechat:latest
-    container_name: tat-ai-librechat
+    container_name: tatc-ai-librechat
     env_file:
       - apps/librechat/.env.example
     environment:
@@ -79,7 +79,7 @@ services:
 
   mongodb:
     image: mongo:7
-    container_name: tat-ai-mongodb
+    container_name: tatc-ai-mongodb
     volumes:
       - mongodb-data:/data/db
     networks:
