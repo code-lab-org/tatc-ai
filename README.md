@@ -18,8 +18,10 @@ Stub monorepo for an application stack with:
 Build the MCP server image:
 
 ```bash
-docker build -f apps/mcp-server/Dockerfile .
+docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tat-ai-mcp-server:latest
 ```
+
+For deployment, push this image (or update `docker-compose.deploy.yml` with your own published image tag).
 
 ## Development stack
 
@@ -36,12 +38,12 @@ docker compose -f docker-compose.dev.yml up --build
 
 Runs with reverse proxy and OAuth IdP:
 - Traefik routes:
-  - `http://chat.<BASE_DOMAIN>` -> LibreChat
-  - `http://mcp.<BASE_DOMAIN>` -> MCP server
-  - `http://auth.<BASE_DOMAIN>` -> Dex
+  - `http://chat.localtest.me` -> LibreChat
+  - `http://mcp.localtest.me` -> MCP server
+  - `http://auth.localtest.me` -> Dex
 
-Set `BASE_DOMAIN` (default: `localtest.me`) and run:
+Run:
 
 ```bash
-BASE_DOMAIN=localtest.me docker compose -f docker-compose.deploy.yml up -d
+docker compose -f docker-compose.deploy.yml up -d
 ```

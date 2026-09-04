@@ -3,8 +3,6 @@ services:
     image: traefik:v3.1
     container_name: tat-ai-traefik
     command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
@@ -12,7 +10,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -27,19 +24,21 @@ services:
       - dex-data:/var/dex
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.dex.rule=Host(`auth.${BASE_DOMAIN:-localtest.me}`)"
+      - "traefik.http.routers.dex.rule=Host(`auth.localtest.me`)"
       - "traefik.http.routers.dex.entrypoints=web"
       - "traefik.http.services.dex.loadbalancer.server.port=5556"
     networks:
-      - proxy
-      - app
+      proxy: {}
+      app:
+        aliases:
+          - auth.localtest.me
 
   mcp-server:
     image: ghcr.io/code-lab-org/tat-ai-mcp-server:latest
     container_name: tat-ai-mcp-server
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.mcp.rule=Host(`mcp.${BASE_DOMAIN:-localtest.me}`)"
+      - "traefik.http.routers.mcp.rule=Host(`mcp.localtest.me`)"
       - "traefik.http.routers.mcp.entrypoints=web"
       - "traefik.http.services.mcp.loadbalancer.server.port=8000"
     networks:
@@ -54,7 +53,7 @@ services:
       PORT: 3080
       MONGO_URI: mongodb://mongodb:27017/librechat
       MCP_SERVER_URL: http://mcp-server:8000/mcp
-      OIDC_ISSUER: http://auth.${BASE_DOMAIN:-localtest.me}
+      OIDC_ISSUER: http://auth.localtest.me
       OIDC_CLIENT_ID: librechat
       OIDC_CLIENT_SECRET: librechat-secret
     depends_on:
@@ -63,7 +62,7 @@ services:
       - dex
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.librechat.rule=Host(`chat.${BASE_DOMAIN:-localtest.me}`)"
+      - "traefik.http.routers.librechat.rule=Host(`chat.localtest.me`)"
       - "traefik.http.routers.librechat.entrypoints=web"
       - "traefik.http.services.librechat.loadbalancer.server.port=3080"
     networks:
