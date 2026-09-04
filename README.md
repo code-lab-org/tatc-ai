@@ -38,9 +38,9 @@ docker compose -f docker-compose.dev.yml up --build
 
 Runs with reverse proxy and OAuth IdP:
 - Traefik routes:
-  - `http://chat.localtest.me` -> LibreChat
-  - `http://mcp.localtest.me` -> MCP server
-  - `http://auth.localtest.me` -> Dex
+  - `https://chat.localtest.me` -> LibreChat
+  - `https://mcp.localtest.me` -> MCP server
+  - `https://auth.localtest.me` -> Dex
 
 Run:
 

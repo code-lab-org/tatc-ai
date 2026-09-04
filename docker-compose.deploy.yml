@@ -34,7 +34,8 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.dex.rule=Host(`auth.localtest.me`)"
-      - "traefik.http.routers.dex.entrypoints=web"
+      - "traefik.http.routers.dex.entrypoints=websecure"
+      - "traefik.http.routers.dex.tls=true"
       - "traefik.http.services.dex.loadbalancer.server.port=5556"
     networks:
       - proxy
@@ -46,7 +47,8 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.mcp.rule=Host(`mcp.localtest.me`)"
-      - "traefik.http.routers.mcp.entrypoints=web"
+      - "traefik.http.routers.mcp.entrypoints=websecure"
+      - "traefik.http.routers.mcp.tls=true"
       - "traefik.http.services.mcp.loadbalancer.server.port=8000"
     networks:
       - proxy
@@ -58,7 +60,7 @@ services:
     env_file:
       - apps/librechat/.env.example
     environment:
-      OIDC_ISSUER: http://auth.localtest.me
+      OIDC_ISSUER: https://auth.localtest.me
       OIDC_CLIENT_ID: librechat
       OIDC_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
     depends_on:
@@ -68,7 +70,8 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.librechat.rule=Host(`chat.localtest.me`)"
-      - "traefik.http.routers.librechat.entrypoints=web"
+      - "traefik.http.routers.librechat.entrypoints=websecure"
+      - "traefik.http.routers.librechat.tls=true"
       - "traefik.http.services.librechat.loadbalancer.server.port=3080"
     networks:
       - proxy

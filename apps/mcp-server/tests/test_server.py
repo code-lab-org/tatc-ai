@@ -43,11 +43,16 @@ class ServerModuleTests(unittest.TestCase):
         else:
             sys.modules["fastmcp"] = self.original_fastmcp
 
-    def test_server_registers_echo_tool(self):
+    @staticmethod
+    def load_server_module():
         spec = importlib.util.spec_from_file_location("tat_ai_server", SERVER_PATH)
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(module)
+        return module
+
+    def test_server_registers_echo_tool(self):
+        module = self.load_server_module()
 
         self.assertEqual(module.mcp.name, "tat-ai-mcp-server")
         self.assertIn("echo", module.mcp.registered_tools)
