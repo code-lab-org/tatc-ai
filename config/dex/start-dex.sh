@@ -1,12 +1,13 @@
 #!/bin/sh
 set -eu
 
+: "${DOMAIN:?DOMAIN is required}"
 : "${DEX_DEV_PASSWORD_HASH:?DEX_DEV_PASSWORD_HASH is required}"
 : "${DEX_LIBRECHAT_CLIENT_SECRET:?DEX_LIBRECHAT_CLIENT_SECRET is required}"
 : "${DEX_MCP_CLIENT_SECRET:?DEX_MCP_CLIENT_SECRET is required}"
 
 cat > /tmp/dex-config.yaml <<CONFIG
-issuer: https://auth.localtest.me
+issuer: https://auth.${DOMAIN}
 storage:
   type: sqlite3
   config:
@@ -25,12 +26,12 @@ staticClients:
   - id: librechat
     name: LibreChat
     redirectURIs:
-      - "https://chat.localtest.me/oauth/callback"
+      - "https://chat.${DOMAIN}/oauth/callback"
     secret: "${DEX_LIBRECHAT_CLIENT_SECRET}"
   - id: mcp-server
     name: MCP Server
     redirectURIs:
-      - "https://mcp.localtest.me/oauth/callback"
+      - "https://mcp.${DOMAIN}/oauth/callback"
     secret: "${DEX_MCP_CLIENT_SECRET}"
 CONFIG
 

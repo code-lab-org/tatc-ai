@@ -36,19 +36,30 @@ docker compose -f docker-compose.dev.yml up --build
 
 ## Deployment stack
 
-Runs with reverse proxy and OAuth IdP:
-- Traefik routes:
-  - `https://chat.localtest.me` -> LibreChat
-  - `https://mcp.localtest.me` -> MCP server
-  - `https://auth.localtest.me` -> Dex
+Runs behind Traefik with automatic Let's Encrypt TLS and an OAuth IdP:
+- `https://chat.<DOMAIN>` -> LibreChat
+- `https://mcp.<DOMAIN>` -> MCP server
+- `https://auth.<DOMAIN>` -> Dex
 
-Run:
+All host names and secrets are read from environment files that are **not**
+committed to the repository:
 
-```bash
-export DEX_LIBRECHAT_CLIENT_SECRET=replace-me
-export DEX_MCP_CLIENT_SECRET=replace-me
-export DEX_DEV_PASSWORD_HASH=replace-me-with-bcrypt-hash
-docker compose -f docker-compose.deploy.yml up -d
-```
+1. Point DNS for `<DOMAIN>`, `chat.<DOMAIN>`, `mcp.<DOMAIN>`, and
+   `auth.<DOMAIN>` at the host's public IP, and open inbound 80/443 in its
+   security group (80 is required for the Let's Encrypt HTTP challenge).
+2. `cp .env.example .env` at the repo root and fill in `DOMAIN`, `ACME_EMAIL`,
+   and freshly generated `DEX_*` secrets.
+3. `cp apps/librechat/.env.example apps/librechat/.env` and replace the
+   `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDS_KEY`, and `CREDS_IV` placeholders
+   with your own generated values (see the comments in that file).
+4. Run:
 
-The deployment compose file aliases `auth.localtest.me` to the Traefik container on the internal network so OIDC clients and browser traffic use the same issuer URL.
+   ```bash
+   docker compose -f docker-compose.deploy.yml up -d
+   ```
+
+docker compose reads `.env` from the repo root automatically to fill in
+`${DOMAIN}` etc. throughout `docker-compose.deploy.yml`. The compose file also
+aliases `auth.<DOMAIN>` to the Traefik container on the internal Docker
+network, so OIDC clients inside the stack and browsers outside it resolve the
+same issuer URL without depending on outbound internet DNS.

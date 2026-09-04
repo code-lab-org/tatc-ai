@@ -6,25 +6,32 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt-data:/letsencrypt
     networks:
       proxy:
         aliases:
-          - auth.localtest.me
+          - auth.${DOMAIN}
       app:
         aliases:
-          - auth.localtest.me
+          - auth.${DOMAIN}
 
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
     container_name: tatc-ai-dex
     command: ["/bin/sh", "/etc/dex/start-dex.sh"]
     environment:
+      DOMAIN: ${DOMAIN}
       DEX_DEV_PASSWORD_HASH: ${DEX_DEV_PASSWORD_HASH}
       DEX_LIBRECHAT_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
       DEX_MCP_CLIENT_SECRET: ${DEX_MCP_CLIENT_SECRET}
@@ -33,9 +40,10 @@ services:
       - dex-data:/var/dex
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.dex.rule=Host(`auth.localtest.me`)"
+      - "traefik.http.routers.dex.rule=Host(`auth.${DOMAIN}`)"
       - "traefik.http.routers.dex.entrypoints=websecure"
       - "traefik.http.routers.dex.tls=true"
+      - "traefik.http.routers.dex.tls.certresolver=letsencrypt"
       - "traefik.http.services.dex.loadbalancer.server.port=5556"
     networks:
       - proxy
@@ -46,9 +54,10 @@ services:
     container_name: tatc-ai-mcp-server
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.mcp.rule=Host(`mcp.localtest.me`)"
+      - "traefik.http.routers.mcp.rule=Host(`mcp.${DOMAIN}`)"
       - "traefik.http.routers.mcp.entrypoints=websecure"
       - "traefik.http.routers.mcp.tls=true"
+      - "traefik.http.routers.mcp.tls.certresolver=letsencrypt"
       - "traefik.http.services.mcp.loadbalancer.server.port=8000"
     networks:
       - proxy
@@ -58,20 +67,23 @@ services:
     image: ghcr.io/danny-avila/librechat:latest
     container_name: tatc-ai-librechat
     env_file:
-      - apps/librechat/.env.example
+      - apps/librechat/.env
     environment:
-      OIDC_ISSUER: https://auth.localtest.me
+      OIDC_ISSUER: https://auth.${DOMAIN}
       OIDC_CLIENT_ID: librechat
       OIDC_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
+    volumes:
+      - ./apps/librechat/librechat.yaml:/app/librechat.yaml:ro
     depends_on:
       - mongodb
       - mcp-server
       - dex
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.librechat.rule=Host(`chat.localtest.me`)"
+      - "traefik.http.routers.librechat.rule=Host(`chat.${DOMAIN}`)"
       - "traefik.http.routers.librechat.entrypoints=websecure"
       - "traefik.http.routers.librechat.tls=true"
+      - "traefik.http.routers.librechat.tls.certresolver=letsencrypt"
       - "traefik.http.services.librechat.loadbalancer.server.port=3080"
     networks:
       - proxy
@@ -92,3 +104,4 @@ networks:
 volumes:
   dex-data:
   mongodb-data:
+  letsencrypt-data:

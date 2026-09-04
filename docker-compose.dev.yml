@@ -20,6 +20,8 @@ services:
     container_name: tatc-ai-librechat-dev
     env_file:
       - apps/librechat/.env.example
+    volumes:
+      - ./apps/librechat/librechat.yaml:/app/librechat.yaml:ro
     depends_on:
       - mongodb
       - mcp-server
