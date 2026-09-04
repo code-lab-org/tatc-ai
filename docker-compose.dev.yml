@@ -1,0 +1,30 @@
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: apps/mcp-server/Dockerfile
+    container_name: tat-ai-mcp-server-dev
+    ports:
+      - "8000:8000"
+
+  mongodb:
+    image: mongo:7
+    container_name: tat-ai-mongodb-dev
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: tat-ai-librechat-dev
+    env_file:
+      - apps/librechat/.env.example
+    depends_on:
+      - mongodb
+      - mcp-server
+    ports:
+      - "3080:3080"
+
+volumes:
+  mongodb-data:

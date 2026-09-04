@@ -1,0 +1,87 @@
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: tat-ai-traefik
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    container_name: tat-ai-dex
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./config/dex/config.yaml:/etc/dex/config.yaml:ro
+      - dex-data:/var/dex
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dex.rule=Host(`auth.${BASE_DOMAIN:-localtest.me}`)"
+      - "traefik.http.routers.dex.entrypoints=web"
+      - "traefik.http.services.dex.loadbalancer.server.port=5556"
+    networks:
+      - proxy
+      - app
+
+  mcp-server:
+    image: ghcr.io/code-lab-org/tat-ai-mcp-server:latest
+    container_name: tat-ai-mcp-server
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp.rule=Host(`mcp.${BASE_DOMAIN:-localtest.me}`)"
+      - "traefik.http.routers.mcp.entrypoints=web"
+      - "traefik.http.services.mcp.loadbalancer.server.port=8000"
+    networks:
+      - proxy
+      - app
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: tat-ai-librechat
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3080
+      MONGO_URI: mongodb://mongodb:27017/librechat
+      MCP_SERVER_URL: http://mcp-server:8000/mcp
+      OIDC_ISSUER: http://auth.${BASE_DOMAIN:-localtest.me}
+      OIDC_CLIENT_ID: librechat
+      OIDC_CLIENT_SECRET: librechat-secret
+    depends_on:
+      - mongodb
+      - mcp-server
+      - dex
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.librechat.rule=Host(`chat.${BASE_DOMAIN:-localtest.me}`)"
+      - "traefik.http.routers.librechat.entrypoints=web"
+      - "traefik.http.services.librechat.loadbalancer.server.port=3080"
+    networks:
+      - proxy
+      - app
+
+  mongodb:
+    image: mongo:7
+    container_name: tat-ai-mongodb
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - app
+
+networks:
+  proxy:
+  app:
+
+volumes:
+  dex-data:
+  mongodb-data:
