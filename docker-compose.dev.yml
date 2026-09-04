@@ -3,13 +3,13 @@ services:
     build:
       context: .
       dockerfile: apps/mcp-server/Dockerfile
-    container_name: tat-ai-mcp-server-dev
+    container_name: tatc-ai-mcp-server-dev
     ports:
       - "8000:8000"
 
   mongodb:
     image: mongo:7
-    container_name: tat-ai-mongodb-dev
+    container_name: tatc-ai-mongodb-dev
     ports:
       - "27017:27017"
     volumes:
@@ -17,7 +17,7 @@ services:
 
   librechat:
     image: ghcr.io/danny-avila/librechat:latest
-    container_name: tat-ai-librechat-dev
+    container_name: tatc-ai-librechat-dev
     env_file:
       - apps/librechat/.env.example
     depends_on:
