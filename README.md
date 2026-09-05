@@ -60,7 +60,15 @@ committed to the repository:
 3. `cp apps/librechat/.env.example apps/librechat/.env` and replace the
    `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDS_KEY`, and `CREDS_IV` placeholders
    with your own generated values (see the comments in that file).
-4. Run:
+4. `ghcr.io/code-lab-org/tatc-ai-mcp-server` is a private package. Log the
+   host in once with a GitHub PAT (`read:packages` scope, from an account
+   with read access to this repo):
+
+   ```bash
+   echo '<PAT>' | docker login ghcr.io -u <github-username> --password-stdin
+   ```
+
+5. Run:
 
    ```bash
    docker compose -f docker-compose.deploy.yml up -d
