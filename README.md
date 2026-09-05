@@ -21,9 +21,10 @@ that touches `apps/mcp-server/**`, tagged with both `latest` and the commit
 SHA it was built from.
 
 `docker-compose.deploy.yml` pulls `ghcr.io/code-lab-org/tatc-ai-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}`.
-For a reproducible, rollback-able deploy, set `MCP_SERVER_IMAGE_TAG` in `.env`
-to the specific commit SHA you want running rather than leaving it on
-`latest`.
+Leave `MCP_SERVER_IMAGE_TAG` unset (or `latest`) so [Auto-deploy](#auto-deploy)
+picks up new images automatically. For a reproducible, rollback-able deploy
+instead, set it in `.env` to a specific commit SHA - auto-deploy will then
+keep redeploying that pinned image rather than moving off it.
 
 To build the image locally instead (e.g. to test before pushing):
 
@@ -86,3 +87,52 @@ docker compose reads `.env` from the repo root automatically to fill in
 aliases `auth.<DOMAIN>` to the Traefik container on the internal Docker
 network, so OIDC clients inside the stack and browsers outside it resolve the
 same issuer URL without depending on outbound internet DNS.
+
+## Auto-deploy
+
+`.github/workflows/deploy.yml` redeploys the EC2 instance over SSH:
+- on every push to `main` (picks up config/compose/Dex changes), and
+- after `build-mcp-server.yml` finishes pushing a new image (picks up mcp-server
+  code changes, after the image is actually available in GHCR rather than
+  racing it).
+
+Both triggers run the same thing: `config/deploy/deploy.sh` on the instance,
+which does `git merge --ff-only` then `docker compose -f
+docker-compose.deploy.yml pull && ... up -d`. It fails loudly rather than
+overwriting anything if the checkout has diverged from `main`.
+
+Because GitHub-hosted runners don't have a small, stable IP range, this means
+opening inbound port 22 on the instance broadly rather than allowlisting
+GitHub. To keep that safe, the deploy key is restricted with a forced
+command so it can never be used for anything but running that one script,
+even though the workflow only ever asks it to:
+
+1. On the EC2 instance, in the deploy user's `~/.ssh/authorized_keys`
+   (that user needs passwordless `docker`/`docker compose` access and a
+   checkout of this repo with `.env` and `apps/librechat/.env` already in
+   place):
+
+   ```
+   command="/path/to/repo/config/deploy/deploy.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA...
+   ```
+
+2. Generate a dedicated deploy keypair (don't reuse a personal key) and add
+   the public half as shown above:
+
+   ```bash
+   ssh-keygen -t ed25519 -f deploy_key -N "" -C "tatc-ai-deploy"
+   ```
+
+3. Capture the instance's host key from a trusted channel (e.g. the EC2
+   console's system log, or a `ssh-keyscan` run over a connection you already
+   trust) - don't just accept whatever a first connection presents, since
+   that defeats host verification entirely:
+
+   ```bash
+   ssh-keyscan -H <host> > known_hosts
+   ```
+
+4. In the repo's GitHub Actions settings, add:
+   - Repository variables: `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`
+   - Repository secrets: `DEPLOY_SSH_KEY` (private half of `deploy_key`),
+     `DEPLOY_SSH_KNOWN_HOSTS` (contents of `known_hosts`)
