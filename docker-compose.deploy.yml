@@ -94,8 +94,20 @@ services:
       OPENID_CLIENT_SECRET: ${DEX_LIBRECHAT_CLIENT_SECRET}
       OPENID_CALLBACK_URL: /oauth/openid/callback
       OPENID_SCOPE: "openid profile email"
+      DOMAIN: ${DOMAIN}
     volumes:
-      - ./apps/librechat/librechat.yaml:/app/librechat.yaml:ro
+      - ./apps/librechat/librechat.deploy.yaml.template:/app/librechat.yaml.template:ro
+    # librechat.yaml is a bind-mounted static file, so it can't use compose's
+    # own ${DOMAIN} interpolation; render it from the template into the
+    # image's normal /app/librechat.yaml path on every start instead, then
+    # fall through to the image's default `npm run backend` (no ENTRYPOINT
+    # to preserve).
+    command:
+      - /bin/sh
+      - -c
+      - |
+        sed "s/__DOMAIN__/$$DOMAIN/g" /app/librechat.yaml.template > /app/librechat.yaml
+        exec npm run backend
     depends_on:
       - mongodb
       - mcp-server
