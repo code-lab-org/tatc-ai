@@ -69,6 +69,11 @@ services:
     env_file:
       - apps/librechat/.env
     environment:
+      # LibreChat builds OIDC redirect/callback URLs from these; they default
+      # to http://localhost:3080 if unset, which is why the OpenID button
+      # pointed at localhost before this was set.
+      DOMAIN_CLIENT: https://chat.${DOMAIN}
+      DOMAIN_SERVER: https://chat.${DOMAIN}
       # Dex is the identity provider for this deployment: disable local
       # email/password signup and let OIDC logins auto-create accounts.
       ALLOW_REGISTRATION: "false"
