@@ -60,6 +60,14 @@ services:
       MCP_OIDC_CLIENT_ID: mcp-server
       MCP_OIDC_CLIENT_SECRET: ${DEX_MCP_CLIENT_SECRET}
       MCP_BASE_URL: https://mcp.${DOMAIN}
+      # OIDCProxy persists DCR client registrations and issued tokens under
+      # this directory (encrypted with a key derived from
+      # MCP_OIDC_CLIENT_SECRET, so it stays stable across restarts). Without
+      # a volume here it lives on the container's writable layer and is
+      # wiped on every redeploy, forcing every client to re-register.
+      FASTMCP_HOME: /data/fastmcp
+    volumes:
+      - mcp-server-oauth:/data/fastmcp
     depends_on:
       - dex
     labels:
@@ -138,4 +146,5 @@ networks:
 volumes:
   dex-data:
   mongodb-data:
+  mcp-server-oauth:
   letsencrypt-data:
