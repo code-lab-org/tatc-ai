@@ -118,6 +118,10 @@ class ServerModuleTests(unittest.TestCase):
         self.assertEqual(module.mcp.auth.kwargs["client_secret"], "test-secret")
         self.assertEqual(module.mcp.auth.kwargs["base_url"], "https://mcp.example.com")
         self.assertEqual(module.mcp.auth.kwargs["redirect_path"], "/oauth/callback")
+        self.assertEqual(
+            module.mcp.auth.kwargs["required_scopes"], ["openid", "profile", "email"]
+        )
+        self.assertTrue(module.mcp.auth.kwargs["verify_id_token"])
 
     def test_main_runs_streamable_http_server(self):
         runpy.run_path(str(SERVER_PATH), run_name="__main__")

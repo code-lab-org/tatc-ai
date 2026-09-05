@@ -21,13 +21,11 @@ def _build_auth():
         base_url=os.environ["MCP_BASE_URL"],
         # Must match the mcp-server redirectURIs entry in config/dex/start-dex.sh.
         redirect_path="/oauth/callback",
-        # Deliberately not setting required_scopes: in fastmcp 2.14.7,
-        # OIDCProxy enforces it against Dex's own token, which carries no
-        # scope claim (Dex omits it per RFC 6749 §5.1, since the granted
-        # scope matches what was requested) - every token gets rejected as
-        # a result. The scope actually requested from Dex comes from
-        # LibreChat's own /authorize call (scope=openid+profile+email),
-        # independent of this setting.
+        required_scopes=["openid", "profile", "email"],
+        # Dex's access token carries no scope claim (it's an opaque-style
+        # token; the real JWT is the id_token), so validate that instead of
+        # the access_token. Requires fastmcp>=3.0.1.
+        verify_id_token=True,
     )
 
 
