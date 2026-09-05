@@ -67,7 +67,8 @@ committed to the repository:
    and freshly generated `DEX_*` secrets.
 3. `cp apps/librechat/.env.example apps/librechat/.env` and replace the
    `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDS_KEY`, and `CREDS_IV` placeholders
-   with your own generated values (see the comments in that file).
+   with your own generated values (see the comments in that file), and set
+   `OPENAI_API_KEY` to enable the OpenAI model endpoint.
 4. `ghcr.io/code-lab-org/tatc-ai-mcp-server` is a private package. Log the
    host in once with a GitHub PAT (`read:packages` scope, from an account
    with read access to this repo):
