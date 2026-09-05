@@ -1,6 +1,31 @@
+import os
+
 from fastmcp import FastMCP
 
-mcp = FastMCP("tatc-ai-mcp-server")
+
+def _build_auth():
+    """OIDC auth against Dex, enabled only when the deploy stack configures it.
+
+    The dev compose file sets none of these, so the dev server stays open.
+    """
+    issuer_url = os.environ.get("MCP_OIDC_ISSUER_URL")
+    if not issuer_url:
+        return None
+
+    from fastmcp.server.auth.oidc_proxy import OIDCProxy
+
+    return OIDCProxy(
+        config_url=f"{issuer_url}/.well-known/openid-configuration",
+        client_id=os.environ["MCP_OIDC_CLIENT_ID"],
+        client_secret=os.environ["MCP_OIDC_CLIENT_SECRET"],
+        base_url=os.environ["MCP_BASE_URL"],
+        # Must match the mcp-server redirectURIs entry in config/dex/start-dex.sh.
+        redirect_path="/oauth/callback",
+        required_scopes=["openid", "profile", "email"],
+    )
+
+
+mcp = FastMCP("tatc-ai-mcp-server", auth=_build_auth())
 
 
 @mcp.tool()

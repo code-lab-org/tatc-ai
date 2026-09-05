@@ -52,6 +52,16 @@ services:
   mcp-server:
     image: ghcr.io/code-lab-org/tatc-ai-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}
     container_name: tatc-ai-mcp-server
+    environment:
+      # Setting these enables OIDC auth against Dex; the dev compose leaves
+      # them unset so the dev server stays open. Must match the mcp-server
+      # static client in config/dex/start-dex.sh.
+      MCP_OIDC_ISSUER_URL: https://auth.${DOMAIN}
+      MCP_OIDC_CLIENT_ID: mcp-server
+      MCP_OIDC_CLIENT_SECRET: ${DEX_MCP_CLIENT_SECRET}
+      MCP_BASE_URL: https://mcp.${DOMAIN}
+    depends_on:
+      - dex
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.mcp.rule=Host(`mcp.${DOMAIN}`)"

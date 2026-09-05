@@ -1,19 +1,29 @@
 import importlib.util
+import os
 import runpy
 import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SERVER_PATH = Path(__file__).resolve().parents[1] / "src" / "server.py"
+
+OIDC_ENV_VARS = (
+    "MCP_OIDC_ISSUER_URL",
+    "MCP_OIDC_CLIENT_ID",
+    "MCP_OIDC_CLIENT_SECRET",
+    "MCP_BASE_URL",
+)
 
 
 class FakeFastMCP:
     last_instance = None
 
-    def __init__(self, name):
+    def __init__(self, name, auth=None):
         self.name = name
+        self.auth = auth
         self.registered_tools = []
         self.run_kwargs = None
         FakeFastMCP.last_instance = self
@@ -29,19 +39,47 @@ class FakeFastMCP:
         self.run_kwargs = kwargs
 
 
+class FakeOIDCProxy:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
 class ServerModuleTests(unittest.TestCase):
     def setUp(self):
-        self.original_fastmcp = sys.modules.get("fastmcp")
-        fake_module = types.ModuleType("fastmcp")
-        fake_module.FastMCP = FakeFastMCP
-        sys.modules["fastmcp"] = fake_module
+        self.original_modules = {
+            name: sys.modules.get(name)
+            for name in (
+                "fastmcp",
+                "fastmcp.server",
+                "fastmcp.server.auth",
+                "fastmcp.server.auth.oidc_proxy",
+            )
+        }
+
+        fake_fastmcp = types.ModuleType("fastmcp")
+        fake_fastmcp.FastMCP = FakeFastMCP
+        fake_oidc_proxy = types.ModuleType("fastmcp.server.auth.oidc_proxy")
+        fake_oidc_proxy.OIDCProxy = FakeOIDCProxy
+
+        sys.modules["fastmcp"] = fake_fastmcp
+        sys.modules["fastmcp.server"] = types.ModuleType("fastmcp.server")
+        sys.modules["fastmcp.server.auth"] = types.ModuleType("fastmcp.server.auth")
+        sys.modules["fastmcp.server.auth.oidc_proxy"] = fake_oidc_proxy
+
         FakeFastMCP.last_instance = None
 
+        self.env_patcher = mock.patch.dict(os.environ, {}, clear=False)
+        self.env_patcher.start()
+        for name in OIDC_ENV_VARS:
+            os.environ.pop(name, None)
+
     def tearDown(self):
-        if self.original_fastmcp is None:
-            sys.modules.pop("fastmcp", None)
-        else:
-            sys.modules["fastmcp"] = self.original_fastmcp
+        self.env_patcher.stop()
+        for name, module in self.original_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
     @staticmethod
     def load_server_module():
@@ -57,6 +95,29 @@ class ServerModuleTests(unittest.TestCase):
         self.assertEqual(module.mcp.name, "tatc-ai-mcp-server")
         self.assertIn("echo", module.mcp.registered_tools)
         self.assertEqual(module.echo("hello"), "hello")
+
+    def test_no_auth_when_oidc_not_configured(self):
+        module = self.load_server_module()
+
+        self.assertIsNone(module.mcp.auth)
+
+    def test_builds_oidc_auth_when_configured(self):
+        os.environ["MCP_OIDC_ISSUER_URL"] = "https://auth.example.com"
+        os.environ["MCP_OIDC_CLIENT_ID"] = "mcp-server"
+        os.environ["MCP_OIDC_CLIENT_SECRET"] = "test-secret"
+        os.environ["MCP_BASE_URL"] = "https://mcp.example.com"
+
+        module = self.load_server_module()
+
+        self.assertIsInstance(module.mcp.auth, FakeOIDCProxy)
+        self.assertEqual(
+            module.mcp.auth.kwargs["config_url"],
+            "https://auth.example.com/.well-known/openid-configuration",
+        )
+        self.assertEqual(module.mcp.auth.kwargs["client_id"], "mcp-server")
+        self.assertEqual(module.mcp.auth.kwargs["client_secret"], "test-secret")
+        self.assertEqual(module.mcp.auth.kwargs["base_url"], "https://mcp.example.com")
+        self.assertEqual(module.mcp.auth.kwargs["redirect_path"], "/oauth/callback")
 
     def test_main_runs_streamable_http_server(self):
         runpy.run_path(str(SERVER_PATH), run_name="__main__")
