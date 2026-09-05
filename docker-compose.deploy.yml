@@ -74,6 +74,9 @@ services:
       # a volume here it lives on the container's writable layer and is
       # wiped on every redeploy, forcing every client to re-register.
       FASTMCP_HOME: /data/fastmcp
+      # Temporary: bearer token rejections are logging with no reason in the
+      # deployed build. Remove once the OAuth flow is confirmed working.
+      FASTMCP_LOG_LEVEL: DEBUG
     volumes:
       - mcp-server-oauth:/data/fastmcp
     depends_on:
