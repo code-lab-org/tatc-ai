@@ -3,15 +3,17 @@ cache: true
 
 mcpSettings:
   allowedDomains:
-    - "mcp-server"
-    # OIDCProxy's own OAuth endpoints (authorize/token/register/metadata),
-    # which LibreChat's backend calls directly during the MCP OAuth handshake.
+    # Both the MCP connection itself and OIDCProxy's OAuth endpoints
+    # (authorize/token/register/metadata) live on this public hostname.
+    # LibreChat's OAuth client requires the connection URL to match the
+    # resource declared in protected-resource metadata (RFC 9728 §3.3), so
+    # this can't be the internal "mcp-server" service name/port.
     - "mcp.__DOMAIN__"
 
 mcpServers:
   mcp-server:
     type: streamable-http
-    url: http://mcp-server:8000/mcp
+    url: https://mcp.__DOMAIN__/mcp
     requiresOAuth: true
     timeout: 30000
     initTimeout: 15000

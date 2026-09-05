@@ -19,12 +19,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt-data:/letsencrypt
     networks:
+      # mcp.<DOMAIN> needs to resolve inside the docker network too: the
+      # OIDCProxy on mcp-server declares its OAuth resource/endpoints as
+      # https://mcp.<DOMAIN>, and LibreChat's MCP client enforces (RFC 9728
+      # §3.3) that the URL it connects to matches that resource exactly - so
+      # it has to reach mcp-server via this hostname, not the internal
+      # service name.
       proxy:
         aliases:
           - auth.${DOMAIN}
+          - mcp.${DOMAIN}
       app:
         aliases:
           - auth.${DOMAIN}
+          - mcp.${DOMAIN}
 
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
