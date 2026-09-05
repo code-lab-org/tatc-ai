@@ -50,7 +50,7 @@ services:
       - app
 
   mcp-server:
-    image: ghcr.io/code-lab-org/tatc-ai-mcp-server:latest
+    image: ghcr.io/code-lab-org/tatc-ai-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}
     container_name: tatc-ai-mcp-server
     labels:
       - "traefik.enable=true"

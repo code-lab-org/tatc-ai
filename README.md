@@ -15,13 +15,21 @@ Stub monorepo for an application stack with:
 
 ## MCP server
 
-Build the MCP server image:
+`.github/workflows/build-mcp-server.yml` builds and pushes the MCP server
+image to `ghcr.io/code-lab-org/tatc-ai-mcp-server` on every push to `main`
+that touches `apps/mcp-server/**`, tagged with both `latest` and the commit
+SHA it was built from.
+
+`docker-compose.deploy.yml` pulls `ghcr.io/code-lab-org/tatc-ai-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}`.
+For a reproducible, rollback-able deploy, set `MCP_SERVER_IMAGE_TAG` in `.env`
+to the specific commit SHA you want running rather than leaving it on
+`latest`.
+
+To build the image locally instead (e.g. to test before pushing):
 
 ```bash
-docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:latest
+docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
-
-For deployment, push this image (or update `docker-compose.deploy.yml` with your own published image tag).
 
 ## Development stack
 
