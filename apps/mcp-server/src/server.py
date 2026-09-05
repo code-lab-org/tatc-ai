@@ -35,4 +35,13 @@ def echo(text: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=8000,
+        # Behind Traefik, uvicorn otherwise only trusts X-Forwarded-* from
+        # 127.0.0.1: it would see every request as http on the container's
+        # internal address, mismatching the https public URL OIDCProxy uses
+        # for token audiences, and rejecting every token as invalid.
+        uvicorn_config={"proxy_headers": True, "forwarded_allow_ips": "*"},
+    )

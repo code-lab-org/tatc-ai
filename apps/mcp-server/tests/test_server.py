@@ -126,7 +126,12 @@ class ServerModuleTests(unittest.TestCase):
         self.assertIsNotNone(instance)
         self.assertEqual(
             instance.run_kwargs,
-            {"transport": "streamable-http", "host": "0.0.0.0", "port": 8000},
+            {
+                "transport": "streamable-http",
+                "host": "0.0.0.0",
+                "port": 8000,
+                "uvicorn_config": {"proxy_headers": True, "forwarded_allow_ips": "*"},
+            },
         )
 
 
