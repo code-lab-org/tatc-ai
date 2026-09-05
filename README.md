@@ -49,6 +49,13 @@ Runs behind Traefik with automatic Let's Encrypt TLS and an OAuth IdP:
 - `https://mcp.<DOMAIN>` -> MCP server
 - `https://auth.<DOMAIN>` -> Dex
 
+Both LibreChat and the MCP server authenticate end users against Dex via
+OIDC. The MCP server enables this only when `MCP_OIDC_ISSUER_URL` (and the
+related `MCP_OIDC_CLIENT_*`/`MCP_BASE_URL` vars) are set, which
+`docker-compose.deploy.yml` does and `docker-compose.dev.yml` does not — so
+the dev server stays unauthenticated. The `mcp-server` static client and its
+redirect URI are pre-provisioned in `config/dex/start-dex.sh`.
+
 All host names and secrets are read from environment files that are **not**
 committed to the repository:
 
