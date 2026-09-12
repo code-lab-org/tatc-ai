@@ -54,6 +54,13 @@ QWEN = "/assets/qwen.svg"
 GOOGLE = "/assets/google.svg"
 OPENAI_ICON = "/assets/openai.svg"
 MISTRAL = "/assets/mistral.png"
+COHERE = "/assets/cohere.png"
+IBM = "https://upload.wikimedia.org/wikipedia/commons/5/51/IBM_logo.svg"
+AI2 = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg"
+ZAI = "https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg"
+THINKING_MACHINES = "https://github.com/thinkingmachines.png"
+POOLSIDE = "https://github.com/poolside-ai.png"
+ORNITH = "https://github.com/ornith-ai.png"
 
 # Prefix maps for newly discovered models. Unknown prefixes get no icon
 # and a generic description so a human picks the branding in review.
@@ -68,6 +75,14 @@ ICON_PREFIXES = [
     ("minimax", MINIMAX),
     ("kimi", KIMI),
     ("moonshot", KIMI),
+    ("glm", ZAI),
+    ("olmo", AI2),
+    ("granite", IBM),
+    ("muse", META),
+    ("north", COHERE),
+    ("inkling", THINKING_MACHINES),
+    ("laguna", POOLSIDE),
+    ("ornith", ORNITH),
 ]
 MAKER_PREFIXES = [
     ("llama", "Meta Llama"),
@@ -82,6 +97,11 @@ MAKER_PREFIXES = [
     ("glm", "Zhipu GLM"),
     ("olmo", "Ai2 Olmo"),
     ("granite", "IBM Granite"),
+    ("muse", "Meta Muse"),
+    ("north", "Cohere"),
+    ("inkling", "Thinking Machines"),
+    ("laguna", "Poolside"),
+    ("ornith", "Ornith"),
 ]
 
 WORD_FIXES = {
@@ -243,8 +263,7 @@ def main() -> int:
                for s in current) and blocks:
         print("warning: default spec vanished; review the new default")
 
-    specs_block = ("modelSpecs:\n  prioritize: true\n  enforce: false\n"
-                   "  addedEndpoints:\n    - ASU Voyager\n  list:\n"
+    specs_block = ("modelSpecs:\n  prioritize: true\n  enforce: false\n  list:\n"
                    + "\n".join(blocks) + "\n")
     ep_lines = ["      models:", "        default:"]
     ep_lines += [f"          - {s['preset']['model']}" for s in

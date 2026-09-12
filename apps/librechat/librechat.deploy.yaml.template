@@ -81,17 +81,15 @@ endpoints:
 
 interface:
   customWelcome: 'Welcome to TATC AI - ask about satellites, orbits, and ground tracks.'
-  modelSelect: true
+  modelSelect: false
   parameters: true
-  presets: true
+  presets: false
   defaultPinnedTools:
     - tatc
 
 modelSpecs:
   prioritize: true
   enforce: false
-  addedEndpoints:
-    - ASU Voyager
   list:
     - name: tatc-scout
       label: Llama 4 Scout 17B
@@ -403,6 +401,9 @@ modelSpecs:
       label: GLM 4.5V
       description: Zhipu GLM chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -412,6 +413,9 @@ modelSpecs:
       label: GLM 5.2
       description: Zhipu GLM chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -421,6 +425,9 @@ modelSpecs:
       label: GLM 5.3
       description: Zhipu GLM chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -430,6 +437,9 @@ modelSpecs:
       label: GLM 5.3 Flash
       description: Zhipu GLM chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -439,6 +449,9 @@ modelSpecs:
       label: Olmo 3 7B
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -448,6 +461,9 @@ modelSpecs:
       label: Olmo 3 7B Thinking
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -457,6 +473,9 @@ modelSpecs:
       label: Olmo 3 32B Thinking
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -466,6 +485,9 @@ modelSpecs:
       label: Olmo 3 32B
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -475,6 +497,9 @@ modelSpecs:
       label: Granite 4.1 30B
       description: IBM Granite chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://upload.wikimedia.org/wikipedia/commons/5/51/IBM_logo.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -482,8 +507,11 @@ modelSpecs:
         model: granite41-30b
     - name: muse-glimmer-30b
       label: Muse Glimmer 30B
-      description: Voyager chat model.
+      description: Meta Muse chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -491,8 +519,11 @@ modelSpecs:
         model: muse-glimmer-30b
     - name: north-mini-code
       label: North Mini Code
-      description: Voyager chat model.
+      description: Cohere chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: /assets/cohere.png
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -500,8 +531,11 @@ modelSpecs:
         model: north-mini-code
     - name: inkling-small
       label: Inkling Small
-      description: Voyager chat model.
+      description: Thinking Machines chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://github.com/thinkingmachines.png
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -509,8 +543,11 @@ modelSpecs:
         model: inkling-small
     - name: laguna-s-2-1
       label: Laguna S 2.1
-      description: Voyager chat model.
+      description: Poolside chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://github.com/poolside-ai.png
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:
@@ -518,8 +555,11 @@ modelSpecs:
         model: laguna-s-2-1
     - name: ornith-1-0-35b
       label: Ornith 1.0 35B
-      description: Voyager chat model.
+      description: Ornith chat model via ASU Voyager.
       group: ASU Voyager
+      iconURL: https://github.com/ornith-ai.png
+      showIconInMenu: true
+      showIconInHeader: true
       mcpServers:
         - tatc
       preset:

@@ -58,8 +58,9 @@ Ground-track requests are capped at 2,000 output points. For example, a
 
 Local UI is branded as TATC AI (browser tab, welcome message, footer).
 Models are grouped under ASU Voyager, where all chat models come from for
-now. Every Voyager chat model has a labeled spec with its maker icon where
-one exists. New chats default to the Llama 4 Scout 17B spec with TATC
+now. Every Voyager chat model has a labeled spec with its maker icon.
+The picker lists these specs only; raw provider entries are
+hidden. New chats default to the Llama 4 Scout 17B spec with TATC
 satellite tools pinned.
 
 When the proxy gains models, sync the picker:
