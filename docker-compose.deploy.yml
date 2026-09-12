@@ -117,6 +117,9 @@ services:
       DOMAIN: ${DOMAIN}
     volumes:
       - ./apps/librechat/librechat.deploy.yaml.template:/app/librechat.yaml.template:ro
+      - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-16x16.png:ro
+      - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-32x32.png:ro
+      - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/apple-touch-icon-180x180.png:ro
     # librechat.yaml is a bind-mounted static file, so it can't use compose's
     # own ${DOMAIN} interpolation; render it from the template into the
     # image's normal /app/librechat.yaml path on every start instead, then
@@ -127,6 +130,11 @@ services:
       - -c
       - |
         sed "s/__DOMAIN__/$$DOMAIN/g" /app/librechat.yaml.template > /app/librechat.yaml
+        sed -i \
+          -e 's#href="assets/favicon-16x16.png"#href="assets/favicon-16x16.png?v=tatc-1"#' \
+          -e 's#href="assets/favicon-32x32.png"#href="assets/favicon-32x32.png?v=tatc-1"#' \
+          -e 's#href="assets/apple-touch-icon-180x180.png"#href="assets/apple-touch-icon-180x180.png?v=tatc-1"#' \
+          /app/client/dist/index.html
         exec npm run backend
     depends_on:
       - mongodb

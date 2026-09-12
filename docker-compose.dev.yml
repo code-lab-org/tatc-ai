@@ -25,6 +25,19 @@ services:
       - CUSTOM_FOOTER=TATC AI · Powered by LibreChat
     volumes:
       - ./apps/librechat/librechat.yaml:/app/librechat.yaml:ro
+      - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-16x16.png:ro
+      - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-32x32.png:ro
+      - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/apple-touch-icon-180x180.png:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        sed -i \
+          -e 's#href="assets/favicon-16x16.png"#href="assets/favicon-16x16.png?v=tatc-1"#' \
+          -e 's#href="assets/favicon-32x32.png"#href="assets/favicon-32x32.png?v=tatc-1"#' \
+          -e 's#href="assets/apple-touch-icon-180x180.png"#href="assets/apple-touch-icon-180x180.png?v=tatc-1"#' \
+          /app/client/dist/index.html
+        exec npm run backend
     depends_on:
       - mongodb
       - mcp-server

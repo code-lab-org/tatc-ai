@@ -5,11 +5,10 @@ Fetches /models from the ASU proxy, drops non-chat models (embedding,
 transcription, speech, image, video), and rewrites the custom endpoint's
 default list plus the modelSpecs list to match.
 
-Existing spec entries are preserved by model ID, so hand-polished labels
-survive re-syncs. Only genuinely new models get generated entries with a
-guessed label and icon for review. Models that vanished from the proxy are
-removed. The script refuses to write an empty list, and drops of more than
-half the models need --force.
+Existing spec entries are preserved by model ID except for known canonical
+model metadata overrides. New models get guessed labels and icons for review.
+Models that vanished from the proxy are removed. The script refuses to write
+an empty list, and drops of more than half the models need --force.
 
 Usage:
     python3 apps/librechat/sync-voyager-models.py [--force]
@@ -48,16 +47,16 @@ NON_CHAT_MARKERS = (
 )
 
 META = "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg"
-KIMI = "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/kimi.svg"
-MINIMAX = "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/minimax.svg"
+KIMI = "https://raw.githubusercontent.com/MoonshotAI/Branding-Guide/main/scenarios/03-icon-without-kimi/kimi-icon-round.png"
+MINIMAX = "https://filecdn.minimax.chat/public/58eca777-e31f-448a-9823-e2220e49b426.png"
 QWEN = "/assets/qwen.svg"
 GOOGLE = "/assets/google.svg"
 OPENAI_ICON = "/assets/openai.svg"
 MISTRAL = "/assets/mistral.png"
 COHERE = "/assets/cohere.png"
 IBM = "https://upload.wikimedia.org/wikipedia/commons/5/51/IBM_logo.svg"
-AI2 = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg"
-ZAI = "https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg"
+AI2 = "https://github.com/allenai.png"
+ZAI = "https://github.com/zai-org.png"
 THINKING_MACHINES = "https://github.com/thinkingmachines.png"
 POOLSIDE = "https://github.com/poolside-ai.png"
 ORNITH = "https://github.com/ornith-ai.png"
@@ -94,7 +93,7 @@ MAKER_PREFIXES = [
     ("minimax", "MiniMax"),
     ("kimi", "Moonshot Kimi"),
     ("moonshot", "Moonshot"),
-    ("glm", "Zhipu GLM"),
+    ("glm", "Z.ai GLM"),
     ("olmo", "Ai2 Olmo"),
     ("granite", "IBM Granite"),
     ("muse", "Meta Muse"),
@@ -116,6 +115,44 @@ WORD_FIXES = {
     "flash": "Flash", "next": "Next", "small": "Small", "mini": "Mini",
     "code": "Code", "tool": "Tool", "use": "Use", "scout": "Scout",
     "maverick": "Maverick",
+}
+
+CANONICAL_MODEL_METADATA = {
+    "kimi-k2-7-code": {
+        "label": "Kimi K2.7 Code",
+        "description": "Moonshot Kimi chat model via ASU Voyager.",
+        "icon": KIMI,
+    },
+    "minimax-m2-7": {
+        "label": "MiniMax M2.7",
+        "description": "MiniMax chat model via ASU Voyager.",
+        "icon": MINIMAX,
+    },
+    "minimax-m3": {
+        "label": "MiniMax M3",
+        "description": "MiniMax chat model via ASU Voyager.",
+        "icon": MINIMAX,
+    },
+    "glm-4-5v": {
+        "label": "GLM-4.5V",
+        "description": "Z.ai GLM chat model via ASU Voyager.",
+        "icon": ZAI,
+    },
+    "glm-5-2": {
+        "label": "GLM-5.2",
+        "description": "Z.ai GLM chat model via ASU Voyager.",
+        "icon": ZAI,
+    },
+    "glm-5-3": {
+        "label": "GLM-5.3",
+        "description": "Z.ai GLM chat model via ASU Voyager.",
+        "icon": ZAI,
+    },
+    "glm-5-3-flash": {
+        "label": "GLM-5.3-Flash",
+        "description": "Z.ai GLM chat model via ASU Voyager.",
+        "icon": ZAI,
+    },
 }
 
 
@@ -182,6 +219,12 @@ def is_chat(model_id: str) -> bool:
 
 
 def build_entry(name, label, desc, icon, model, extra=None) -> str:
+    canonical = CANONICAL_MODEL_METADATA.get(model)
+    if canonical:
+        label = canonical["label"]
+        desc = canonical["description"]
+        icon = canonical["icon"]
+
     lines = [
         f"    - name: {name}",
         f"      label: {label}",

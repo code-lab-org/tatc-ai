@@ -362,10 +362,10 @@ modelSpecs:
         endpoint: ASU Voyager
         model: devstral2-123b
     - name: minimax-m2-7
-      label: MiniMax M2 7
+      label: MiniMax M2.7
       description: MiniMax chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/minimax.svg
+      iconURL: https://filecdn.minimax.chat/public/58eca777-e31f-448a-9823-e2220e49b426.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -377,7 +377,7 @@ modelSpecs:
       label: MiniMax M3
       description: MiniMax chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/minimax.svg
+      iconURL: https://filecdn.minimax.chat/public/58eca777-e31f-448a-9823-e2220e49b426.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -386,10 +386,10 @@ modelSpecs:
         endpoint: ASU Voyager
         model: minimax-m3
     - name: kimi-k2-7-code
-      label: Kimi K2 7 Code
+      label: Kimi K2.7 Code
       description: Moonshot Kimi chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/kimi.svg
+      iconURL: https://raw.githubusercontent.com/MoonshotAI/Branding-Guide/main/scenarios/03-icon-without-kimi/kimi-icon-round.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -398,10 +398,10 @@ modelSpecs:
         endpoint: ASU Voyager
         model: kimi-k2-7-code
     - name: glm-4-5v
-      label: GLM 4.5V
-      description: Zhipu GLM chat model via ASU Voyager.
+      label: GLM-4.5V
+      description: Z.ai GLM chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      iconURL: https://github.com/zai-org.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -410,10 +410,10 @@ modelSpecs:
         endpoint: ASU Voyager
         model: glm-4-5v
     - name: glm-5-2
-      label: GLM 5.2
-      description: Zhipu GLM chat model via ASU Voyager.
+      label: GLM-5.2
+      description: Z.ai GLM chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      iconURL: https://github.com/zai-org.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -422,10 +422,10 @@ modelSpecs:
         endpoint: ASU Voyager
         model: glm-5-2
     - name: glm-5-3
-      label: GLM 5.3
-      description: Zhipu GLM chat model via ASU Voyager.
+      label: GLM-5.3
+      description: Z.ai GLM chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      iconURL: https://github.com/zai-org.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -434,10 +434,10 @@ modelSpecs:
         endpoint: ASU Voyager
         model: glm-5-3
     - name: glm-5-3-flash
-      label: GLM 5.3 Flash
-      description: Zhipu GLM chat model via ASU Voyager.
+      label: GLM-5.3-Flash
+      description: Z.ai GLM chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/f/f4/Z.ai_%28company_logo%29.svg
+      iconURL: https://github.com/zai-org.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -449,7 +449,7 @@ modelSpecs:
       label: Olmo 3 7B
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      iconURL: https://github.com/allenai.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -461,7 +461,7 @@ modelSpecs:
       label: Olmo 3 7B Thinking
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      iconURL: https://github.com/allenai.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -473,7 +473,7 @@ modelSpecs:
       label: Olmo 3 32B Thinking
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      iconURL: https://github.com/allenai.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
@@ -485,7 +485,7 @@ modelSpecs:
       label: Olmo 3 32B
       description: Ai2 Olmo chat model via ASU Voyager.
       group: ASU Voyager
-      iconURL: https://upload.wikimedia.org/wikipedia/commons/a/ab/Allen_Institute_for_Artificial_Intelligence.svg
+      iconURL: https://github.com/allenai.png
       showIconInMenu: true
       showIconInHeader: true
       mcpServers:
