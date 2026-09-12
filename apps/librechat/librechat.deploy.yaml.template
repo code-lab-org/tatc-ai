@@ -11,7 +11,7 @@ mcpSettings:
     - "mcp.__DOMAIN__"
 
 mcpServers:
-  mcp-server:
+  tatc:
     type: streamable-http
     url: https://mcp.__DOMAIN__/mcp
     requiresOAuth: true
@@ -20,3 +20,508 @@ mcpServers:
     serverInstructions: true
     chatMenu: true
     startup: true
+
+endpoints:
+  custom:
+    # All chat models come from ASU Voyager for now, so they are grouped
+    # here instead of under the built-in OpenAI label. The key and proxy URL
+    # reuse the existing OPENAI_* env vars, so no new secrets are needed.
+    # fetch stays off so embedding, transcription, image, and video models
+    # never show in the picker; add new chat model IDs here when the proxy
+    # gains them. Add another custom endpoint later when models come from
+    # other sources.
+    - name: ASU Voyager
+      apiKey: ${OPENAI_API_KEY}
+      baseURL: ${OPENAI_REVERSE_PROXY}
+      models:
+        default:
+          - llama4-scout-17b
+          - llama4-maverick-17b
+          - llama3-groq-70b-tool-use
+          - qwen3-coder-30b-a3b-instruct
+          - qwen3-coder-next
+          - qwen3-30b-a3b-thinking-2507
+          - qwen3-30b-a3b-instruct-2507
+          - qwen3-235b-a22b-instruct-2507
+          - qwen3-235b-a22b-thinking-2507
+          - qwen3-vl-32b-instruct
+          - qwen3-vl-32b-thinking
+          - qwen35-27b
+          - qwen35-122b-a10b
+          - qwen36-27b
+          - qwen38-27b
+          - qwen35-35b-a3b
+          - qwen36-35b-a3b
+          - qwen-agentworld-35b-a3b
+          - gemma3-27b-it
+          - gemma4-31b-it
+          - gpt-oss-120b
+          - devstral2-123b
+          - minimax-m2-7
+          - minimax-m3
+          - kimi-k2-7-code
+          - glm-4-5v
+          - glm-5-2
+          - glm-5-3
+          - glm-5-3-flash
+          - olmo3-7b-instruct
+          - olmo3-7b-think
+          - olmo3-32b-think
+          - olmo3-32b-instruct
+          - granite41-30b
+          - muse-glimmer-30b
+          - north-mini-code
+          - inkling-small
+          - laguna-s-2-1
+          - ornith-1-0-35b
+        fetch: false
+      titleConvo: true
+      titleModel: llama4-scout-17b
+      modelDisplayLabel: ASU Voyager
+
+interface:
+  customWelcome: 'Welcome to TATC AI - ask about satellites, orbits, and ground tracks.'
+  modelSelect: true
+  parameters: true
+  presets: true
+  defaultPinnedTools:
+    - tatc
+
+modelSpecs:
+  prioritize: true
+  enforce: false
+  addedEndpoints:
+    - ASU Voyager
+  list:
+    - name: tatc-scout
+      label: Llama 4 Scout 17B
+      description: ASU-hosted chat model for TATC AI satellite workflows.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      default: true
+      showOnLanding: true
+      conversation_starters:
+        - Use the satellite search tool to find three satellites with Hubble in their name. Show their names and NORAD IDs.
+        - Use the satellite info tool to get details for NORAD ID 25544, including its current TLE.
+        - Generate a ground track for NORAD ID 25544 starting now, lasting 10 minutes, with one-minute intervals.
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: llama4-scout-17b
+    - name: llama4-maverick-17b
+      label: Llama 4 Maverick 17B
+      description: Meta Llama chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: llama4-maverick-17b
+    - name: llama3-groq-70b-tool-use
+      label: Llama 3 70B Tool Use
+      description: Meta Llama chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: llama3-groq-70b-tool-use
+    - name: qwen3-coder-30b-a3b-instruct
+      label: Qwen 3 Coder 30B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-coder-30b-a3b-instruct
+    - name: qwen3-coder-next
+      label: Qwen 3 Coder Next
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-coder-next
+    - name: qwen3-30b-a3b-thinking-2507
+      label: Qwen 3 30B Thinking
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-30b-a3b-thinking-2507
+    - name: qwen3-30b-a3b-instruct-2507
+      label: Qwen 3 30B Instruct
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-30b-a3b-instruct-2507
+    - name: qwen3-235b-a22b-instruct-2507
+      label: Qwen 3 235B Instruct
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-235b-a22b-instruct-2507
+    - name: qwen3-235b-a22b-thinking-2507
+      label: Qwen 3 235B Thinking
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-235b-a22b-thinking-2507
+    - name: qwen3-vl-32b-instruct
+      label: Qwen 3 VL 32B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-vl-32b-instruct
+    - name: qwen3-vl-32b-thinking
+      label: Qwen 3 VL 32B Thinking
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen3-vl-32b-thinking
+    - name: qwen35-27b
+      label: Qwen 3.5 27B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen35-27b
+    - name: qwen35-122b-a10b
+      label: Qwen 3.5 122B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen35-122b-a10b
+    - name: qwen36-27b
+      label: Qwen 3.6 27B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen36-27b
+    - name: qwen38-27b
+      label: Qwen 3.8 27B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen38-27b
+    - name: qwen35-35b-a3b
+      label: Qwen 3.5 35B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen35-35b-a3b
+    - name: qwen36-35b-a3b
+      label: Qwen 3.6 35B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen36-35b-a3b
+    - name: qwen-agentworld-35b-a3b
+      label: Qwen AgentWorld 35B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen-agentworld-35b-a3b
+    - name: gemma3-27b-it
+      label: Gemma 3 27B IT
+      description: Google Gemma chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: gemma3-27b-it
+    - name: gemma4-31b-it
+      label: Gemma 4 31B IT
+      description: Google Gemma chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: gemma4-31b-it
+    - name: gpt-oss-120b
+      label: GPT-OSS 120B
+      description: OpenAI chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: gpt-oss-120b
+    - name: devstral2-123b
+      label: Devstral 2 123B
+      description: Mistral Devstral chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/mistral.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: devstral2-123b
+    - name: minimax-m2-7
+      label: MiniMax M2 7
+      description: MiniMax chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/minimax.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: minimax-m2-7
+    - name: minimax-m3
+      label: MiniMax M3
+      description: MiniMax chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/minimax.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: minimax-m3
+    - name: kimi-k2-7-code
+      label: Kimi K2 7 Code
+      description: Moonshot Kimi chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/kimi.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: kimi-k2-7-code
+    - name: glm-4-5v
+      label: GLM 4.5V
+      description: Zhipu GLM chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: glm-4-5v
+    - name: glm-5-2
+      label: GLM 5.2
+      description: Zhipu GLM chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: glm-5-2
+    - name: glm-5-3
+      label: GLM 5.3
+      description: Zhipu GLM chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: glm-5-3
+    - name: glm-5-3-flash
+      label: GLM 5.3 Flash
+      description: Zhipu GLM chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: glm-5-3-flash
+    - name: olmo3-7b-instruct
+      label: Olmo 3 7B
+      description: Ai2 Olmo chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: olmo3-7b-instruct
+    - name: olmo3-7b-think
+      label: Olmo 3 7B Thinking
+      description: Ai2 Olmo chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: olmo3-7b-think
+    - name: olmo3-32b-think
+      label: Olmo 3 32B Thinking
+      description: Ai2 Olmo chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: olmo3-32b-think
+    - name: olmo3-32b-instruct
+      label: Olmo 3 32B
+      description: Ai2 Olmo chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: olmo3-32b-instruct
+    - name: granite41-30b
+      label: Granite 4.1 30B
+      description: IBM Granite chat model via ASU Voyager.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: granite41-30b
+    - name: muse-glimmer-30b
+      label: Muse Glimmer 30B
+      description: Voyager chat model.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: muse-glimmer-30b
+    - name: north-mini-code
+      label: North Mini Code
+      description: Voyager chat model.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: north-mini-code
+    - name: inkling-small
+      label: Inkling Small
+      description: Voyager chat model.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: inkling-small
+    - name: laguna-s-2-1
+      label: Laguna S 2.1
+      description: Voyager chat model.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: laguna-s-2-1
+    - name: ornith-1-0-35b
+      label: Ornith 1.0 35B
+      description: Voyager chat model.
+      group: ASU Voyager
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: ornith-1-0-35b

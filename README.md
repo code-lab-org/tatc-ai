@@ -39,9 +39,43 @@ Runs with localhost/direct port access:
 - LibreChat: `http://localhost:3080`
 - MongoDB: `localhost:27017`
 
+Before starting the development stack, create the private LibreChat env file
+and set `OPENAI_API_KEY` to your ASU Research Computing key. Keep the proxy
+setting at `https://openai.rc.asu.edu/v1`:
+
+```bash
+cp apps/librechat/.env.example apps/librechat/.env
+chmod 600 apps/librechat/.env
+# edit apps/librechat/.env and set OPENAI_API_KEY
+```
+
 ```bash
 docker compose -f docker-compose.dev.yml up --build
 ```
+
+Ground-track requests are capped at 2,000 output points. For example, a
+1-day request at 1-minute intervals produces 1,441 points.
+
+Local UI is branded as TATC AI (browser tab, welcome message, footer).
+Models are grouped under ASU Voyager, where all chat models come from for
+now. Every Voyager chat model has a labeled spec with its maker icon where
+one exists. New chats default to the Llama 4 Scout 17B spec with TATC
+satellite tools pinned.
+
+When the proxy gains models, sync the picker:
+
+```bash
+python3 apps/librechat/sync_voyager_models.py
+docker compose -f docker-compose.dev.yml restart librechat
+```
+
+The script adds new chat models with a guessed label and icon for review,
+drops retired ones, and keeps embedding, transcription, image, and video
+models out of the picker. Review its diff before committing.
+
+A weekly workflow does the same automatically and opens a PR when the proxy
+gains or retires models. It needs one repo secret: VOYAGER_API_KEY holding
+an ASU proxy key. Merging that PR deploys through the normal path.
 
 ## Deployment stack
 

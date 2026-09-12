@@ -95,6 +95,10 @@ services:
     env_file:
       - apps/librechat/.env
     environment:
+      # Browser tab and header branding. LibreChat reads APP_TITLE and
+      # CUSTOM_FOOTER from the environment, not librechat.yaml.
+      APP_TITLE: TATC AI
+      CUSTOM_FOOTER: TATC AI · Powered by LibreChat
       # LibreChat builds OIDC redirect/callback URLs from these; they default
       # to http://localhost:3080 if unset, which is why the OpenID button
       # pointed at localhost before this was set.

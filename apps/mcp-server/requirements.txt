@@ -1,1 +1,7 @@
+anyio>=4.9.0
 fastmcp>=3.0.1,<4.0.0
+jsonschema>=4.20.0
+numpy<2.2
+python-dateutil>=2.8.2
+requests>=2.31.0
+tatc>=3.4.10

@@ -19,7 +19,10 @@ services:
     image: ghcr.io/danny-avila/librechat:latest
     container_name: tatc-ai-librechat-dev
     env_file:
-      - apps/librechat/.env.example
+      - apps/librechat/.env
+    environment:
+      - APP_TITLE=TATC AI
+      - CUSTOM_FOOTER=TATC AI · Powered by LibreChat
     volumes:
       - ./apps/librechat/librechat.yaml:/app/librechat.yaml:ro
     depends_on:
