@@ -12,4 +12,9 @@ git merge --ff-only origin/main
 
 docker compose -f docker-compose.deploy.yml pull
 docker compose -f docker-compose.deploy.yml up -d
+# The chat config is rendered from its template by the container's own
+# startup command, so `up -d` alone leaves a stale config running when only
+# the template changed (compose can't see bind-mounted file changes).
+# Bounce it so every deploy serves the merged config.
+docker compose -f docker-compose.deploy.yml restart librechat
 docker image prune -f
