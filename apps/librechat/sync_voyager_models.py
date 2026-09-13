@@ -250,6 +250,8 @@ def build_entry(name, label, desc, icon, model, extra=None) -> str:
         "        endpoint: ASU Voyager",
         f"        model: {model}",
     ]
+    if model.lower().startswith("gpt-"):
+        lines.append("        modelLabel: ASU Voyager")
     return "\n".join(lines)
 
 

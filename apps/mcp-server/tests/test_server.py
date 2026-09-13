@@ -52,7 +52,12 @@ class ServerTests(unittest.TestCase):
 
     def test_server_name_and_instructions(self):
         self.assertEqual(self.server.mcp.name, "tatc-ai-mcp-server")
-        self.assertIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
+        # Instructions must describe tools by role, not bare MCP tool names,
+        # which chat clients register under prefixed/suffixed names.
+        self.assertIn("satellite search tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)

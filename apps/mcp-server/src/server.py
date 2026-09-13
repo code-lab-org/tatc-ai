@@ -48,9 +48,13 @@ def _build_auth():
 
 
 SERVER_INSTRUCTIONS = (
-    "Use search_satellites when a satellite name is broad or ambiguous. "
-    "Use get_satellite_info for metadata and current TLE data. "
-    "Use generate_ground_track only after resolving an exact satellite name or "
+    # Describe tools by role, not by their bare MCP names: chat clients
+    # register them under prefixed/suffixed names (e.g. search_satellites_mcp_tatc),
+    # and models that follow these instructions literally call the bare name,
+    # which fails with "tool not found".
+    "Use the satellite search tool when a satellite name is broad or ambiguous. "
+    "Use the satellite info tool for metadata and current TLE data. "
+    "Use the ground-track tool only after resolving an exact satellite name or "
     "NORAD ID; its times are UTC and its position altitude is in meters. "
     "All tools are read-only."
 )

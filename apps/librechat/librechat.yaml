@@ -343,6 +343,7 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: gpt-oss-120b
+        modelLabel: ASU Voyager
     - name: devstral2-123b
       label: Devstral 2 123B
       description: Mistral Devstral chat model via ASU Voyager.
