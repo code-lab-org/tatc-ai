@@ -85,15 +85,16 @@ def format_trajectory_batch(
 ) -> List[Dict[str, Any]]:
     """Format a ground track as a trajectory_batches array."""
     batches = []
-    for time, lat_deg, lon_deg, alt_m in ground_track:
+    for entry in ground_track:
         try:
+            time, lat_deg, lon_deg, alt_m = entry
             batches.append(
                 {
                     "time": format_timestamp(time),
                     "position_lla": format_position_lla(lat_deg, lon_deg, alt_m),
                 }
             )
-        except ValueError as e:
+        except (ValueError, TypeError) as e:
             # Skip invalid coordinates; log to stderr, never stdout, so
             # MCP stdio framing stays intact.
             logger.warning("Skipping invalid trajectory point: %s", e)
