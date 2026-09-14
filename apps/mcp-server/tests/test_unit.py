@@ -1,7 +1,6 @@
 """Offline unit tests for pure logic: no network, no TAT-C propagation."""
 
 import math
-import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -196,6 +195,8 @@ def test_format_timestamp_strips_microseconds_and_normalizes():
     )
     aware = datetime(2026, 1, 1, 14, 30, tzinfo=timezone(timedelta(hours=2)))
     assert fmt.format_timestamp(aware) == "2026-01-01T12:30:00Z"
+    with pytest.raises(ValueError):
+        fmt.format_timestamp("2026-01-01")
 
 
 def test_format_position_wraps_longitude():
@@ -220,8 +221,6 @@ def test_format_footprint_closes_ring_and_rejects_degenerate():
         fmt.format_footprint_geojson([[0.0, 0.0], None, [1.0, 0.0], [1.0, 1.0]])
         is not None
     )
-    with pytest.raises(ValueError):
-        fmt.format_timestamp("2026-01-01")
 
 
 def test_format_ground_track_response_skips_bad_points_quietly(capsys):

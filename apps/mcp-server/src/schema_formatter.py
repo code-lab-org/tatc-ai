@@ -31,10 +31,13 @@ def format_position_lla(
     lat_deg, lon_deg = validate_coordinates(lat_deg, lon_deg)
     alt_m = _validate_altitude(alt_m)
 
+    # Round for compact output: 4 decimals of degrees is ~11 m, 1 decimal
+    # of altitude is 10 cm. Full float precision only bloats tool results
+    # that models must fit in context.
     return {
-        "lat_deg": float(lat_deg),
-        "lon_deg": float(lon_deg),
-        "alt_m": float(alt_m),
+        "lat_deg": round(float(lat_deg), 4),
+        "lon_deg": round(float(lon_deg), 4),
+        "alt_m": round(float(alt_m), 1),
     }
 
 
@@ -66,6 +69,9 @@ def format_footprint_geojson(
     if validated_coords[0] != validated_coords[-1]:
         validated_coords.append(validated_coords[0])
 
+    # Round to 4 decimals (~11 m) to keep tool results compact.
+    rounded = [[round(lon, 4), round(lat, 4)] for lon, lat in validated_coords]
+
     # Create GeoJSON Feature<Polygon>
     # Per server telemetry format: coordinates in [lon, lat] (WGS84), properties must be {}
     return {
@@ -73,7 +79,7 @@ def format_footprint_geojson(
         "geometry": {
             "type": "Polygon",
             "coordinates": [
-                validated_coords
+                rounded
             ],  # Polygon coordinates are wrapped in an array
         },
         "properties": {},

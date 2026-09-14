@@ -186,6 +186,42 @@ class ServerTests(unittest.TestCase):
             ],
         )
 
+    def test_generate_ground_track_opt_in_footprint(self):
+        with mock.patch.object(
+            self.server.celestrak_client,
+            "get_satellite_info",
+            return_value={
+                "norad_id": 25544,
+                "name": "ISS (ZARYA)",
+                "tle_line1": "line 1",
+                "tle_line2": "line 2",
+            },
+        ), mock.patch.object(
+            self.server, "create_satellite_from_tle", return_value=object()
+        ), mock.patch.object(
+            self.server,
+            "compute_ground_track",
+            return_value=[(datetime(2026, 1, 1, 0, 0, 0), 51.5, -0.12, 408000.0)],
+        ), mock.patch.object(
+            self.server,
+            "calculate_footprint_from_position",
+            return_value=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+        ):
+            result = self.call_tool(
+                "generate_ground_track",
+                {
+                    "satellite_identifier": "ISS",
+                    "start_time": "2026-01-01T00:00:00Z",
+                    "duration": "1 minute",
+                    "step_interval": "1 minute",
+                    "include_footprint": True,
+                },
+            )
+        self.assertFalse(result.is_error)
+        point = json.loads(result.content[0].text)[0]
+        self.assertIn("footprint_geojson", point)
+        self.assertEqual(point["footprint_geojson"]["type"], "Feature")
+
     def test_tool_errors_surface_to_the_model(self):
         with mock.patch.object(
             self.server.celestrak_client,

@@ -251,6 +251,7 @@ def _generate_ground_track(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
+    include_footprint: bool = False,
 ) -> List[Dict[str, Any]]:
     """Generate ground track telemetry for a satellite."""
     start_time_dt = (
@@ -273,10 +274,14 @@ def _generate_ground_track(
     ground_track = compute_ground_track(
         satellite, start_time_dt, end_time_dt, step_seconds
     )
-    footprints = [
-        calculate_footprint_from_position(lat_deg, lon_deg, alt_m)
-        for _, lat_deg, lon_deg, alt_m in ground_track
-    ]
+    # Footprints are 86%+ of the payload and models rendering tables never
+    # need them, so they are opt-in. Skipping also saves the compute.
+    footprints = None
+    if include_footprint:
+        footprints = [
+            calculate_footprint_from_position(lat_deg, lon_deg, alt_m)
+            for _, lat_deg, lon_deg, alt_m in ground_track
+        ]
 
     return format_ground_track_response(
         str(sat_info["norad_id"]), ground_track, footprints
@@ -289,6 +294,7 @@ def generate_ground_track(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
+    include_footprint: bool = False,
 ) -> List[Dict[str, Any]]:
     """Generate a satellite ground track over a time period.
 
@@ -300,13 +306,17 @@ def generate_ground_track(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
+        include_footprint: Include the footprint_geojson visibility polygon
+            per point. Defaults to False: footprints are ~86% of the payload
+            and tabular answers never need them. Set True for mapping.
 
     Returns:
         Telemetry objects with id, time (ISO-8601 UTC), position_lla
         (lat_deg, lon_deg, alt_m), and optional footprint_geojson.
     """
     return _generate_ground_track(
-        satellite_identifier, start_time, duration, step_interval
+        satellite_identifier, start_time, duration, step_interval,
+        include_footprint,
     )
 
 
