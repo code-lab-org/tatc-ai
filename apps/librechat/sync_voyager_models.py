@@ -11,7 +11,11 @@ Models that vanished from the proxy are removed. The script refuses to write
 an empty list, and drops of more than half the models need --force.
 
 Usage:
-    python3 apps/librechat/sync-voyager-models.py [--force]
+    python3 apps/librechat/sync_voyager_models.py [--force] [--summary-json PATH]
+
+--summary-json writes a machine-readable summary of the diff (added,
+removed, unknown_branding, needs_review) for CI to decide between
+auto-merging and asking a human to review.
 
 Then review the diff, restart LibreChat, and check the picker:
     docker compose -f docker-compose.dev.yml restart librechat
@@ -258,7 +262,16 @@ def build_entry(name, label, desc, icon, model, extra=None) -> str:
 def main() -> int:
     import yaml
 
-    force = "--force" in sys.argv
+    argv = sys.argv[1:]
+    force = "--force" in argv
+    summary_path = None
+    if "--summary-json" in argv:
+        idx = argv.index("--summary-json")
+        if idx + 1 >= len(argv):
+            print("--summary-json needs a path")
+            return 1
+        summary_path = Path(argv[idx + 1])
+
     # Local runs read apps/librechat/.env; CI has no .env file and passes
     # both values as environment instead. Environment wins either way.
     env = dict(os.environ)
@@ -286,6 +299,11 @@ def main() -> int:
 
     added = [m for m in live_chat if m not in by_model]
     removed = [m for m in current_models if m not in live_chat]
+    # New models with no known maker get a guessed label and no icon, which
+    # is exactly what a human should eyeball, so flag them for review.
+    unknown_branding = [m for m in added
+                        if m not in CANONICAL_MODEL_METADATA
+                        and guess_icon(m) is None]
     if len(removed) > len(current_models) / 2 and not force:
         print(f"refusing: {len(removed)} of {len(current_models)} specs would vanish. "
               "re-run with --force if the proxy really dropped them.")
@@ -304,8 +322,10 @@ def main() -> int:
                                   guess_description(model),
                                   guess_icon(model), model))
 
-    if not any(s["preset"]["model"] in live_chat and s.get("default")
-               for s in current) and blocks:
+    default_vanished = bool(
+        blocks and not any(s["preset"]["model"] in live_chat and s.get("default")
+                           for s in current))
+    if default_vanished:
         print("warning: default spec vanished; review the new default")
 
     specs_block = ("modelSpecs:\n  prioritize: true\n  enforce: false\n  list:\n"
@@ -333,6 +353,16 @@ def main() -> int:
         print(f"  - {m}")
     if skipped:
         print(f"skipped {len(skipped)} non-chat: {', '.join(skipped)}")
+    summary = {
+        "added": sorted(added),
+        "removed": removed,
+        "unknown_branding": sorted(unknown_branding),
+        "default_vanished": default_vanished,
+        "needs_review": bool(removed or unknown_branding or default_vanished),
+    }
+    if summary_path:
+        summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"summary: {json.dumps(summary)}")
     print("review the diff, then restart librechat to apply")
     return 0
 
