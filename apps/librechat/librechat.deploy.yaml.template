@@ -74,6 +74,7 @@ endpoints:
           - inkling-small
           - laguna-s-2-1
           - ornith-1-0-35b
+          - glm-5-3-cascade
         fetch: false
       titleConvo: true
       titleModel: llama4-scout-17b
@@ -566,3 +567,15 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: ornith-1-0-35b
+    - name: glm-5-3-cascade
+      label: GLM 5 3 Cascade
+      description: Z.ai GLM chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://github.com/zai-org.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: glm-5-3-cascade
