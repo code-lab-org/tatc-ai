@@ -3,7 +3,8 @@
 
 Fetches /models from the ASU proxy, drops non-chat models (embedding,
 transcription, speech, image, video), and rewrites the custom endpoint's
-default list plus the modelSpecs list to match.
+default list plus the modelSpecs list to match. Specs are printed with
+the default first, then grouped by company, then by model ID.
 
 Existing spec entries are preserved by model ID except for known canonical
 model metadata overrides. New models get guessed labels and icons for review.
@@ -157,6 +158,11 @@ CANONICAL_MODEL_METADATA = {
         "description": "Z.ai GLM chat model via ASU Voyager.",
         "icon": ZAI,
     },
+    "glm-5-3-cascade": {
+        "label": "GLM-5.3 Cascade",
+        "description": "Z.ai GLM chat model via ASU Voyager.",
+        "icon": ZAI,
+    },
 }
 
 
@@ -195,6 +201,14 @@ def guess_description(model_id: str) -> str:
         if low.startswith(prefix):
             return f"{maker} chat model via ASU Voyager."
     return "Voyager chat model."
+
+
+def company_of(model_id: str) -> str:
+    low = model_id.lower()
+    for prefix, maker in MAKER_PREFIXES:
+        if low.startswith(prefix):
+            return maker.split()[0].lower()
+    return "~"
 
 
 def load_env(path: Path) -> dict:
@@ -315,12 +329,17 @@ def main() -> int:
             s = by_model[model]
             extra = {k: s[k] for k in ("default", "showOnLanding",
                                        "conversation_starters") if s.get(k)}
-            blocks.append(build_entry(s["name"], s["label"], s["description"],
-                                      s.get("iconURL"), model, extra))
+            blocks.append(((bool(extra.get("default")), company_of(model), model),
+                           build_entry(s["name"], s["label"], s["description"],
+                                       s.get("iconURL"), model, extra)))
     for model in sorted(added):
-        blocks.append(build_entry(model, humanize(model),
-                                  guess_description(model),
-                                  guess_icon(model), model))
+        blocks.append(((False, company_of(model), model),
+                       build_entry(model, humanize(model),
+                                   guess_description(model),
+                                   guess_icon(model), model)))
+    # Default spec first, then same-company models together, then model ID.
+    blocks.sort(key=lambda item: (not item[0][0], item[0][1], item[0][2]))
+    blocks = [block for _, block in blocks]
 
     default_vanished = bool(
         blocks and not any(s["preset"]["model"] in live_chat and s.get("default")
