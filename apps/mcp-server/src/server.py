@@ -56,6 +56,7 @@ SERVER_INSTRUCTIONS = (
     "Use the satellite info tool for metadata and current TLE data. "
     "Use the ground-track tool only after resolving an exact satellite name or "
     "NORAD ID; its times are UTC and its position altitude is in meters. "
+    "Render TLE lines in a fenced code block so they are not wrapped. "
     "All tools are read-only."
 )
 

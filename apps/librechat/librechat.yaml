@@ -29,7 +29,6 @@ endpoints:
       baseURL: ${OPENAI_REVERSE_PROXY}
       models:
         default:
-          - llama4-scout-17b
           - olmo3-32b-instruct
           - olmo3-32b-think
           - olmo3-7b-instruct
@@ -55,6 +54,7 @@ endpoints:
           - granite41-30b
           - llama3-groq-70b-tool-use
           - llama4-maverick-17b
+          - llama4-scout-17b
           - muse-glimmer-30b
           - minimax-m2-7
           - minimax-m3
@@ -86,24 +86,6 @@ modelSpecs:
   prioritize: true
   enforce: false
   list:
-    - name: tatc-scout
-      label: Llama 4 Scout 17B
-      description: ASU-hosted chat model for TATC AI satellite workflows.
-      group: ASU Voyager
-      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
-      showIconInMenu: true
-      showIconInHeader: true
-      default: true
-      showOnLanding: true
-      conversation_starters:
-        - Use the satellite search tool to find three satellites with Hubble in their name. Show their names and NORAD IDs.
-        - Use the satellite info tool to get details for NORAD ID 25544, including its current TLE.
-        - Generate a ground track for NORAD ID 25544 starting now, lasting 10 minutes, with one-minute intervals.
-      mcpServers:
-        - tatc
-      preset:
-        endpoint: ASU Voyager
-        model: llama4-scout-17b
     - name: olmo3-32b-instruct
       label: Olmo 3 32B
       description: Ai2 Olmo chat model via ASU Voyager.
@@ -404,6 +386,24 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: llama4-maverick-17b
+    - name: tatc-scout
+      label: Llama 4 Scout 17B
+      description: ASU-hosted chat model for TATC AI satellite workflows.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      default: true
+      showOnLanding: true
+      conversation_starters:
+        - Use the satellite search tool to find three satellites with Hubble in their name. Show their names and NORAD IDs.
+        - Use the satellite info tool to get details for NORAD ID 25544, including its current TLE.
+        - Generate a ground track for NORAD ID 25544 starting now, lasting 10 minutes, with one-minute intervals.
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: llama4-scout-17b
     - name: muse-glimmer-30b
       label: Muse Glimmer 30B
       description: Meta Muse chat model via ASU Voyager.

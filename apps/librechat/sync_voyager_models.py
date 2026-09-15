@@ -3,8 +3,8 @@
 
 Fetches /models from the ASU proxy, drops non-chat models (embedding,
 transcription, speech, image, video), and rewrites the custom endpoint's
-default list plus the modelSpecs list to match. Specs are printed with
-the default first, then grouped by company, then by model ID.
+default list plus the modelSpecs list to match. Specs are grouped by
+company, then by model ID.
 
 Existing spec entries are preserved by model ID except for known canonical
 model metadata overrides. New models get guessed labels and icons for review.
@@ -329,16 +329,17 @@ def main() -> int:
             s = by_model[model]
             extra = {k: s[k] for k in ("default", "showOnLanding",
                                        "conversation_starters") if s.get(k)}
-            blocks.append(((bool(extra.get("default")), company_of(model), model),
+            blocks.append(((company_of(model), model),
                            build_entry(s["name"], s["label"], s["description"],
                                        s.get("iconURL"), model, extra)))
     for model in sorted(added):
-        blocks.append(((False, company_of(model), model),
+        blocks.append(((company_of(model), model),
                        build_entry(model, humanize(model),
                                    guess_description(model),
                                    guess_icon(model), model)))
-    # Default spec first, then same-company models together, then model ID.
-    blocks.sort(key=lambda item: (not item[0][0], item[0][1], item[0][2]))
+    # Same-company models together, then by model ID. The default spec is
+    # marked with `default: true`, so it does not need to be first here.
+    blocks.sort(key=lambda item: item[0])
     blocks = [block for _, block in blocks]
 
     default_vanished = bool(
