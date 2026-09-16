@@ -40,6 +40,8 @@ jobs:
           reason=$(jq -r '
             [ if (.removed | length) > 0
                 then "removed: " + (.removed | join(", ")) else empty end,
+              if (.unverified | length) > 0
+                then "unverified: " + (.unverified | join(", ")) else empty end,
               if (.unknown_branding | length) > 0
                 then "unknown branding: " + (.unknown_branding | join(", ")) else empty end,
               if .default_vanished then "default spec vanished" else empty end ]

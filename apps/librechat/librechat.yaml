@@ -67,7 +67,6 @@ endpoints:
           - glm-4-5v
           - glm-5-2
           - glm-5-3
-          - glm-5-3-cascade
           - glm-5-3-flash
         fetch: false
       titleConvo: true
@@ -549,18 +548,6 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: glm-5-3
-    - name: glm-5-3-cascade
-      label: GLM-5.3 Cascade
-      description: Z.ai GLM chat model via ASU Voyager.
-      group: ASU Voyager
-      iconURL: https://github.com/zai-org.png
-      showIconInMenu: true
-      showIconInHeader: true
-      mcpServers:
-        - tatc
-      preset:
-        endpoint: ASU Voyager
-        model: glm-5-3-cascade
     - name: glm-5-3-flash
       label: GLM-5.3-Flash
       description: Z.ai GLM chat model via ASU Voyager.

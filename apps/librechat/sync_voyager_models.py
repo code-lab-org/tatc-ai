@@ -7,9 +7,10 @@ default list plus the modelSpecs list to match. Specs are grouped by
 company, then by model ID.
 
 Existing spec entries are preserved by model ID except for known canonical
-model metadata overrides. New models get guessed labels and icons for review.
-Models that vanished from the proxy are removed. The script refuses to write
-an empty list, and drops of more than half the models need --force.
+model metadata overrides. New models get guessed labels and icons for review,
+and each new model is smoke-tested with a small chat request before it is
+listed. Models that vanished from the proxy are removed. The script refuses to
+write an empty list, and drops of more than half the models need --force.
 
 Usage:
     python3 apps/librechat/sync_voyager_models.py [--force] [--summary-json PATH]
@@ -26,6 +27,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -158,11 +160,6 @@ CANONICAL_MODEL_METADATA = {
         "description": "Z.ai GLM chat model via ASU Voyager.",
         "icon": ZAI,
     },
-    "glm-5-3-cascade": {
-        "label": "GLM-5.3 Cascade",
-        "description": "Z.ai GLM chat model via ASU Voyager.",
-        "icon": ZAI,
-    },
 }
 
 
@@ -229,6 +226,32 @@ def fetch_models(base_url: str, api_key: str) -> list:
     with urllib.request.urlopen(req, timeout=25) as resp:
         data = json.load(resp)
     return sorted(m["id"] for m in data.get("data", []) if m.get("id"))
+
+
+def smoke_test(base_url: str, api_key: str, model: str):
+    """A model can be listed and still reject chat requests. Verify it answers."""
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+        "max_tokens": 8,
+    }).encode()
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions",
+        data=body,
+        headers={"Authorization": "Bearer " + api_key,
+                 "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except Exception as exc:
+        return False, type(exc).__name__
+    if not data.get("choices"):
+        return False, "no choices in response"
+    return True, "ok"
 
 
 def is_chat(model_id: str) -> bool:
@@ -313,6 +336,20 @@ def main() -> int:
 
     added = [m for m in live_chat if m not in by_model]
     removed = [m for m in current_models if m not in live_chat]
+
+    # A model can appear in the listing and still reject chat requests.
+    # Verify each new one before it reaches the picker.
+    verified = []
+    unverified = []
+    for model in added:
+        ok, detail = smoke_test(env["OPENAI_REVERSE_PROXY"], env["OPENAI_API_KEY"], model)
+        if ok:
+            verified.append(model)
+        else:
+            unverified.append(model)
+            print(f"  ! {model} failed smoke test: {detail}")
+    added = verified
+
     # New models with no known maker get a guessed label and no icon, which
     # is exactly what a human should eyeball, so flag them for review.
     unknown_branding = [m for m in added
@@ -371,14 +408,17 @@ def main() -> int:
         print(f"  + {m} ({humanize(m)})")
     for m in removed:
         print(f"  - {m}")
+    for m in unverified:
+        print(f"  ! {m} (listed, failed smoke test, not added)")
     if skipped:
         print(f"skipped {len(skipped)} non-chat: {', '.join(skipped)}")
     summary = {
         "added": sorted(added),
         "removed": removed,
+        "unverified": sorted(unverified),
         "unknown_branding": sorted(unknown_branding),
         "default_vanished": default_vanished,
-        "needs_review": bool(removed or unknown_branding or default_vanished),
+        "needs_review": bool(removed or unverified or unknown_branding or default_vanished),
     }
     if summary_path:
         summary_path.write_text(json.dumps(summary, indent=2) + "\n")
