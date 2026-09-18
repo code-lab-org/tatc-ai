@@ -59,6 +59,8 @@ SERVER_INSTRUCTIONS = (
     "Use the instrument search tool to find sensors by name, acronym, or type. "
     "Use the satellite-instruments tool to list the instruments on a named "
     "satellite before coverage or observation questions. "
+    "Use the instrument info tool for an instrument's measurement specs and "
+    "carrying satellites; its spec values are source text, not parsed numbers. "
     "All tools are read-only."
 )
 
@@ -390,6 +392,24 @@ def get_satellite_instruments(satellite_identifier: str) -> Dict[str, Any]:
         status, start date, end of life, and data latency.
     """
     return oscar_client.resolve_satellite(satellite_identifier)
+
+
+@mcp.tool
+def get_instrument_info(instrument_identifier: str) -> Dict[str, Any]:
+    """Get an OSCAR instrument record with measurement specs.
+
+    Resolves an instrument by acronym, name, or OSCAR slug. Spec fields
+    such as Resolution, Coverage / Cycle, and Scanning Technique are source
+    text from the OSCAR instrument page, not parsed numbers.
+
+    Args:
+        instrument_identifier: Instrument acronym, name, or OSCAR slug.
+
+    Returns:
+        Instrument identity, classification, measured variables, carrying
+        satellites with dates and latency, spec fields, and oscar_url.
+    """
+    return oscar_client.get_instrument(instrument_identifier)
 
 
 def main() -> None:

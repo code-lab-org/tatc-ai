@@ -7,6 +7,7 @@ request), then fetch details for the resolved record (one API request).
 
 import re
 import time
+from html import unescape
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -25,6 +26,13 @@ RETRY_DELAY_SECONDS = 1.0
 _RESULT_ANCHOR = re.compile(
     r'<a[^>]+href="/(satellites|instruments)/view/([a-z0-9_]+)"[^>]*>(.*?)</a>',
     re.IGNORECASE | re.DOTALL,
+)
+
+# Instrument pages render specs as highlight-label rows, e.g.
+# <td class="highlight">Resolution</td><td>4 km IFOV</td>.
+_SPEC_ROW = re.compile(
+    r'<td[^>]*class="highlight"[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>',
+    re.DOTALL,
 )
 
 
@@ -54,15 +62,12 @@ def _fetch_json(path: str) -> Dict[str, Any]:
     return data
 
 
-def _search_links(term: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-    """Run the OSCAR capabilities search and parse satellite/instrument hits."""
-    response = _get(SEARCH_URL, {"term": term})
-    response.raise_for_status()
-
+def _parse_links(page: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Parse satellite and instrument links from an OSCAR page."""
     satellites: List[Dict[str, str]] = []
     instruments: List[Dict[str, str]] = []
     seen = set()
-    for match in _RESULT_ANCHOR.finditer(response.text):
+    for match in _RESULT_ANCHOR.finditer(page):
         kind, slug, inner = match.groups()
         label = " ".join(re.sub(r"<[^>]+>", " ", inner).split())
         key = (kind, slug)
@@ -75,15 +80,41 @@ def _search_links(term: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]
     return satellites, instruments
 
 
+def _search_links(term: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Run the OSCAR capabilities search and parse satellite/instrument hits."""
+    response = _get(SEARCH_URL, {"term": term})
+    response.raise_for_status()
+    return _parse_links(response.text)
+
+
+def _link_score(query: str, link: Dict[str, str]) -> int:
+    return max(
+        score_match(query, link["label"]),
+        score_match(query, link["slug"].replace("_", " ")),
+    )
+
+
 def _rank_links(query: str, links: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Lift exact and prefix matches; keep the site's order otherwise."""
-    return sorted(
-        links,
-        key=lambda link: -max(
-            score_match(query, link["label"]),
-            score_match(query, link["slug"].replace("_", " ")),
-        ),
-    )
+    return sorted(links, key=lambda link: -_link_score(query, link))
+
+
+def _choose_link(
+    query: str, links: List[Dict[str, str]], kind: str
+) -> Dict[str, str]:
+    """Pick exactly one search hit or raise."""
+    exact = [link for link in links if link["slug"] == query.lower()]
+    if len(exact) == 1:
+        return exact[0]
+
+    ranked = _rank_links(query, links)
+    top_scores = [_link_score(query, link) for link in ranked[:2]]
+    if len(top_scores) > 1 and top_scores[0] == top_scores[1]:
+        raise ValueError(
+            f"OSCAR {kind} '{query}' is ambiguous; use search results to pick "
+            f"an exact name or slug"
+        )
+    return ranked[0]
 
 
 def _summary(link: Dict[str, str], kind: str) -> Dict[str, Any]:
@@ -185,25 +216,7 @@ def resolve_satellite(query: str) -> Dict[str, Any]:
     satellites, _ = _search_links(cleaned)
     if not satellites:
         raise ValueError(f"No OSCAR satellite matched '{query}'")
-
-    exact = [link for link in satellites if link["slug"] == cleaned.lower()]
-    if len(exact) == 1:
-        chosen = exact[0]
-    else:
-        ranked = _rank_links(cleaned, satellites)
-        top_scores = [
-            max(
-                score_match(cleaned, link["label"]),
-                score_match(cleaned, link["slug"].replace("_", " ")),
-            )
-            for link in ranked[:2]
-        ]
-        if len(top_scores) > 1 and top_scores[0] == top_scores[1]:
-            raise ValueError(
-                f"OSCAR satellite '{query}' is ambiguous; use search results "
-                f"to pick an exact name or slug"
-            )
-        chosen = ranked[0]
+    chosen = _choose_link(cleaned, satellites, "satellite")
 
     payload = _fetch_json(f"satellites/{chosen['slug']}")
     record = _detail_record(payload, "satellite")
@@ -224,3 +237,93 @@ def resolve_satellite(query: str) -> Dict[str, Any]:
         instruments.append(_satellite_instrument_entry(entry))
     summary["instruments"] = instruments
     return summary
+
+
+def _clean_text(value: str) -> str:
+    """Strip tags and entities, collapse whitespace."""
+    text = re.sub(r"<[^>]+>", " ", value)
+    return " ".join(unescape(text).replace("\xa0", " ").split())
+
+
+def _parse_instrument_specs(page: str) -> Dict[str, str]:
+    """Parse the labeled spec rows from an OSCAR instrument page."""
+    specs: Dict[str, str] = {}
+    for match in _SPEC_ROW.finditer(page):
+        label = _clean_text(match.group(1)).rstrip(":").strip()
+        value = _clean_text(match.group(2))
+        if label and value and label not in specs:
+            specs[label] = value
+    return specs
+
+
+def _instrument_satellite_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    satellite = entry.get("satellites")
+    satellite = satellite if isinstance(satellite, dict) else {}
+    slug = str(satellite.get("slug") or "")
+    return {
+        "slug": slug,
+        "name": satellite.get("name") or satellite.get("fullname"),
+        "status": entry.get("status"),
+        "start_date": entry.get("start-date"),
+        "end_of_life": entry.get("EoL"),
+        "data_latency": entry.get("data_latency"),
+        "oscar_url": SATELLITE_URL.format(slug=slug) if slug else None,
+    }
+
+
+def get_instrument(instrument_identifier: str) -> Dict[str, Any]:
+    """Resolve one OSCAR instrument with its spec table and carrying satellites.
+
+    Spec values come from the OSCAR instrument page as source text; they
+    are not parsed numbers, so downstream coverage work should treat them
+    as hints rather than machine-readable geometry. satellites_source is
+    "api" for dated API entries or "oscar_page" when only page links exist.
+    """
+    cleaned = _require_query(instrument_identifier, "instrument")
+    _, instruments = _search_links(cleaned)
+    if not instruments:
+        raise ValueError(f"No OSCAR instrument matched '{instrument_identifier}'")
+    chosen = _choose_link(cleaned, instruments, "instrument")
+    slug = chosen["slug"]
+
+    payload = _fetch_json(f"instruments/{slug}")
+    record = _detail_record(payload, "instrument")
+    result = _instrument_summary(record)
+    result["classification"] = record.get("classification")
+    result["variables"] = record.get("variables")
+    api_entries = [
+        entry
+        for entry in record.get("instrument-satellites") or []
+        if isinstance(entry, dict)
+    ]
+    result["satellites"] = [
+        _instrument_satellite_entry(entry) for entry in api_entries
+    ]
+    result["satellites_source"] = "api" if api_entries else None
+
+    try:
+        response = _get(INSTRUMENT_URL.format(slug=slug))
+        response.raise_for_status()
+        result["specs"] = _parse_instrument_specs(response.text) or None
+        # The API omits instrument-satellites for some records; the page links do not.
+        if not result["satellites"]:
+            page_satellites, _ = _parse_links(response.text)
+            if page_satellites:
+                result["satellites"] = [
+                    {
+                        "slug": link["slug"],
+                        "name": link["label"],
+                        "status": None,
+                        "start_date": None,
+                        "end_of_life": None,
+                        "data_latency": None,
+                        "oscar_url": SATELLITE_URL.format(slug=link["slug"]),
+                    }
+                    for link in page_satellites
+                ]
+                result["satellites_source"] = "oscar_page"
+    except (requests.RequestException, ValueError) as exc:
+        result["specs"] = None
+        result["specs_error"] = str(exc)
+
+    return result

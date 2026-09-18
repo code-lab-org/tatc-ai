@@ -49,6 +49,7 @@ class ServerTests(unittest.TestCase):
             tools,
             {
                 "generate_ground_track",
+                "get_instrument_info",
                 "get_satellite_info",
                 "get_satellite_instruments",
                 "search_instruments",
@@ -63,11 +64,13 @@ class ServerTests(unittest.TestCase):
         self.assertIn("satellite search tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("instrument search tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("satellite-instruments tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("instrument info tool", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_instruments", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_instruments", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("get_instrument_info", self.server.SERVER_INSTRUCTIONS)
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)
@@ -266,6 +269,23 @@ class ServerTests(unittest.TestCase):
         ):
             result = self.call_tool(
                 "get_satellite_instruments", {"satellite_identifier": "ISS"}
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+
+    def test_get_instrument_info_returns_dict(self):
+        expected = {
+            "slug": "abi",
+            "acronym": "ABI",
+            "specs": {"Resolution": "0.5 km IFOV"},
+        }
+        with mock.patch.object(
+            self.server.oscar_client,
+            "get_instrument",
+            return_value=expected,
+        ):
+            result = self.call_tool(
+                "get_instrument_info", {"instrument_identifier": "ABI"}
             )
         self.assertFalse(result.is_error)
         self.assertEqual(json.loads(result.content[0].text), expected)

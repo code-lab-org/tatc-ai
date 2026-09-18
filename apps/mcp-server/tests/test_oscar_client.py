@@ -17,6 +17,61 @@ Instruments (3)
 </body></html>
 """
 
+INSTRUMENT_HTML = """
+<html><body><table>
+<tr><td class="highlight">Acronym</td><td>ABI</td></tr>
+<tr><td class="highlight">Resolution</td><td>0.5&nbsp;km <b>IFOV</b></td></tr>
+<tr><td class="highlight">Coverage / Cycle</td><td>Full disk every 15 min</td></tr>
+</table></body></html>
+"""
+
+INSTRUMENT_DETAIL = {
+    "instrument": [
+        {
+            "slug": "abi",
+            "acronym": "ABI",
+            "fullname": "Advanced Baseline Imager",
+            "providing-agency": "NOAA",
+            "instrumenttype": "Imaging multi-spectral radiometers (vis/IR)",
+            "classification": [
+                "Earth observation instrument",
+                "Passive optical radiometer or spectrometer",
+            ],
+            "variables": [{"name": "Snow cover"}],
+            "instrument-satellites": [
+                {
+                    "start-date": "Dec 2016",
+                    "EoL": "\u22652037",
+                    "data_latency": "PT5M",
+                    "satellites": {"slug": "goes_16", "name": "GOES-16"},
+                }
+            ],
+        }
+    ]
+}
+
+INSTRUMENT_DETAIL_EMPTY = {
+    "instrument": [
+        {
+            "slug": "abi",
+            "acronym": "ABI",
+            "fullname": "Advanced Baseline Imager",
+            "providing-agency": "NOAA",
+            "instrumenttype": "Imaging multi-spectral radiometers (vis/IR)",
+            "classification": [],
+            "variables": [],
+            "instrument-satellites": [],
+        }
+    ]
+}
+
+INSTRUMENT_HTML_WITH_SATELLITES = """
+<html><body>
+<a href="/satellites/view/goes_16">GOES-16</a>
+<a href="/satellites/view/goes_18">GOES-18</a>
+</body></html>
+"""
+
 SATELLITE_DETAIL = {
     "satellite": [
         {
@@ -196,6 +251,92 @@ def test_get_retries_once_then_raises(monkeypatch):
     with pytest.raises(requests.Timeout):
         oscar_client._fetch_json("satellites/x")
     assert len(calls) == oscar_client.MAX_ATTEMPTS
+
+
+def test_get_instrument_merges_api_and_page_specs(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        calls.append(url)
+        if url == oscar_client.SEARCH_URL:
+            return FakeResponse(text=SEARCH_HTML)
+        if url == f"{oscar_client.BASE_URL}/instruments/abi":
+            return FakeResponse(json_data=INSTRUMENT_DETAIL)
+        if url == "https://space.oscar.wmo.int/instruments/view/abi":
+            return FakeResponse(text=INSTRUMENT_HTML)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+
+    out = oscar_client.get_instrument("ABI")
+    assert out["slug"] == "abi"
+    assert out["agency"] == "NOAA"
+    assert out["classification"][0] == "Earth observation instrument"
+    assert out["variables"] == [{"name": "Snow cover"}]
+    [satellite] = out["satellites"]
+    assert satellite["slug"] == "goes_16"
+    assert satellite["name"] == "GOES-16"
+    assert satellite["data_latency"] == "PT5M"
+    assert out["specs"]["Resolution"] == "0.5 km IFOV"
+    assert out["specs"]["Coverage / Cycle"] == "Full disk every 15 min"
+    assert out["satellites_source"] == "api"
+    assert calls == [
+        oscar_client.SEARCH_URL,
+        f"{oscar_client.BASE_URL}/instruments/abi",
+        "https://space.oscar.wmo.int/instruments/view/abi",
+    ]
+
+
+def test_get_instrument_falls_back_to_page_satellites(monkeypatch):
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        if url == oscar_client.SEARCH_URL:
+            return FakeResponse(text=SEARCH_HTML)
+        if url == f"{oscar_client.BASE_URL}/instruments/abi":
+            return FakeResponse(json_data=INSTRUMENT_DETAIL_EMPTY)
+        return FakeResponse(text=INSTRUMENT_HTML_WITH_SATELLITES)
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+
+    out = oscar_client.get_instrument("ABI")
+    assert out["satellites_source"] == "oscar_page"
+    assert [s["name"] for s in out["satellites"]] == ["GOES-16", "GOES-18"]
+    assert out["satellites"][0]["status"] is None
+    assert out["satellites"][0]["oscar_url"].endswith("/satellites/view/goes_16")
+
+
+def test_get_instrument_reports_specs_failure(monkeypatch):
+    class FailingPage(FakeResponse):
+        def raise_for_status(self):
+            raise requests.HTTPError("500 Server Error")
+
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        if url == oscar_client.SEARCH_URL:
+            return FakeResponse(text=SEARCH_HTML)
+        if url == f"{oscar_client.BASE_URL}/instruments/abi":
+            return FakeResponse(json_data=INSTRUMENT_DETAIL)
+        return FailingPage()
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+
+    out = oscar_client.get_instrument("ABI")
+    assert out["specs"] is None
+    assert "500" in out["specs_error"]
+
+
+def test_get_instrument_rejects_unknown_and_ambiguous(monkeypatch):
+    monkeypatch.setattr(
+        oscar_client.requests, "get", _search_response("<html>no hits</html>")
+    )
+    with pytest.raises(ValueError, match="No OSCAR instrument"):
+        oscar_client.get_instrument("nope")
+
+    twins = (
+        '<html><a href="/instruments/view/magic_a">MAGIC-A</a>'
+        '<a href="/instruments/view/magic_b">MAGIC-B</a></html>'
+    )
+    monkeypatch.setattr(oscar_client.requests, "get", _search_response(twins))
+    with pytest.raises(ValueError, match="ambiguous"):
+        oscar_client.get_instrument("MAGIC")
 
 
 def test_fetch_json_rejects_non_json(monkeypatch):
