@@ -4,6 +4,12 @@ services:
       context: .
       dockerfile: apps/mcp-server/Dockerfile
     container_name: tatc-ai-mcp-server-dev
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      USAGE_LOG_PATH: /data/usage/usage.jsonl
+    volumes:
+      - usage-data:/data/usage
     ports:
       - "8000:8000"
 
@@ -30,3 +36,4 @@ services:
 
 volumes:
   mongodb-data:
+  usage-data:

@@ -74,8 +74,12 @@ services:
       # a volume here it lives on the container's writable layer and is
       # wiped on every redeploy, forcing every client to re-register.
       FASTMCP_HOME: /data/fastmcp
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      USAGE_LOG_PATH: /data/usage/usage.jsonl
     volumes:
       - mcp-server-oauth:/data/fastmcp
+      - mcp-server-usage:/data/usage
     depends_on:
       - dex
     labels:
@@ -155,4 +159,5 @@ volumes:
   dex-data:
   mongodb-data:
   mcp-server-oauth:
+  mcp-server-usage:
   letsencrypt-data:
