@@ -94,6 +94,7 @@ class ServerModuleTests(unittest.TestCase):
 
         self.assertEqual(module.mcp.name, "tatc-ai-mcp-server")
         self.assertIn("echo", module.mcp.registered_tools)
+        self.assertIn("run_agent_task", module.mcp.registered_tools)
         self.assertEqual(module.echo("hello"), "hello")
 
     def test_no_auth_when_oidc_not_configured(self):

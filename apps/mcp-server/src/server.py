@@ -38,6 +38,14 @@ def echo(text: str) -> str:
     return text
 
 
+@mcp.tool()
+def run_agent_task(task: str) -> str:
+    """Run a single-shot agent task against the configured LLM (Gemini by default)."""
+    from src import agent
+
+    return agent.run_task(task)
+
+
 if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
