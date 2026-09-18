@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional
 from dateutil import parser as date_parser
 from fastmcp import FastMCP
 
-from . import celestrak_client
+from . import celestrak_client, oscar_client
 from .schema_formatter import format_ground_track_response
 from .tatc_integration import (
     calculate_footprint_from_position,
-    create_satellite_from_tle,
+    create_orbit_from_omm,
     generate_ground_track as compute_ground_track,
 )
 from .validation import (
@@ -53,10 +53,12 @@ SERVER_INSTRUCTIONS = (
     # and models that follow these instructions literally call the bare name,
     # which fails with "tool not found".
     "Use the satellite search tool when a satellite name is broad or ambiguous. "
-    "Use the satellite info tool for metadata and current TLE data. "
+    "Use the satellite info tool for metadata and current GP (OMM) elements. "
     "Use the ground-track tool only after resolving an exact satellite name or "
     "NORAD ID; its times are UTC and its position altitude is in meters. "
-    "Render TLE lines in a fenced code block so they are not wrapped. "
+    "Use the instrument search tool to find sensors by name, acronym, or type. "
+    "Use the satellite-instruments tool to list the instruments on a named "
+    "satellite before coverage or observation questions. "
     "All tools are read-only."
 )
 
@@ -271,7 +273,7 @@ def _generate_ground_track(
     validate_ground_track_sample_count(start_time_dt, end_time_dt, step_seconds)
 
     sat_info = celestrak_client.get_satellite_info(satellite_identifier)
-    satellite = create_satellite_from_tle(sat_info["tle_line1"], sat_info["tle_line2"])
+    satellite = create_orbit_from_omm(sat_info["omm"])
     ground_track = compute_ground_track(
         satellite, start_time_dt, end_time_dt, step_seconds
     )
@@ -323,13 +325,13 @@ def generate_ground_track(
 
 @mcp.tool
 def get_satellite_info(satellite_identifier: str) -> Dict[str, Any]:
-    """Get satellite metadata and current TLE data from CelesTrak.
+    """Get satellite metadata and current GP (OMM) elements from CelesTrak.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS") or NORAD ID.
 
     Returns:
-        Object with norad_id, name, tle_line1, and tle_line2.
+        Object with norad_id, name, and omm (a list of OMM element records).
     """
     return celestrak_client.get_satellite_info(satellite_identifier)
 
@@ -351,6 +353,43 @@ def search_satellites(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
         raise ValueError("limit must be an integer between 1 and 50")
     return celestrak_client.search_satellites_by_name(query, limit=limit)
+
+
+@mcp.tool
+def search_instruments(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Search the WMO OSCAR database for Earth observation instruments.
+
+    Args:
+        query: Instrument name, acronym, or partial name (e.g., "ABI", "MODIS").
+        limit: Maximum number of results, between 1 and 50. Defaults to 10.
+
+    Returns:
+        Objects with slug, label, and oscar_url. Follow oscar_url for the
+        full OSCAR record, or use the satellite-instruments tool for a
+        satellite's instrument list with status and latency fields.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+        raise ValueError("limit must be an integer between 1 and 50")
+    return oscar_client.search_instruments(query, limit=limit)
+
+
+@mcp.tool
+def get_satellite_instruments(satellite_identifier: str) -> Dict[str, Any]:
+    """Get the instruments on a satellite, with OSCAR mission metadata.
+
+    Use this to build the instrument model input for observation or
+    coverage analysis. Resolves names and acronyms against the full OSCAR
+    satellite list; unknown or ambiguous names return an error.
+
+    Args:
+        satellite_identifier: Satellite acronym, name, or OSCAR slug.
+
+    Returns:
+        Satellite metadata (agency, status, orbit, altitude, launch and
+        end-of-life dates, oscar_url) plus instruments with per-satellite
+        status, start date, end of life, and data latency.
+    """
+    return oscar_client.resolve_satellite(satellite_identifier)
 
 
 def main() -> None:

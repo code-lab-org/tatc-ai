@@ -47,7 +47,13 @@ class ServerTests(unittest.TestCase):
         tools = {tool.name for tool in self.list_tools()}
         self.assertEqual(
             tools,
-            {"generate_ground_track", "get_satellite_info", "search_satellites"},
+            {
+                "generate_ground_track",
+                "get_satellite_info",
+                "get_satellite_instruments",
+                "search_instruments",
+                "search_satellites",
+            },
         )
 
     def test_server_name_and_instructions(self):
@@ -55,9 +61,13 @@ class ServerTests(unittest.TestCase):
         # Instructions must describe tools by role, not bare MCP tool names,
         # which chat clients register under prefixed/suffixed names.
         self.assertIn("satellite search tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("instrument search tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("satellite-instruments tool", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("search_instruments", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("get_satellite_instruments", self.server.SERVER_INSTRUCTIONS)
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)
@@ -128,8 +138,7 @@ class ServerTests(unittest.TestCase):
         expected = {
             "norad_id": 25544,
             "name": "ISS (ZARYA)",
-            "tle_line1": "line 1",
-            "tle_line2": "line 2",
+            "omm": [{"OBJECT_NAME": "ISS (ZARYA)", "NORAD_CAT_ID": 25544}],
         }
         with mock.patch.object(
             self.server.celestrak_client,
@@ -149,11 +158,10 @@ class ServerTests(unittest.TestCase):
             return_value={
                 "norad_id": 25544,
                 "name": "ISS (ZARYA)",
-                "tle_line1": "line 1",
-                "tle_line2": "line 2",
+                "omm": [{"OBJECT_NAME": "ISS (ZARYA)", "NORAD_CAT_ID": 25544}],
             },
         ), mock.patch.object(
-            self.server, "create_satellite_from_tle", return_value=object()
+            self.server, "create_orbit_from_omm", return_value=object()
         ), mock.patch.object(
             self.server,
             "compute_ground_track",
@@ -193,11 +201,10 @@ class ServerTests(unittest.TestCase):
             return_value={
                 "norad_id": 25544,
                 "name": "ISS (ZARYA)",
-                "tle_line1": "line 1",
-                "tle_line2": "line 2",
+                "omm": [{"OBJECT_NAME": "ISS (ZARYA)", "NORAD_CAT_ID": 25544}],
             },
         ), mock.patch.object(
-            self.server, "create_satellite_from_tle", return_value=object()
+            self.server, "create_orbit_from_omm", return_value=object()
         ), mock.patch.object(
             self.server,
             "compute_ground_track",
@@ -221,6 +228,47 @@ class ServerTests(unittest.TestCase):
         point = json.loads(result.content[0].text)[0]
         self.assertIn("footprint_geojson", point)
         self.assertEqual(point["footprint_geojson"]["type"], "Feature")
+
+    def test_search_instruments_returns_list(self):
+        expected = [
+            {
+                "slug": "abi",
+                "label": "ABI",
+                "oscar_url": "https://space.oscar.wmo.int/instruments/view/abi",
+            }
+        ]
+        with mock.patch.object(
+            self.server.oscar_client,
+            "search_instruments",
+            return_value=expected,
+        ):
+            result = self.call_tool("search_instruments", {"query": "ABI"})
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+
+    def test_search_instruments_rejects_bad_limit(self):
+        result = self.call_tool(
+            "search_instruments", {"query": "ABI", "limit": 0}
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("between 1 and 50", result.content[0].text)
+
+    def test_get_satellite_instruments_returns_dict(self):
+        expected = {
+            "slug": "iss",
+            "acronym": "ISS",
+            "instruments": [{"slug": "iss_lis", "acronym": "LIS"}],
+        }
+        with mock.patch.object(
+            self.server.oscar_client,
+            "resolve_satellite",
+            return_value=expected,
+        ):
+            result = self.call_tool(
+                "get_satellite_instruments", {"satellite_identifier": "ISS"}
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
 
     def test_tool_errors_surface_to_the_model(self):
         with mock.patch.object(

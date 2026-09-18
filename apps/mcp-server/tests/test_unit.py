@@ -12,8 +12,25 @@ from src import server as srv
 from src import tatc_integration as ti
 from src.server import parse_duration, parse_time_input
 
-ISS_LINE1 = "1 25544U 98067A   26254.17569693  .00004925  00000+0  97240-4 0  9990"
-ISS_LINE2 = "2 25544  51.6305 234.5133 0004993 127.7196 232.4246 15.49076359585089"
+ISS_OMM = {
+    "OBJECT_NAME": "ISS (ZARYA)",
+    "OBJECT_ID": "1998-067A",
+    "EPOCH": "2026-09-18T03:25:38.782272",
+    "MEAN_MOTION": 15.49160218,
+    "ECCENTRICITY": 0.00048228,
+    "INCLINATION": 51.6307,
+    "RA_OF_ASC_NODE": 200.0361,
+    "ARG_OF_PERICENTER": 152.4527,
+    "MEAN_ANOMALY": 207.6718,
+    "EPHEMERIS_TYPE": 0,
+    "CLASSIFICATION_TYPE": "U",
+    "NORAD_CAT_ID": 25544,
+    "ELEMENT_SET_NO": 999,
+    "REV_AT_EPOCH": 58616,
+    "BSTAR": 0.00011125122,
+    "MEAN_MOTION_DOT": 5.718e-5,
+    "MEAN_MOTION_DDOT": 0,
+}
 
 
 # validation: NORAD IDs
@@ -23,31 +40,34 @@ def test_norad_accepts_int_and_numeric_string():
     assert v.validate_norad_id(25544) == 25544
     assert v.validate_norad_id("25544") == 25544
     assert v.validate_norad_id(25544.0) == 25544
+    assert v.validate_norad_id(100178) == 100178
 
 
 def test_norad_rejects_bool_out_of_range_and_garbage():
-    for bad in (True, False, 0, 100000, -5, "abc", None, 25544.5):
+    for bad in (True, False, 0, 1_000_000_000, -5, "abc", None, 25544.5):
         with pytest.raises(ValueError):
             v.validate_norad_id(bad)
 
 
-# validation: TLE format
+# validation: OMM records
 
 
-def test_real_tle_lines_pass_validation():
-    assert v.validate_tle_format(ISS_LINE1, ISS_LINE2) == (ISS_LINE1, ISS_LINE2)
+def test_real_omm_record_passes_validation():
+    assert v.validate_omm_records([ISS_OMM]) == [ISS_OMM]
 
 
-def test_tle_rejects_bad_checksum_short_lines_and_prefix():
-    bad_checksum = ISS_LINE1[:-1] + ("1" if ISS_LINE1[-1] != "1" else "2")
-    with pytest.raises(ValueError, match="checksum"):
-        v.validate_tle_format(bad_checksum, ISS_LINE2)
-    with pytest.raises(ValueError, match="too short"):
-        v.validate_tle_format("1 short", ISS_LINE2)
-    with pytest.raises(ValueError, match="must start"):
-        v.validate_tle_format("0" + ISS_LINE1[1:], ISS_LINE2)
-    with pytest.raises(ValueError):
-        v.validate_tle_format("x" * 69, ISS_LINE2)
+def test_omm_validation_rejects_malformed_records():
+    with pytest.raises(ValueError, match="non-empty"):
+        v.validate_omm_records([])
+    with pytest.raises(ValueError, match="must be an object"):
+        v.validate_omm_records(["not a record"])
+    incomplete = {k: val for k, val in ISS_OMM.items() if k != "MEAN_ANOMALY"}
+    with pytest.raises(ValueError, match="MEAN_ANOMALY"):
+        v.validate_omm_records([incomplete])
+    with pytest.raises(ValueError, match="INCLINATION"):
+        v.validate_omm_records([{**ISS_OMM, "INCLINATION": "steep"}])
+    with pytest.raises(ValueError, match="NORAD_CAT_ID"):
+        v.validate_omm_records([{**ISS_OMM, "NORAD_CAT_ID": 0}])
 
 
 # validation: time range and steps
@@ -103,7 +123,7 @@ def test_server_rejects_oversized_ground_track_before_external_helpers(monkeypat
     monkeypatch.setattr(
         srv.celestrak_client, "get_satellite_info", unexpected_call
     )
-    monkeypatch.setattr(srv, "create_satellite_from_tle", unexpected_call)
+    monkeypatch.setattr(srv, "create_orbit_from_omm", unexpected_call)
     monkeypatch.setattr(srv, "compute_ground_track", unexpected_call)
 
     with pytest.raises(ValueError, match="2001.*2000"):
@@ -308,20 +328,6 @@ def test_decayed_hint_names_the_dead_objects(monkeypatch):
     assert "TIANGONG-1" in hint and "37820" in hint and "2018-04-02" in hint
 
 
-def test_gp_metadata_tolerates_malformed_items(monkeypatch):
-    class FakeResponse:
-        text = "non-empty"
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return ["not a dict"]
-
-    monkeypatch.setattr(cc.requests, "get", lambda *a, **k: FakeResponse())
-    assert cc._fetch_gp_metadata(25544) is None
-
-
 # tatc_integration pure geometry and failure paths
 
 
@@ -389,6 +395,6 @@ def test_generate_ground_track_raises_when_nothing_propagates():
         )
 
 
-def test_create_satellite_rejects_garbage_tle_offline():
-    with pytest.raises(ValueError):
-        ti.create_satellite_from_tle("not a tle", "also not a tle")
+def test_create_orbit_rejects_garbage_omm_offline():
+    with pytest.raises(ValueError, match="OMM"):
+        ti.create_orbit_from_omm([{"OBJECT_NAME": "X"}])

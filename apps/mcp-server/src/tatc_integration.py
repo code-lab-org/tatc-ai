@@ -1,9 +1,10 @@
 """TAT-C library integration for satellite operations."""
 
+import json
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import List, Tuple, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from .validation import validate_ground_track_sample_count
 
@@ -24,14 +25,6 @@ except ImportError:
     _HAS_GPO = False
 
 try:
-    from tatc.schemas import TwoLineElements  # tatc < 3.5
-
-    _HAS_TLE = True
-except ImportError:
-    TwoLineElements = None  # type: ignore[assignment]
-    _HAS_TLE = False
-
-try:
     from skyfield.api import wgs84
 
     _HAS_WGS84 = True
@@ -39,7 +32,7 @@ except ImportError:
     wgs84 = None  # type: ignore[assignment]
     _HAS_WGS84 = False
 
-TATC_AVAILABLE = (_HAS_GPO or _HAS_TLE) and _HAS_WGS84
+TATC_AVAILABLE = _HAS_GPO and _HAS_WGS84
 
 
 def _require_tatc() -> None:
@@ -69,22 +62,15 @@ def _extract_lla(subpoint) -> Tuple[float, float, float]:
     )
 
 
-def create_satellite_from_tle(tle_line1: str, tle_line2: str) -> Any:
-    """Create a TAT-C orbit object from TLE lines.
-
-    Uses GeneralPerturbationsOrbit on tatc>=3.5, TwoLineElements on older releases.
-    """
+def create_orbit_from_omm(omm_records: List[Dict[str, Any]]) -> Any:
+    """Create a TAT-C GeneralPerturbationsOrbit from OMM element records."""
     _require_tatc()
 
     try:
-        if _HAS_GPO:
-            return GeneralPerturbationsOrbit.from_tle([tle_line1, tle_line2])
-        # Fallback for tatc < 3.5
-        tle = TwoLineElements(tle=[tle_line1, tle_line2])
-        return tle
+        return GeneralPerturbationsOrbit.from_omm_json(json.dumps(omm_records))
     except Exception as e:  # pylint: disable=broad-exception-caught
-        # Both tatc APIs raise their own error types for bad TLE data.
-        raise ValueError(f"Failed to create satellite from TLE: {e}") from e
+        # TAT-C and sgp4 raise their own error types for bad element data.
+        raise ValueError(f"Failed to create orbit from OMM data: {e}") from e
 
 
 def propagate_satellite(

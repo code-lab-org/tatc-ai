@@ -48,8 +48,8 @@ def _mocked_track(**kwargs):
     with mock.patch.object(
         srv.celestrak_client, "get_satellite_info",
         return_value={"norad_id": 25544, "name": "ISS",
-                      "tle_line1": "l1", "tle_line2": "l2"}), \
-        mock.patch.object(srv, "create_satellite_from_tle", return_value=object()), \
+                      "omm": [{"OBJECT_NAME": "ISS", "NORAD_CAT_ID": 25544}]}), \
+        mock.patch.object(srv, "create_orbit_from_omm", return_value=object()), \
         mock.patch.object(srv, "compute_ground_track", return_value=list(TRACK)), \
         mock.patch.object(srv, "calculate_footprint_from_position",
                           return_value=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]) as fp:
