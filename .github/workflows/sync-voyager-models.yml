@@ -20,8 +20,8 @@ jobs:
       # Needs a repo secret VOYAGER_API_KEY holding an ASU proxy key.
       - name: Sync model list
         run: |
-          OPENAI_API_KEY="${{ secrets.VOYAGER_API_KEY }}" \
-          OPENAI_REVERSE_PROXY="https://openai.rc.asu.edu/v1" \
+          VOYAGER_API_KEY="${{ secrets.VOYAGER_API_KEY }}" \
+          VOYAGER_BASE_URL="https://openai.rc.asu.edu/v1" \
           python3 apps/librechat/sync_voyager_models.py \
             --summary-json "$RUNNER_TEMP/sync-summary.json"
 

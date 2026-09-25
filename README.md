@@ -40,13 +40,13 @@ Runs with localhost/direct port access:
 - MongoDB: `localhost:27017`
 
 Before starting the development stack, create the private LibreChat env file
-and set `OPENAI_API_KEY` to your ASU Research Computing key. Keep the proxy
-setting at `https://openai.rc.asu.edu/v1`:
+and set `VOYAGER_API_KEY` to your ASU Research Computing key and
+`CREATEAI_API_KEY` to your ASU CreateAI key. Keep the base URLs as given:
 
 ```bash
 cp apps/librechat/.env.example apps/librechat/.env
 chmod 600 apps/librechat/.env
-# edit apps/librechat/.env and set OPENAI_API_KEY
+# edit apps/librechat/.env and set VOYAGER_API_KEY and CREATEAI_API_KEY
 ```
 
 ```bash
@@ -103,7 +103,10 @@ committed to the repository:
 3. `cp apps/librechat/.env.example apps/librechat/.env` and replace the
    `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDS_KEY`, and `CREDS_IV` placeholders
    with your own generated values (see the comments in that file), and set
-   `OPENAI_API_KEY` to enable the OpenAI model endpoint.
+   `VOYAGER_API_KEY` and `CREATEAI_API_KEY` to enable the ASU Voyager and
+   ASU CreateAI model endpoints. Existing `.env` files that still use
+   `OPENAI_API_KEY` / `OPENAI_REVERSE_PROXY` must rename them to
+   `VOYAGER_API_KEY` / `VOYAGER_BASE_URL`.
 4. `ghcr.io/code-lab-org/tatc-ai-mcp-server` is a private package. Log the
    host in once with a GitHub PAT (`read:packages` scope, from an account
    with read access to this repo):
