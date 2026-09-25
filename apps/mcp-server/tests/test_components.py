@@ -1,6 +1,7 @@
 import unittest
 
-from src.memory import InMemoryStore, assemble_context
+from src.conversation import assemble_context
+from src.retrieval import KeywordStore
 from src.models import LLMResponse
 from src.rendering import render, to_markdown_table
 from src.tokens import TokenBudget
@@ -8,7 +9,7 @@ from src.tokens import TokenBudget
 
 class MemoryStoreTests(unittest.TestCase):
     def test_search_ranks_by_term_overlap(self):
-        store = InMemoryStore()
+        store = KeywordStore()
         store.add("orbit altitude 500 km")
         store.add("ground station in Phoenix")
         store.add("orbit inclination and altitude trade")
@@ -20,12 +21,12 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertNotIn("ground station in Phoenix", results)
 
     def test_search_empty_store(self):
-        self.assertEqual(InMemoryStore().search("anything"), [])
+        self.assertEqual(KeywordStore().search("anything"), [])
 
 
 class ContextTests(unittest.TestCase):
     def test_memories_precede_history_and_task(self):
-        result = assemble_context("task", history=["h1"], memories=["m1"])
+        result = assemble_context("task", history=["h1"], examples=["m1"])
         self.assertEqual(result, "m1\n\nh1\n\ntask")
 
 

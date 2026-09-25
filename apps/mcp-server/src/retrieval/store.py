@@ -1,12 +1,12 @@
 from typing import Protocol
 
 
-class MemoryStore(Protocol):
+class Store(Protocol):
     def add(self, text: str) -> None: ...
     def search(self, query: str, limit: int = 5) -> list[str]: ...
 
 
-class InMemoryStore:
+class KeywordStore:
     def __init__(self):
         self._items: list[str] = []
 

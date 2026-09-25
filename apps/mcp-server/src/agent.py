@@ -1,9 +1,9 @@
 from typing import Optional
 
-from .memory import assemble_context
-from .memory.store import MemoryStore
+from .conversation import assemble_context
 from .models import LLMClient, default_client
 from .rendering import render
+from .retrieval import Store
 from .tokens import TokenBudget, usage
 
 SYSTEM_PROMPT = (
@@ -18,11 +18,11 @@ _BUDGET = TokenBudget.from_env()
 def run_task(
     task: str,
     client: Optional[LLMClient] = None,
-    store: Optional[MemoryStore] = None,
+    store: Optional[Store] = None,
 ) -> str:
     client = client or default_client()
-    memories = store.search(task) if store else []
-    prompt = assemble_context(task, memories=memories)
+    examples = store.search(task) if store else []
+    prompt = assemble_context(task, examples=examples)
     response = client.generate(prompt, system=SYSTEM_PROMPT)
     _BUDGET.charge(response)
     extra = {"budget_exceeded": _BUDGET.exceeded} if _BUDGET.limit else None
