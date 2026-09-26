@@ -23,16 +23,12 @@ mcpServers:
 
 endpoints:
   custom:
-    # All chat models come from ASU Voyager for now, so they are grouped
-    # here instead of under the built-in OpenAI label. The key and proxy URL
-    # reuse the existing OPENAI_* env vars, so no new secrets are needed.
     # fetch stays off so embedding, transcription, image, and video models
     # never show in the picker; add new chat model IDs here when the proxy
-    # gains them. Add another custom endpoint later when models come from
-    # other sources.
+    # gains them.
     - name: ASU Voyager
-      apiKey: ${OPENAI_API_KEY}
-      baseURL: ${OPENAI_REVERSE_PROXY}
+      apiKey: ${VOYAGER_API_KEY}
+      baseURL: ${VOYAGER_BASE_URL}
       models:
         default:
           - olmo3-32b-instruct
@@ -78,6 +74,67 @@ endpoints:
       titleConvo: true
       titleModel: llama4-scout-17b
       modelDisplayLabel: ASU Voyager
+    # Only models verified for chat, streaming, and tool calls are listed;
+    # the API also serves embedding, speech, image, and realtime models.
+    - name: ASU CreateAI
+      apiKey: ${CREATEAI_API_KEY}
+      baseURL: ${CREATEAI_BASE_URL}
+      models:
+        default:
+          - aws/nova2-lite
+          - aws/nova-lite
+          - aws/nova-micro
+          - aws/nova-pro
+          - aws/claude4_5_haiku
+          - aws/claude4_sonnet
+          - aws/claude4_5_sonnet
+          - aws/claude5_sonnet
+          - aws/claude4_1_opus
+          - aws/claude4_5_opus
+          - aws/claude4_6_opus
+          - aws/claude4_7_opus
+          - aws/claude4_8_opus
+          - aws/claude5_opus
+          - gcp-deepmind/geminiflash2_5
+          - gcp-deepmind/geminiflash2_5-lite
+          - gcp-deepmind/geminiflash3
+          - gcp-deepmind/geminiflash3_1_lite
+          - gcp-deepmind/geminipro3_1
+          - gcp-deepmind/geminiflash3_5
+          - gcp-deepmind/geminiflash3_7
+          - asu-air/gemma4_31b_it
+          - asu-air/llama4_maverick-17b
+          - asu-air/llama4_scout-17b
+          - asu-air/muse-glimmer-30b
+          - aws/gpt-oss-20b
+          - aws/gpt-oss-120b
+          - openai/gpt4o_mini
+          - openai/gpt4_1
+          - openai/gpt4_1-mini
+          - openai/o3
+          - openai/gpt5
+          - openai/gpt5_mini
+          - openai/gpt5_nano
+          - openai/gpt5_1
+          - openai/gpt5_1_instant
+          - openai/gpt5_1_thinking
+          - openai/gpt5_2
+          - openai/gpt5_2_pro
+          - openai/gpt5_4_mini
+          - openai/gpt5_4_nano
+          - openai/gpt5_4_thinking
+          - openai/gpt5_4_pro
+          - openai/gpt5_5
+          - openai/gpt5_5_thinking
+          - openai/gpt5_5_pro
+          - openai/gpt5_6_luna
+          - openai/gpt5_6_sol
+          - openai/gpt5_6_terra
+          - openai/gpt6_astra
+        fetch: false
+      titleConvo: true
+      titleModel: aws/claude4_5_haiku
+      modelDisplayLabel: ASU CreateAI
 
 interface:
   customWelcome: 'Welcome to TATC AI - ask about satellites, orbits, and ground tracks.'
@@ -566,3 +623,628 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: glm-5-3-flash
+    - name: createai-nova2-lite
+      label: Nova 2 Lite
+      description: Amazon Nova chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://github.com/aws.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/nova2-lite
+    - name: createai-nova-lite
+      label: Nova Lite
+      description: Amazon Nova chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://github.com/aws.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/nova-lite
+    - name: createai-nova-micro
+      label: Nova Micro
+      description: Amazon Nova chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://github.com/aws.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/nova-micro
+    - name: createai-nova-pro
+      label: Nova Pro
+      description: Amazon Nova chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://github.com/aws.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/nova-pro
+    - name: createai-claude4-5-haiku
+      label: Claude Haiku 4.5
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_5_haiku
+    - name: createai-claude4-sonnet
+      label: Claude Sonnet 4
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_sonnet
+    - name: createai-claude4-5-sonnet
+      label: Claude Sonnet 4.5
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_5_sonnet
+    - name: createai-claude5-sonnet
+      label: Claude Sonnet 5
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude5_sonnet
+    - name: createai-claude4-1-opus
+      label: Claude Opus 4.1
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_1_opus
+    - name: createai-claude4-5-opus
+      label: Claude Opus 4.5
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_5_opus
+    - name: createai-claude4-6-opus
+      label: Claude Opus 4.6
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_6_opus
+    - name: createai-claude4-7-opus
+      label: Claude Opus 4.7
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_7_opus
+    - name: createai-claude4-8-opus
+      label: Claude Opus 4.8
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude4_8_opus
+    - name: createai-claude5-opus
+      label: Claude Opus 5
+      description: Anthropic Claude chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/anthropic.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/claude5_opus
+    - name: createai-geminiflash2-5
+      label: Gemini 2.5 Flash
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminiflash2_5
+    - name: createai-geminiflash2-5-lite
+      label: Gemini 2.5 Flash-Lite
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminiflash2_5-lite
+    - name: createai-geminiflash3
+      label: Gemini 3 Flash
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminiflash3
+    - name: createai-geminiflash3-1-lite
+      label: Gemini 3.1 Flash-Lite
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminiflash3_1_lite
+    - name: createai-geminipro3-1
+      label: Gemini 3.1 Pro
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminipro3_1
+    - name: createai-geminiflash3-5
+      label: Gemini 3.5 Flash
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminiflash3_5
+    - name: createai-geminiflash3-7
+      label: Gemini 3.7 Flash
+      description: Google Gemini chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: gcp-deepmind/geminiflash3_7
+    - name: createai-gemma4-31b-it
+      label: Gemma 4 31B IT
+      description: Google Gemma chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/google.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: asu-air/gemma4_31b_it
+    - name: createai-llama4-maverick-17b
+      label: Llama 4 Maverick 17B
+      description: Meta Llama chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: asu-air/llama4_maverick-17b
+    - name: createai-llama4-scout-17b
+      label: Llama 4 Scout 17B
+      description: Meta Llama chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: asu-air/llama4_scout-17b
+    - name: createai-muse-glimmer-30b
+      label: Muse Glimmer 30B
+      description: Meta Muse chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: asu-air/muse-glimmer-30b
+    - name: createai-gpt-oss-20b
+      label: GPT-OSS 20B
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/gpt-oss-20b
+        modelLabel: ASU CreateAI
+    - name: createai-gpt-oss-120b
+      label: GPT-OSS 120B
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: aws/gpt-oss-120b
+        modelLabel: ASU CreateAI
+    - name: createai-gpt4o-mini
+      label: GPT-4o mini
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt4o_mini
+        modelLabel: ASU CreateAI
+    - name: createai-gpt4-1
+      label: GPT-4.1
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt4_1
+        modelLabel: ASU CreateAI
+    - name: createai-gpt4-1-mini
+      label: GPT-4.1 mini
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt4_1-mini
+        modelLabel: ASU CreateAI
+    - name: createai-o3
+      label: o3
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/o3
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5
+      label: GPT-5
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-mini
+      label: GPT-5 mini
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_mini
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-nano
+      label: GPT-5 nano
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_nano
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-1
+      label: GPT-5.1
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_1
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-1-instant
+      label: GPT-5.1 Instant
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_1_instant
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-1-thinking
+      label: GPT-5.1 Thinking
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_1_thinking
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-2
+      label: GPT-5.2
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_2
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-2-pro
+      label: GPT-5.2 Pro
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_2_pro
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-4-mini
+      label: GPT-5.4 mini
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_4_mini
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-4-nano
+      label: GPT-5.4 nano
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_4_nano
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-4-thinking
+      label: GPT-5.4 Thinking
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_4_thinking
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-4-pro
+      label: GPT-5.4 Pro
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_4_pro
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-5
+      label: GPT-5.5
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_5
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-5-thinking
+      label: GPT-5.5 Thinking
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_5_thinking
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-5-pro
+      label: GPT-5.5 Pro
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_5_pro
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-6-luna
+      label: GPT-5.6 Luna
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_6_luna
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-6-sol
+      label: GPT-5.6 Sol
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_6_sol
+        modelLabel: ASU CreateAI
+    - name: createai-gpt5-6-terra
+      label: GPT-5.6 Terra
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt5_6_terra
+        modelLabel: ASU CreateAI
+    - name: createai-gpt6-astra
+      label: GPT-6 Astra
+      description: OpenAI chat model via ASU CreateAI.
+      group: ASU CreateAI
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU CreateAI
+        model: openai/gpt6_astra
+        modelLabel: ASU CreateAI

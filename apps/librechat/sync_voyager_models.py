@@ -12,6 +12,9 @@ and each new model is smoke-tested with a small chat request before it is
 listed. Models that vanished from the proxy are removed. The script refuses to
 write an empty list, and drops of more than half the models need --force.
 
+Only the ASU Voyager endpoint and specs are touched. Specs for other
+endpoints (such as ASU CreateAI) are kept verbatim after the Voyager ones.
+
 Usage:
     python3 apps/librechat/sync_voyager_models.py [--force] [--summary-json PATH]
 
@@ -34,6 +37,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent
 FILES = [BASE / "librechat.yaml", BASE / "librechat.deploy.yaml.template"]
 ENV_FILE = BASE / ".env"
+VOYAGER = "ASU Voyager"
 
 # Substrings that mark a model as non-chat. Matched case-insensitively
 # against the model ID. Curate in review if a real chat model ever trips one.
@@ -254,6 +258,14 @@ def smoke_test(base_url: str, api_key: str, model: str):
     return True, "ok"
 
 
+def other_spec_blocks(text: str) -> list:
+    """Raw modelSpecs entries for endpoints other than Voyager, in file order."""
+    specs = text.split("modelSpecs:", 1)[1].split("  list:\n", 1)[1]
+    entries = re.split(r"(?m)^(?=    - name: )", specs)
+    return [e.rstrip("\n") for e in entries
+            if e.strip() and not re.search(rf"(?m)^        endpoint: {VOYAGER}$", e)]
+
+
 def is_chat(model_id: str) -> bool:
     low = model_id.lower()
     return not any(mark in low for mark in NON_CHAT_MARKERS)
@@ -314,12 +326,12 @@ def main() -> int:
     env = dict(os.environ)
     if ENV_FILE.exists():
         env = {**load_env(ENV_FILE), **env}
-    missing = [v for v in ("OPENAI_API_KEY", "OPENAI_REVERSE_PROXY") if not env.get(v)]
+    missing = [v for v in ("VOYAGER_API_KEY", "VOYAGER_BASE_URL") if not env.get(v)]
     if missing:
         print(f"missing required settings: {', '.join(missing)}")
         return 1
     try:
-        live = fetch_models(env["OPENAI_REVERSE_PROXY"], env["OPENAI_API_KEY"])
+        live = fetch_models(env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"])
     except Exception as exc:
         print(f"fetch failed: {type(exc).__name__}: {exc}")
         return 1
@@ -329,8 +341,9 @@ def main() -> int:
     live_chat = [m for m in live if is_chat(m)]
     skipped = [m for m in live if not is_chat(m)]
 
-    # Existing specs, keyed by model ID, in file order.
-    current = yaml.safe_load(FILES[0].read_text())["modelSpecs"]["list"]
+    # Existing Voyager specs, keyed by model ID, in file order.
+    current = [s for s in yaml.safe_load(FILES[0].read_text())["modelSpecs"]["list"]
+               if s["preset"]["endpoint"] == VOYAGER]
     by_model = {s["preset"]["model"]: s for s in current}
     current_models = [s["preset"]["model"] for s in current]
 
@@ -342,7 +355,7 @@ def main() -> int:
     verified = []
     unverified = []
     for model in added:
-        ok, detail = smoke_test(env["OPENAI_REVERSE_PROXY"], env["OPENAI_API_KEY"], model)
+        ok, detail = smoke_test(env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"], model)
         if ok:
             verified.append(model)
         else:
@@ -385,22 +398,24 @@ def main() -> int:
     if default_vanished:
         print("warning: default spec vanished; review the new default")
 
-    specs_block = ("modelSpecs:\n  prioritize: true\n  enforce: false\n  list:\n"
-                   + "\n".join(blocks) + "\n")
+    specs_header = "modelSpecs:\n  prioritize: true\n  enforce: false\n  list:\n"
     ep_lines = ["      models:", "        default:"]
     ep_lines += [f"          - {s['preset']['model']}" for s in
-                 yaml.safe_load(specs_block)["modelSpecs"]["list"]]
+                 yaml.safe_load(specs_header + "\n".join(blocks))["modelSpecs"]["list"]]
     ep_lines.append("        fetch: false")
-    ep_block = "\n".join(ep_lines)
-    ep_re = re.compile(r"      models:\n        default:\n(?:          - .*\n)+"
+    ep_block = "\n".join(ep_lines) + "\n"
+    # Anchored to the Voyager endpoint so other endpoints' model lists stay put.
+    ep_re = re.compile(rf"(    - name: {VOYAGER}\n(?:      (?!models:).*\n)*)"
+                       r"      models:\n        default:\n(?:          - .*\n)+"
                        r"        fetch: false\n")
 
     for path in FILES:
         text = path.read_text()
         assert text.count("modelSpecs:") == 1, path
         head = text.split("modelSpecs:")[0]
-        assert ep_re.search(head), f"endpoint block not found in {path}"
-        path.write_text(ep_re.sub(ep_block + "\n", head) + specs_block)
+        assert len(ep_re.findall(head)) == 1, f"endpoint block not found in {path}"
+        specs_block = specs_header + "\n".join(blocks + other_spec_blocks(text)) + "\n"
+        path.write_text(ep_re.sub(lambda m: m.group(1) + ep_block, head) + specs_block)
 
     print(f"kept {len(current_models) - len(removed)}, "
           f"added {len(added)}, removed {len(removed)}")
