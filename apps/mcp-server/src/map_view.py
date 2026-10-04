@@ -27,7 +27,15 @@ def unwrap_longitudes(lons: List[float]) -> List[float]:
 
 def _footprint_near(footprint: Dict[str, Any], lon: float) -> Dict[str, Any]:
     """Move a footprint polygon next to its point's (unwrapped) longitude."""
-    ring = footprint["geometry"]["coordinates"][0]
+    geometry = footprint["geometry"]
+    # Already-cut dateline pieces and polar caps use canonical GeoJSON
+    # coordinates. The globe renders them directly; unwrapping their vertices
+    # would undo the seam cuts or collapse the cap's edge along the pole.
+    if geometry["type"] == "MultiPolygon":
+        return footprint
+    ring = geometry["coordinates"][0]
+    if any(abs(coord[1]) == 90 for coord in ring):
+        return footprint
     lons = unwrap_longitudes([lon] + [c[0] for c in ring])[1:]
     shifted = [[x, c[1]] for x, c in zip(lons, ring)]
     return {**footprint, "geometry": {"type": "Polygon", "coordinates": [shifted]}}

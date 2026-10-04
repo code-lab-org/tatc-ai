@@ -100,6 +100,39 @@ def test_points_without_footprint_have_none():
     assert _data(html)["points"][0]["footprint"] is None
 
 
+def test_html_preserves_dateline_multipolygon_footprints():
+    footprint = {
+        "type": "Feature", "properties": {},
+        "geometry": {"type": "MultiPolygon", "coordinates": [
+            [[[179, -1], [180, -1], [180, 1], [179, 1], [179, -1]]],
+            [[[-180, -1], [-179, -1], [-179, 1], [-180, 1], [-180, -1]]],
+        ]},
+    }
+    html = map_view.build_ground_track_map_html(
+        "ISS", "25544",
+        [_msg(0, 179), _msg(0, -179, minute=1, footprint=footprint)], FAKE_PNG,
+    )
+    point = _data(html)["points"][1]
+    assert point["lon"] == 181
+    assert point["footprint"] == footprint
+
+
+def test_html_preserves_polar_cap_closure():
+    for pole in (-90, 90):
+        edge = pole * 0.98
+        footprint = {
+            "type": "Feature", "properties": {},
+            "geometry": {"type": "Polygon", "coordinates": [[
+                [-180, pole], [-180, edge], [0, edge], [180, edge],
+                [180, pole], [-180, pole],
+            ]]},
+        }
+        html = map_view.build_ground_track_map_html(
+            "Polar", "1", [_msg(pole, 0, footprint=footprint)], FAKE_PNG,
+        )
+        assert _data(html)["points"][0]["footprint"] == footprint
+
+
 def test_static_map_renders_png():
     png = render_static_map_png(
         "ISS (NORAD 25544)", [_msg(10.0, 179.0), _msg(11.0, -179.0, minute=1)])
