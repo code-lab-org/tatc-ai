@@ -84,8 +84,8 @@ def _satcat_query_variants(query: str) -> List[str]:
     return variants
 
 
-def _fetch_raw_variant(variant: str) -> Optional[List[Dict[str, Any]]]:
-    """Fetch one SATCAT query variant, returning None when unusable."""
+def _fetch_raw_variant(variant: str) -> List[Dict[str, Any]]:
+    """Fetch one query, distinguishing a valid no-match response from a failure."""
     try:
         response = requests.get(
             SATCAT_URL,
@@ -93,35 +93,58 @@ def _fetch_raw_variant(variant: str) -> Optional[List[Dict[str, Any]]]:
             timeout=15,
         )
         response.raise_for_status()
-        data = _parse_json_response(response)
-    except (requests.RequestException, ValueError):
-        # "No SATCAT records found" is plain text, not JSON; a network
-        # error here should not block the remaining variants.
-        return None
-    return data if isinstance(data, list) else None
+    except requests.RequestException as exc:
+        raise requests.RequestException(
+            "CelesTrak satellite search is unavailable; please retry later."
+        ) from exc
+
+    # SATCAT's no-match text is not JSON. Do not treat arbitrary
+    # HTML, empty bodies, or malformed JSON (e.g. a proxy failure) as no matches.
+    if response.text.strip().rstrip(".").lower() == "no satcat records found":
+        return []
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise requests.RequestException(
+            "CelesTrak satellite search returned an invalid response; please retry later."
+        ) from exc
+    if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+        raise requests.RequestException(
+            "CelesTrak satellite search returned an invalid response; please retry later."
+        )
+    return data
 
 
 def _iter_satcat_variants(query: str):
-    """Yield parsed SATCAT record lists per query variant, skipping unusable ones."""
+    """Try alternate spellings before reporting an upstream failure."""
+    last_error = None
     for variant in _satcat_query_variants(query):
-        data = _fetch_raw_variant(variant)
+        try:
+            data = _fetch_raw_variant(variant)
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
         if data:
             yield data
+    if last_error is not None:
+        raise last_error
 
 
-def _fetch_satcat_records(query: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """Fetch raw SATCAT records for a search query."""
-    for data in _iter_satcat_variants(query):
-        records: List[Dict[str, Any]] = []
-        for sat in data:
-            formatted = _format_satcat_record(sat)
-            if formatted is not None:
-                records.append(formatted)
-            if len(records) >= limit:
-                break
-        if records:
-            return records
-    return []
+def _fetch_satcat_records(query: str) -> List[Dict[str, Any]]:
+    """Collect all active candidates before ranking and applying an output limit."""
+    records: Dict[int, Dict[str, Any]] = {}
+    try:
+        for data in _iter_satcat_variants(query):
+            for sat in data:
+                formatted = _format_satcat_record(sat)
+                if formatted is not None:
+                    records.setdefault(formatted["norad_id"], formatted)
+    except requests.RequestException:
+        # Useful results from a successful spelling can recover a failed one.
+        # An empty result cannot: it would conceal an incomplete search.
+        if not records:
+            raise
+    return list(records.values())
 
 
 def _decayed_match_hint(identifier: str) -> Optional[str]:
@@ -244,17 +267,8 @@ def _resolve_search_result(identifier: str) -> Optional[Dict[str, Any]]:
 
 def search_satellites_by_name(query: str, limit: int = 10) -> List[Dict]:
     """Search currently orbiting satellites by name. Decayed objects are excluded."""
-    try:
-        results = _fetch_satcat_records(query, limit=max(limit, 25))
-        ranked_results = _rank_search_results(query, results)
-        return ranked_results[:limit]
-
-    except requests.RequestException:
-        # Silently return empty list for network errors
-        return []
-    except Exception:  # pylint: disable=broad-exception-caught
-        # Search is best-effort; resolution reports the failure instead.
-        return []
+    results = _fetch_satcat_records(query)
+    return _rank_search_results(query, results)[:limit]
 
 
 def get_norad_id(satellite_identifier: str) -> Optional[int]:
@@ -386,7 +400,7 @@ def get_satellite_info(satellite_identifier: str) -> Dict:
         if not str(satellite_identifier).strip().isdigit():
             try:
                 resolved = _resolve_search_result(satellite_identifier)
-            except ValueError:
+            except (requests.RequestException, ValueError):
                 resolved = None
         name = resolved["name"] if resolved else f"NORAD {norad_id}"
 
