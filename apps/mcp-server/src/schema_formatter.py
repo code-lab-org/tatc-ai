@@ -1,8 +1,14 @@
 """Format TAT-C outputs to match server telemetry format specification."""
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
+
+from shapely import unary_union
+from shapely.affinity import translate
+from shapely.geometry import Polygon, box
+from shapely.geometry.polygon import orient
 
 from .validation import validate_altitude as _validate_altitude
 from .validation import validate_coordinates
@@ -41,11 +47,62 @@ def format_position_lla(
     }
 
 
+def _split_footprint_at_dateline(coordinates: List[List[float]]) -> Optional[Dict[str, Any]]:
+    """Represent a small spherical footprint in the GeoJSON longitude domain.
+
+    Unwrap short edges before planar clipping. A ring winding around a pole
+    must close through that pole, not through the interior of its small circle.
+    Cut at +/-180 as recommended by RFC 7946 section 3.1.9.
+    """
+    unwrapped = [list(coordinates[0])]
+    for lon, lat in coordinates[1:]:
+        previous_lon = unwrapped[-1][0]
+        delta = (lon - previous_lon + 180) % 360 - 180
+        unwrapped.append([previous_lon + delta, lat])
+
+    if abs(unwrapped[-1][0] - unwrapped[0][0]) > 180:
+        pole = 90.0 if sum(lat for _, lat in coordinates[:-1]) > 0 else -90.0
+        unwrapped.extend([[unwrapped[-1][0], pole], [unwrapped[0][0], pole]])
+
+    polygon = Polygon(unwrapped)
+    if not polygon.is_valid or polygon.area == 0:
+        return None
+    first_strip = math.floor((polygon.bounds[0] + 180) / 360)
+    last_strip = math.floor((polygon.bounds[2] + 180) / 360)
+    pieces = []
+    for strip in range(first_strip, last_strip + 1):
+        offset = 360 * strip
+        clipped = polygon.intersection(box(-180 + offset, -90, 180 + offset, 90))
+        if clipped.area > 0:
+            pieces.append(translate(clipped, xoff=-offset))
+
+    # Rejoin the artificial cut at the ring's starting longitude for polar
+    # caps. Dateline pieces stay separate at opposite ends of the map.
+    # Use the output precision for overlay, so floating-point translation
+    # cannot leave a microscopic gap that turns into a shared edge on rounding.
+    merged = unary_union(pieces, grid_size=0.0001)
+    polygons = [merged] if isinstance(merged, Polygon) else list(merged.geoms)
+    rings = []
+    for part in polygons:
+        if not isinstance(part, Polygon) or part.area == 0:
+            continue
+        part = orient(part, sign=1.0)
+        rings.append([
+            [[round(lon, 4), round(lat, 4)] for lon, lat in ring.coords]
+            for ring in [part.exterior, *part.interiors]
+        ])
+    if not rings:
+        return None
+    if len(rings) == 1:
+        return {"type": "Polygon", "coordinates": rings[0]}
+    return {"type": "MultiPolygon", "coordinates": rings}
+
+
 def format_footprint_geojson(
     coordinates: List[List[float]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Format [lon, lat] coordinates as a GeoJSON Feature<Polygon>, or None if invalid.
+    Format a footprint as a GeoJSON Polygon or MultiPolygon feature.
     """
     if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 3:
         return None
@@ -72,16 +129,17 @@ def format_footprint_geojson(
     # Round to 4 decimals (~11 m) to keep tool results compact.
     rounded = [[round(lon, 4), round(lat, 4)] for lon, lat in validated_coords]
 
-    # Create GeoJSON Feature<Polygon>
+    geometry = {"type": "Polygon", "coordinates": [rounded]}
+    if any(abs(a[0] - b[0]) > 180 for a, b in zip(validated_coords, validated_coords[1:])):
+        geometry = _split_footprint_at_dateline(validated_coords)
+        if geometry is None:
+            return None
+
+    # Create a GeoJSON Feature with Polygon or MultiPolygon geometry.
     # Per server telemetry format: coordinates in [lon, lat] (WGS84), properties must be {}
     return {
         "type": "Feature",
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [
-                rounded
-            ],  # Polygon coordinates are wrapped in an array
-        },
+        "geometry": geometry,
         "properties": {},
     }
 
