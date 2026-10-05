@@ -246,26 +246,31 @@ def _calculate_circular_footprint(
     else:
         footprint_radius_rad = fov_rad
 
-    footprint_radius_deg = math.degrees(footprint_radius_rad)
+    # Generate a small circle in a local orthonormal frame on the sphere.
+    # Unlike longitude offsets divided by cos(latitude), this remains defined
+    # at both poles and carries points across a pole without clipping latitude.
+    lat_rad, lon_rad = math.radians(lat_deg), math.radians(lon_deg)
+    sin_lat, cos_lat = math.sin(lat_rad), math.cos(lat_rad)
+    sin_lon, cos_lon = math.sin(lon_rad), math.cos(lon_rad)
+    center = (cos_lat * cos_lon, cos_lat * sin_lon, sin_lat)
+    north = (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat)
+    east = (-sin_lon, cos_lon, 0.0)
+    cos_radius, sin_radius = math.cos(footprint_radius_rad), math.sin(footprint_radius_rad)
 
-    # Generate circular polygon by sampling points around the center.
     # The closing point is an exact copy of the first: recomputing the
     # angle at 2*pi drifts by a floating-point epsilon (worse after the
     # longitude modulo), which would leave the ring technically unclosed.
     coords = []
     for i in range(FOOTPRINT_POLYGON_POINTS):
-        angle = 2 * math.pi * i / FOOTPRINT_POLYGON_POINTS
-        # Calculate lat/lon offset (simplified approximation)
-        dlat = footprint_radius_deg * math.cos(angle)
-        cos_lat = math.cos(math.radians(lat_deg))
-        if abs(cos_lat) < 1e-6:
-            dlon = 0.0
-        else:
-            dlon = footprint_radius_deg * math.sin(angle) / cos_lat
-
-        # Normalize coordinates to valid ranges
-        new_lat = max(-90, min(90, lat_deg + dlat))
-        new_lon = ((lon_deg + dlon + 180) % 360) - 180
+        # Negative bearings give counterclockwise exterior rings.
+        angle = -2 * math.pi * i / FOOTPRINT_POLYGON_POINTS
+        x, y, z = (
+            cos_radius * center[j]
+            + sin_radius * (math.cos(angle) * north[j] + math.sin(angle) * east[j])
+            for j in range(3)
+        )
+        new_lat = math.degrees(math.atan2(z, math.hypot(x, y)))
+        new_lon = ((math.degrees(math.atan2(y, x)) + 180) % 360) - 180
 
         coords.append([new_lon, new_lat])
 

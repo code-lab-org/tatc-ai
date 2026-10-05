@@ -333,6 +333,7 @@ def generate_ground_track(
         include_footprint: Include the footprint_geojson visibility polygon
             per point. Defaults to False: footprints are ~86% of the payload
             and tabular answers never need them. Set True for mapping.
+            Dateline-crossing footprints may use GeoJSON MultiPolygon geometry.
 
     Returns:
         Telemetry objects with id, time (ISO-8601 UTC), position_lla
