@@ -47,7 +47,12 @@ class ServerTests(unittest.TestCase):
         tools = {tool.name for tool in self.list_tools()}
         self.assertEqual(
             tools,
-            {"generate_ground_track", "get_satellite_info", "search_satellites"},
+            {
+                "generate_ground_track",
+                "get_satellite_info",
+                "search_satellites",
+                "ground_track_map",
+            },
         )
 
     def test_server_name_and_instructions(self):
@@ -58,6 +63,20 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("ground_track_map", self.server.SERVER_INSTRUCTIONS)
+
+    def test_map_tool_role_phrase_snake_cases_to_its_name(self):
+        # Models guess a tool's name by snake-casing the role phrase in the
+        # instructions ("satellite search tool" -> satellite_search), so the
+        # map tool's phrase must snake-case to its real name.
+        self.assertIn("ground track map tool", self.server.SERVER_INSTRUCTIONS)
+        tools = {tool.name: tool for tool in self.list_tools()}
+        description = tools["ground_track_map"].description.lower()
+        for word in ("visualize", "map", "plot"):
+            self.assertIn(word, description)
+        self.assertIn(
+            "ground track map tool", tools["generate_ground_track"].description
+        )
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)
