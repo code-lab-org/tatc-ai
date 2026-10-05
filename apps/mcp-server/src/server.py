@@ -420,6 +420,7 @@ def search_satellites(query: str, limit: int = 10) -> List[Dict[str, Any]]:
 
     Returns:
         Objects with norad_id, name, object_type, country, and launch_date.
+        An empty list means no matches; upstream failures are reported as errors.
     """
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
         raise ValueError("limit must be an integer between 1 and 50")

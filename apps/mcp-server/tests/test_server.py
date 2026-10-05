@@ -143,6 +143,16 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(result.is_error)
         self.assertIn("between 1 and 50", result.content[0].text)
 
+    def test_search_upstream_outage_is_a_tool_error(self):
+        with mock.patch.object(
+            self.server.celestrak_client.requests,
+            "get",
+            side_effect=self.server.celestrak_client.requests.Timeout("offline"),
+        ):
+            result = self.call_tool("search_satellites", {"query": "TARGET"})
+        self.assertTrue(result.is_error)
+        self.assertIn("CelesTrak satellite search is unavailable", result.content[0].text)
+
     def test_get_satellite_info_returns_dict(self):
         expected = {
             "norad_id": 25544,
