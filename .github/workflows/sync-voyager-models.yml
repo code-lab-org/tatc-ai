@@ -8,14 +8,14 @@ on:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       pull-requests: write
       actions: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       # Needs a repo secret VOYAGER_API_KEY holding an ASU proxy key.
       - name: Sync model list
@@ -55,7 +55,7 @@ jobs:
       - name: Open PR on changes
         id: pr
         if: steps.diff.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
           branch: sync/voyager-models
           title: Sync ASU Voyager model list
