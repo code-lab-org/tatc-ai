@@ -41,10 +41,12 @@ endpoints:
           - qwen35-122b-a10b
           - qwen35-27b
           - qwen35-35b-a3b
+          - qwen35-397b-a17b
           - qwen36-27b
           - qwen36-35b-a3b
           - qwen38-27b
           - north-mini-code
+          - deepseek-v4-1-flash
           - gemma4-31b-it
           - granite41-30b
           - llama3-groq-70b-tool-use
@@ -59,7 +61,9 @@ endpoints:
           - ornith-1-0-35b
           - ornith-1-5-35b-a3b
           - laguna-s-2-1
+          - hemmingway-1
           - inkling-small
+          - mimo-v2-6-flash
           - glm-4-5v
           - glm-5-2
           - glm-5-3
@@ -334,6 +338,18 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: qwen35-35b-a3b
+    - name: qwen35-397b-a17b
+      label: Qwen 35 397B A17B
+      description: Alibaba Qwen chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: qwen35-397b-a17b
     - name: qwen36-27b
       label: Qwen 3.6 27B
       description: Alibaba Qwen chat model via ASU Voyager.
@@ -382,6 +398,18 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: north-mini-code
+    - name: deepseek-v4-1-flash
+      label: DeepSeek V4.1 Flash
+      description: DeepSeek chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/deepseek.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: deepseek-v4-1-flash
     - name: gemma4-31b-it
       label: Gemma 4 31B IT
       description: Google Gemma chat model via ASU Voyager.
@@ -557,6 +585,18 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: laguna-s-2-1
+    - name: hemmingway-1
+      label: Hemmingway-1
+      description: The Commons Lab Hemmingway chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://hemmingway.io/apple-touch-icon.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: hemmingway-1
     - name: inkling-small
       label: Inkling Small
       description: Thinking Machines chat model via ASU Voyager.
@@ -569,6 +609,18 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: inkling-small
+    - name: mimo-v2-6-flash
+      label: MiMo V2.6 Flash
+      description: Xiaomi MiMo chat model via ASU Voyager.
+      group: ASU Voyager
+      iconURL: https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/xiaomi.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ASU Voyager
+        model: mimo-v2-6-flash
     - name: glm-4-5v
       label: GLM-4.5V
       description: Z.ai GLM chat model via ASU Voyager.
