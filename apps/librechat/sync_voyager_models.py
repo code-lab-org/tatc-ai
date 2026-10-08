@@ -73,6 +73,7 @@ POOLSIDE = "https://github.com/poolside-ai.png"
 ORNITH = "https://github.com/ornith-ai.png"
 DEEPSEEK = "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/deepseek.svg"
 HEMMINGWAY = "https://hemmingway.io/apple-touch-icon.png"
+XIAOMI = "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/xiaomi.svg"
 
 # Prefix maps for newly discovered models. Unknown prefixes get no icon
 # and a generic description so a human picks the branding in review.
@@ -97,6 +98,7 @@ ICON_PREFIXES = [
     ("ornith", ORNITH),
     ("deepseek", DEEPSEEK),
     ("hemmingway", HEMMINGWAY),
+    ("mimo", XIAOMI),
 ]
 MAKER_PREFIXES = [
     ("llama", "Meta Llama"),
@@ -118,6 +120,7 @@ MAKER_PREFIXES = [
     ("ornith", "Ornith"),
     ("deepseek", "DeepSeek"),
     ("hemmingway", "The Commons Lab Hemmingway"),
+    ("mimo", "Xiaomi MiMo"),
 ]
 
 WORD_FIXES = {
@@ -131,7 +134,7 @@ WORD_FIXES = {
     "instruct": "Instruct", "thinking": "Thinking", "think": "Thinking",
     "flash": "Flash", "next": "Next", "small": "Small", "mini": "Mini",
     "code": "Code", "tool": "Tool", "use": "Use", "scout": "Scout",
-    "maverick": "Maverick", "deepseek": "DeepSeek",
+    "maverick": "Maverick", "deepseek": "DeepSeek", "mimo": "MiMo",
 }
 
 CANONICAL_MODEL_METADATA = {
@@ -179,6 +182,11 @@ CANONICAL_MODEL_METADATA = {
         "label": "Hemmingway-1",
         "description": "The Commons Lab Hemmingway chat model via ASU Voyager.",
         "icon": HEMMINGWAY,
+    },
+    "mimo-v2-6-flash": {
+        "label": "MiMo V2.6 Flash",
+        "description": "Xiaomi MiMo chat model via ASU Voyager.",
+        "icon": XIAOMI,
     },
 }
 
