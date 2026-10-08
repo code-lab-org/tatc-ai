@@ -60,6 +60,7 @@ jobs:
           branch: sync/voyager-models
           title: Sync ASU Voyager model list
           commit-message: Sync ASU Voyager model list
+          assignees: satyalyadav
           body: |
             Automated run of `apps/librechat/sync_voyager_models.py`.
 
