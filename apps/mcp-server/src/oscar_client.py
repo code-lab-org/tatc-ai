@@ -99,13 +99,48 @@ def _rank_links(query: str, links: List[Dict[str, str]]) -> List[Dict[str, str]]
     return sorted(links, key=lambda link: -_link_score(query, link))
 
 
+def _search_terms(query: str) -> List[str]:
+    """Search terms to try in order for one identifier.
+
+    OSCAR's search misses its own slugs ("msi_sentinel_2a") and labels
+    with a parenthetical ("MSI (Sentinel-2A)"), which the satellite tools
+    return. The base term ("msi", "MSI") finds them, and _choose_link
+    then picks the exact slug or label.
+    """
+    terms = [query]
+    base = query.split("(")[0].strip()
+    if "_" in base:
+        base = base.split("_")[0]
+    if base and base.lower() != query.lower():
+        terms.append(base)
+    return terms
+
+
+def _find_links(query: str, kind: str) -> List[Dict[str, str]]:
+    """Return search hits of one kind, retrying with the base term."""
+    index = 0 if kind == "satellite" else 1
+    lowered = query.lower()
+    for term in _search_terms(query):
+        links = _search_links(term)[index]
+        exact = any(
+            link["slug"] == lowered or link["label"].lower() == lowered
+            for link in links
+        )
+        # A base-term search is only trusted when it finds the exact record.
+        if links and (term == query or exact):
+            return links
+    return []
+
+
 def _choose_link(
     query: str, links: List[Dict[str, str]], kind: str
 ) -> Dict[str, str]:
     """Pick exactly one search hit or raise."""
-    exact = [link for link in links if link["slug"] == query.lower()]
-    if len(exact) == 1:
-        return exact[0]
+    lowered = query.lower()
+    for field in ("slug", "label"):
+        exact = [link for link in links if link[field].lower() == lowered]
+        if len(exact) == 1:
+            return exact[0]
 
     ranked = _rank_links(query, links)
     top_scores = [_link_score(query, link) for link in ranked[:2]]
@@ -213,7 +248,7 @@ def resolve_satellite(query: str) -> Dict[str, Any]:
     Search hits are ranked; an equal top score raises instead of guessing.
     """
     cleaned = _require_query(query, "satellite")
-    satellites, _ = _search_links(cleaned)
+    satellites = _find_links(cleaned, "satellite")
     if not satellites:
         raise ValueError(f"No OSCAR satellite matched '{query}'")
     chosen = _choose_link(cleaned, satellites, "satellite")
@@ -280,7 +315,7 @@ def get_instrument(instrument_identifier: str) -> Dict[str, Any]:
     "api" for dated API entries or "oscar_page" when only page links exist.
     """
     cleaned = _require_query(instrument_identifier, "instrument")
-    _, instruments = _search_links(cleaned)
+    instruments = _find_links(cleaned, "instrument")
     if not instruments:
         raise ValueError(f"No OSCAR instrument matched '{instrument_identifier}'")
     chosen = _choose_link(cleaned, instruments, "instrument")

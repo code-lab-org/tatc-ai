@@ -349,3 +349,43 @@ def test_fetch_json_rejects_non_json(monkeypatch):
     )
     with pytest.raises(ValueError, match="Invalid JSON"):
         oscar_client._fetch_json("satellites/x")
+
+
+MSI_SEARCH_HTML = (
+    '<html><a href="/instruments/view/msi">MSI</a>'
+    '<a href="/instruments/view/msi_sentinel_2a">MSI (Sentinel-2A)</a>'
+    '<a href="/instruments/view/msi_sansa">MSI (Sansa)</a></html>'
+)
+
+
+@pytest.mark.parametrize("identifier", ["msi_sentinel_2a", "MSI (Sentinel-2A)"])
+def test_get_instrument_finds_slugs_and_labels_the_satellite_tool_returns(
+    monkeypatch, identifier
+):
+    # OSCAR's search misses both forms; only the base term "msi" hits.
+    searched = []
+
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        if url == oscar_client.SEARCH_URL:
+            searched.append(params["term"])
+            hit = params["term"].lower() == "msi"
+            return FakeResponse(text=MSI_SEARCH_HTML if hit else "<html></html>")
+        if url == f"{oscar_client.BASE_URL}/instruments/msi_sentinel_2a":
+            detail = {"instrument": [dict(INSTRUMENT_DETAIL["instrument"][0], slug="msi_sentinel_2a")]}
+            return FakeResponse(json_data=detail)
+        return FakeResponse(text=INSTRUMENT_HTML)
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+    assert oscar_client.get_instrument(identifier)["slug"] == "msi_sentinel_2a"
+    assert searched[-1].lower() == "msi"
+
+
+def test_base_term_fallback_needs_an_exact_match(monkeypatch):
+    # "MSI (Unknown)" must not silently become the first MSI hit.
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        hit = params["term"].lower() == "msi"
+        return FakeResponse(text=MSI_SEARCH_HTML if hit else "<html></html>")
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+    with pytest.raises(ValueError, match="No OSCAR instrument"):
+        oscar_client.get_instrument("MSI (Unknown)")
