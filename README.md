@@ -34,35 +34,48 @@ docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp
 
 ### Coverage estimates
 
-Coverage runs in small steps by reference. `begin_access_run` locks the
-satellite and UTC window and returns a draft ID with the orbit mean
-altitude. `set_access_region` sets four separate numeric bounds on the
-draft. `finish_short_access_run` takes the draft with grid size, exactly
-one of `field_of_regard_deg` or `swath_width_km`, and a required
-`geometry_reference` source string, and returns a result ID with a compact
-summary. Short windows cover at most 3 days and 144 cells.
-`finish_year_access_run` takes the same shape for staged windows longer
-than 3 days up to 366 days with at most 36 cells. `run_satellite_access`
-takes all short-run inputs at once for capable models.
+Coverage tools estimate when one satellite, or a constellation of up to
+six, could view a region. TAT-C does the modeling; OSCAR is used to find
+instruments and is never silently used as geometry.
 
-### Generic satellite coverage
+A run takes three calls. `begin_access_run` locks one satellite, or
+several separated by commas, plus an explicit UTC window of up to 366
+days, and returns a draft ID with each orbit's mean altitude.
+`set_access_region` sets four separate numeric bounds on the draft.
+`finish_access_run` takes grid size, exactly one of `field_of_regard_deg`
+or `swath_width_km`, a required `geometry_reference` source, and an
+optional `daylight_only` flag for optical imagers, then returns a result ID
+with a compact summary. Windows of 3 days or less allow 144 cells; longer
+windows allow 36 cells and 72 cells times satellites, and take minutes.
 
-These MCP tools run the same TAT-C math for any satellite. OSCAR stays
-the discovery source and never silently becomes geometry.
 `resolve_instrument_geometry` parses an instrument's OSCAR spec text into
 numeric candidates with provenance and a status of conclusive, ambiguous,
-needs_review, or unknown. `convert_swath_to_field_of_regard` turns a swath
-width at an altitude into an angle with the same math the coverage run uses.
-When the resolver status is not conclusive, ask the researcher
-for a number with a source instead of guessing. All coverage tools report
-modeled access only, not actual acquisitions, clouds, or illumination.
+needs_review, or unknown. When it is not conclusive, the model asks the
+researcher for a number with a source instead of guessing.
+`convert_swath_to_field_of_regard` turns a swath width at an altitude into
+an angle with the same TAT-C math the run uses.
 
-`get_access_daily` pages through daily rows by ID, `get_access_cells`
-returns the grid map as GeoJSON by ID with an all, observed, or gaps
-filter, and `get_access_revisit` returns revisit numbers by ID. Saved
-results and drafts expire after 24 hours. Use the run and fetch
-tools when the chat needs more than one view of the same calculation, so
-the model never carries the whole access table in context.
+`get_access_daily` pages through daily observed and gap areas,
+`get_access_cells` returns the grid as GeoJSON with per-cell access counts
+and revisit, filtered to all, observed, or gaps, and `get_access_revisit`
+returns revisit numbers. Results and drafts expire after 24 hours. All
+coverage is modeled access only, not actual acquisitions or clouds.
+
+### Tool-calling eval
+
+`apps/mcp-server/eval` checks how well Voyager models drive these tools.
+It sends each model the server's real tools and instructions, runs their
+calls against the real server with recorded CelesTrak and OSCAR
+responses, and scores what the server computed:
+
+```bash
+cd apps/mcp-server
+.venv/bin/python -m eval.run_eval --label mychange --tiers small medium large
+.venv/bin/python -m eval.run_eval --compare eval/results/*.jsonl
+```
+
+It reads the proxy key from `apps/librechat/.env` and sends prompts and
+tool schemas to the ASU proxy.
 
 ## Development stack
 

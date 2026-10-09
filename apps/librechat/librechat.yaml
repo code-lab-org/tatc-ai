@@ -182,8 +182,8 @@ modelSpecs:
         - Use the satellite search tool to find three satellites with Hubble in their name. Show their names and NORAD IDs.
         - Use the satellite info tool to get details for NORAD ID 25544, including its current TLE.
         - Generate a ground track for NORAD ID 25544 starting now, lasting 10 minutes, with one-minute intervals.
-        - Estimate Terra satellite access over Phoenix for the next 24 hours. Begin a run with satellite Terra and an explicit UTC ISO-8601 start, set the region with west_lon=-113.0, south_lat=32.0, east_lon=-110.0, north_lat=35.0 as separate numeric arguments, then finish with field of regard 110 degrees sourced from the NASA MODIS design page.
-        - Estimate Terra satellite access over Phoenix for a 60-day window with daily results. Begin a run, set the region with west_lon=-113.0, south_lat=32.0, east_lon=-110.0, north_lat=35.0 as separate numeric arguments, then use the year finish tool with field of regard 110 degrees sourced from the NASA MODIS design page.
+        - How often can Terra see Phoenix, Arizona over the next 24 hours? Use a 110 degree field of regard from the NASA MODIS design page.
+        - How often can Sentinel-2A and Sentinel-2B together see Phoenix, Arizona in daylight over the next 60 days?
       mcpServers:
         - tatc
       preset:
