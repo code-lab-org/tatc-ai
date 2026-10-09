@@ -35,7 +35,6 @@ endpoints:
           - olmo3-32b-think
           - olmo3-7b-instruct
           - olmo3-7b-think
-          - qwen-agentworld-35b-a3b
           - qwen3-235b-a22b-instruct-2507
           - qwen3-235b-a22b-thinking-2507
           - qwen3-30b-a3b-instruct-2507
@@ -200,18 +199,6 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: olmo3-7b-think
-    - name: qwen-agentworld-35b-a3b
-      label: Qwen AgentWorld 35B
-      description: Alibaba Qwen chat model via ASU Voyager.
-      group: ASU Voyager
-      iconURL: /assets/qwen.svg
-      showIconInMenu: true
-      showIconInHeader: true
-      mcpServers:
-        - tatc
-      preset:
-        endpoint: ASU Voyager
-        model: qwen-agentworld-35b-a3b
     - name: qwen3-235b-a22b-instruct-2507
       label: Qwen 3 235B Instruct
       description: Alibaba Qwen chat model via ASU Voyager.
