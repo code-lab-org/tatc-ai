@@ -8,24 +8,29 @@ import json
 from datetime import datetime
 from unittest import mock
 
+import pytest
+
 from src import schema_formatter as fmt
 from src import server as srv
 
 
-def test_position_rounds_to_4_4_1():
-    assert fmt.format_position_lla(12.3456789, -105.1234567, 420240.527) == {
-        "lat_deg": 12.3457,
-        "lon_deg": -105.1235,
-        "alt_m": 420240.5,
-    }
-
-
-def test_position_rounding_keeps_exact_values():
-    assert fmt.format_position_lla(51.5, -0.12, 408000.0) == {
-        "lat_deg": 51.5,
-        "lon_deg": -0.12,
-        "alt_m": 408000.0,
-    }
+@pytest.mark.parametrize(
+    ("position", "expected"),
+    [
+        pytest.param(
+            (12.3456789, -105.1234567, 420240.527),
+            {"lat_deg": 12.3457, "lon_deg": -105.1235, "alt_m": 420240.5},
+            id="rounds-to-published-precision",
+        ),
+        pytest.param(
+            (51.5, -0.12, 408000.0),
+            {"lat_deg": 51.5, "lon_deg": -0.12, "alt_m": 408000.0},
+            id="keeps-exact-values",
+        ),
+    ],
+)
+def test_position_rounds_to_4_4_1(position, expected):
+    assert fmt.format_position_lla(*position) == expected
 
 
 def test_footprint_coords_rounded_to_4():

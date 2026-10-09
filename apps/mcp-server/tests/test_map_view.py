@@ -5,16 +5,23 @@ type as an inline iframe; the HTML itself is never sent to the model.
 """
 
 import asyncio
+import io
 import json
 import re
 from datetime import datetime
 from unittest import mock
 
+import cartopy.crs as ccrs
+import pytest
 from fastmcp import Client
+from PIL import Image
 
 from src import map_view
 from src import server as srv
 from src.static_map import render_static_map_png
+
+# Import pyplot after static_map selects the headless backend.
+import matplotlib.pyplot as plt
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 FAKE_PNG = PNG_SIGNATURE + b"fake"
@@ -133,10 +140,53 @@ def test_html_preserves_polar_cap_closure():
         assert _data(html)["points"][0]["footprint"] == footprint
 
 
-def test_static_map_renders_png():
-    png = render_static_map_png(
-        "ISS (NORAD 25544)", [_msg(10.0, 179.0), _msg(11.0, -179.0, minute=1)])
-    assert png.startswith(PNG_SIGNATURE)
+@pytest.mark.parametrize(
+    ("messages", "expected_longitudes", "expected_latitudes"),
+    [
+        pytest.param(
+            [_msg(40, -74), _msg(41, -73, minute=1)], [-74, -73], [40, 41],
+            id="ordinary-track",
+        ),
+        pytest.param(
+            [_msg(10, 179), _msg(11, -179, minute=1)], [179, -179], [10, 11],
+            id="dateline-crossing-track",
+        ),
+    ],
+)
+def test_static_map_renders_png_and_plots_track(
+    monkeypatch, messages, expected_longitudes, expected_latitudes
+):
+    plot_calls = []
+    real_plot = plt.Axes.plot
+
+    def capture_plot(axes, *args, **kwargs):
+        artists = real_plot(axes, *args, **kwargs)
+        plot_calls.append((kwargs, artists))
+        return artists
+
+    monkeypatch.setattr(plt.Axes, "plot", capture_plot)
+    png = render_static_map_png("ISS (NORAD 25544)", messages)
+
+    with Image.open(io.BytesIO(png)) as image:
+        image.load()
+        assert image.format == "PNG"
+
+    track_artists = next(
+        artists for kwargs, artists in plot_calls
+        if isinstance(kwargs.get("transform"), ccrs.Geodetic)
+    )
+    assert list(track_artists[0].get_xdata()) == expected_longitudes
+    assert list(track_artists[0].get_ydata()) == expected_latitudes
+
+    for index, prefix in ((0, "Start"), (-1, "End")):
+        label = f"{prefix} {messages[index]['time']}"
+        artist = next(
+            artists[0] for options, artists in plot_calls
+            if options.get("label") == label
+        )
+        assert list(artist.get_xdata()) == [expected_longitudes[index]]
+        assert list(artist.get_ydata()) == [expected_latitudes[index]]
+        assert artist.get_label() == label
 
 
 TRACK = [

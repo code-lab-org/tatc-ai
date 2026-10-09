@@ -16,6 +16,8 @@ Read `README.md` before changing the stack or its deployment setup.
 
 - Match the Python minor version in `apps/mcp-server/Dockerfile` for local server work and checks.
 - With `apps/mcp-server/requirements.txt` and `pytest` installed, run `python -m pytest apps/mcp-server/tests` from the repository root.
+- Pull requests that change `apps/mcp-server/**` or `.github/workflows/test-mcp-server.yml` preload Cartopy's 110m coastline, then run tests with fixed reference cases.
+- Docs-only pull requests skip Python setup and tests while the workflow stays successful.
 - Report checks that you could not run and the reason.
 - Preserve UTC timestamps, latitude and longitude in degrees, altitude in meters, and GeoJSON coordinates in `[longitude, latitude]` order.
 - Keep credentials in private local environment files. Never commit API keys, OIDC secrets, or generated credentials.
