@@ -90,20 +90,32 @@ def _mock_collect(monkeypatch, present_ids=(0,)):
     monkeypatch.setattr(gc, "collect_observations", fake_collect)
 
 
-def test_for_path_reports_provenance_and_daily_accounting(monkeypatch):
+NOW = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
+
+
+def _staged(monkeypatch, end_iso="2026-09-18T04:30:00Z", bbox=(-2.0, -1.0, 2.0, 1.0)):
     _mock_sat(monkeypatch)
+    draft = gc.begin_access_run("ISS", "2026-09-18T04:00:00Z", end_iso, now=NOW)
+    gc.set_access_region(draft["draft_id"], list(bbox))
+    return draft["draft_id"]
+
+
+def _full(summary):
+    from src import result_store
+
+    return result_store.get_result(summary["result_id"])
+
+
+def test_for_path_reports_provenance_and_daily_accounting(monkeypatch):
     _mock_collect(monkeypatch, present_ids=(0,))
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
-    result = gc.compute_satellite_coverage(
-        "ISS",
-        "2026-09-18T04:00:00Z",
-        "2026-09-18T04:30:00Z",
-        [-2.0, -1.0, 2.0, 1.0],
-        grid_rows=1,
-        grid_columns=2,
-        field_of_regard_deg=50.0,
-        geometry_reference="https://example.com/iss-payload",
-        now=start,
+    result = _full(
+        gc.finish_access_run(
+            _staged(monkeypatch),
+            grid_rows=1,
+            grid_columns=2,
+            field_of_regard_deg=50.0,
+            geometry_reference="https://example.com/iss-payload",
+        )
     )
     assert result["satellite"] == "ISS (ZARYA)"
     assert result["norad_id"] == 25544
@@ -119,19 +131,15 @@ def test_for_path_reports_provenance_and_daily_accounting(monkeypatch):
 
 
 def test_swath_path_converts_at_omm_altitude(monkeypatch):
-    _mock_sat(monkeypatch)
     _mock_collect(monkeypatch, present_ids=(0, 1))
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
-    result = gc.compute_satellite_coverage(
-        "25544",
-        "2026-09-18T04:00:00Z",
-        "2026-09-18T04:30:00Z",
-        [-2.0, -1.0, 2.0, 1.0],
-        grid_rows=1,
-        grid_columns=2,
-        swath_width_km=300.0,
-        geometry_reference="https://example.com/iss-swath",
-        now=start,
+    result = _full(
+        gc.finish_access_run(
+            _staged(monkeypatch),
+            grid_rows=1,
+            grid_columns=2,
+            swath_width_km=300.0,
+            geometry_reference="https://example.com/iss-swath",
+        )
     )
     geometry = result["geometry_model"]
     assert geometry["geometry_input_kind"] == "swath_width_km"
@@ -142,90 +150,35 @@ def test_swath_path_converts_at_omm_altitude(monkeypatch):
 
 
 def test_missing_or_doubled_geometry_fails_with_guidance(monkeypatch):
-    _mock_sat(monkeypatch)
     _mock_collect(monkeypatch)
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
+    draft_id = _staged(monkeypatch)
     with pytest.raises(ValueError, match="Missing geometry"):
-        gc.compute_satellite_coverage(
-            "ISS",
-            "2026-09-18T04:00:00Z",
-            "2026-09-18T04:30:00Z",
-            [-2.0, -1.0, 2.0, 1.0],
-            grid_rows=1,
-            grid_columns=1,
-            geometry_reference="https://example.com/x",
-            now=start,
-        )
+        gc.finish_access_run(draft_id, geometry_reference="https://example.com/x")
     with pytest.raises(ValueError, match="exactly one"):
-        gc.compute_satellite_coverage(
-            "ISS",
-            "2026-09-18T04:00:00Z",
-            "2026-09-18T04:30:00Z",
-            [-2.0, -1.0, 2.0, 1.0],
-            grid_rows=1,
-            grid_columns=1,
+        gc.finish_access_run(
+            draft_id,
             field_of_regard_deg=50.0,
             swath_width_km=300.0,
             geometry_reference="https://example.com/x",
-            now=start,
         )
     with pytest.raises(ValueError, match="geometry_reference is required"):
-        gc.compute_satellite_coverage(
-            "ISS",
-            "2026-09-18T04:00:00Z",
-            "2026-09-18T04:30:00Z",
-            [-2.0, -1.0, 2.0, 1.0],
-            grid_rows=1,
-            grid_columns=1,
-            field_of_regard_deg=50.0,
-            geometry_reference="  ",
-            now=start,
-        )
-
-
-def test_short_run_rejects_window_over_3_days(monkeypatch):
-    _mock_sat(monkeypatch)
-    _mock_collect(monkeypatch)
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
-    with pytest.raises(ValueError, match="at most 3 days"):
-        gc.compute_satellite_coverage(
-            "ISS",
-            "2026-09-18T04:00:00Z",
-            "2026-09-25T04:00:00Z",
-            [-2.0, -1.0, 2.0, 1.0],
-            field_of_regard_deg=50.0,
-            geometry_reference="https://example.com/x",
-            now=start,
-        )
+        gc.finish_access_run(draft_id, field_of_regard_deg=50.0, geometry_reference="  ")
 
 
 def test_empty_identifier_rejected(monkeypatch):
     _mock_sat(monkeypatch)
     with pytest.raises(ValueError, match="satellite_identifier"):
-        gc.compute_satellite_coverage(
-            "  ",
-            "2026-09-18T04:00:00Z",
-            "2026-09-18T05:00:00Z",
-            [-2.0, -1.0, 2.0, 1.0],
-            field_of_regard_deg=50.0,
-            geometry_reference="https://example.com/x",
-        )
+        gc.begin_access_run("  ", "2026-09-18T04:00:00Z", None, now=NOW)
 
 
 def _run_one(monkeypatch, present_ids=(0,)):
-    _mock_sat(monkeypatch)
     _mock_collect(monkeypatch, present_ids=present_ids)
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
-    return gc.run_satellite_access(
-        "ISS",
-        "2026-09-18T04:00:00Z",
-        "2026-09-19T04:00:00Z",
-        [-2.0, -1.0, 2.0, 1.0],
+    return gc.finish_access_run(
+        _staged(monkeypatch, end_iso="2026-09-19T04:00:00Z"),
         grid_rows=1,
         grid_columns=2,
         field_of_regard_deg=50.0,
         geometry_reference="https://example.com/iss",
-        now=start,
     )
 
 
@@ -389,41 +342,6 @@ def test_finish_needs_region_first(monkeypatch):
         )
 
 
-def test_finish_matches_single_run(monkeypatch):
-    _mock_sat(monkeypatch)
-    _mock_collect(monkeypatch, present_ids=(0,))
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
-    draft = gc.begin_access_run(
-        "ISS",
-        "2026-09-18T04:00:00Z",
-        "2026-09-19T04:00:00Z",
-        now=start,
-    )
-    gc.set_access_region(draft["draft_id"], [-2.0, -1.0, 2.0, 1.0])
-    finished = gc.finish_access_run(
-        draft["draft_id"],
-        grid_rows=1,
-        grid_columns=2,
-        field_of_regard_deg=50.0,
-        geometry_reference="https://example.com/iss",
-    )
-    single = gc.run_satellite_access(
-        "ISS",
-        "2026-09-18T04:00:00Z",
-        "2026-09-19T04:00:00Z",
-        [-2.0, -1.0, 2.0, 1.0],
-        grid_rows=1,
-        grid_columns=2,
-        field_of_regard_deg=50.0,
-        geometry_reference="https://example.com/iss",
-        now=start,
-    )
-    for key in ("satellite", "norad_id", "instrument", "summary_counts", "metrics"):
-        assert finished[key] == single[key]
-    assert finished["geometry_model"] == single["geometry_model"]
-    assert finished["result_id"] != single["result_id"]
-
-
 def test_finish_swath_path_and_errors(monkeypatch):
     _mock_sat(monkeypatch)
     _mock_collect(monkeypatch, present_ids=(0, 1))
@@ -480,12 +398,12 @@ def _fake_year_collect(task):
     return _raw(rows)
 
 
-def test_finish_year_saves_10day_result(monkeypatch):
+def test_finish_saves_10day_result(monkeypatch):
     monkeypatch.setattr(
         gc, "_collect_cell_observations", _fake_year_collect
     )
     draft = _begin_long(monkeypatch, days=10)
-    summary = gc.finish_year_access_run(
+    summary = gc.finish_access_run(
         draft["draft_id"],
         grid_rows=1,
         grid_columns=1,
@@ -510,24 +428,27 @@ def test_finish_year_saves_10day_result(monkeypatch):
     assert revisit["revisit"]["grid_cell_count"] == 1
 
 
-def test_finish_year_rejects_short_window(monkeypatch):
-    draft = _begin_one(monkeypatch)
-    with pytest.raises(ValueError, match="longer than 3 days"):
-        gc.finish_year_access_run(
-            draft["draft_id"],
-            grid_rows=1,
-            grid_columns=1,
-            field_of_regard_deg=50.0,
-            geometry_reference="https://example.com/x",
-            _max_workers=1,
-        )
+def test_finish_picks_grid_limit_and_workers_from_window(monkeypatch):
+    monkeypatch.setattr(gc, "_collect_cell_observations", _fake_year_collect)
 
+    class NoPool:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("short windows must not start worker processes")
 
-def test_finish_year_rejects_big_grid(monkeypatch):
-    draft = _begin_long(monkeypatch, days=10)
-    with pytest.raises(ValueError, match="no more than 36"):
-        gc.finish_year_access_run(
-            draft["draft_id"],
+    monkeypatch.setattr(gc, "ProcessPoolExecutor", NoPool)
+    # 49 cells: fine for a 1-day window, run in-process even with workers allowed.
+    short = gc.finish_access_run(
+        _staged(monkeypatch, end_iso="2026-09-19T04:00:00Z"),
+        grid_rows=7,
+        grid_columns=7,
+        field_of_regard_deg=50.0,
+        geometry_reference="https://example.com/x",
+        _max_workers=4,
+    )
+    assert short["summary_counts"]["grid_cell_count"] == 49
+    with pytest.raises(ValueError, match="windows over 3 days allow 36"):
+        gc.finish_access_run(
+            _begin_long(monkeypatch, days=10)["draft_id"],
             grid_rows=7,
             grid_columns=7,
             field_of_regard_deg=50.0,
@@ -536,35 +457,10 @@ def test_finish_year_rejects_big_grid(monkeypatch):
         )
 
 
-def test_finish_year_rejects_overlong_window(monkeypatch):
-    from src import result_store
-
-    _mock_sat(monkeypatch)
-    start = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
-    stage = gc._stage_access(
-        "ISS",
-        "2026-09-18T04:00:00Z",
-        "2026-09-28T04:00:00Z",
-        [-2.0, -1.0, 2.0, 1.0],
-        now=start,
-    )
-    stage["window_end_utc_exclusive"] = "2027-10-01T04:00:00Z"
-    draft_id = result_store.save_draft(stage)
-    with pytest.raises(ValueError, match="at most 366 days"):
-        gc.finish_year_access_run(
-            draft_id,
-            grid_rows=1,
-            grid_columns=1,
-            field_of_regard_deg=50.0,
-            geometry_reference="https://example.com/x",
-            _max_workers=1,
-        )
-
-
-def test_finish_year_real_execution_10day(monkeypatch):
+def test_finish_real_execution_10day(monkeypatch):
     _mock_sat(monkeypatch)
     draft = _begin_long(monkeypatch, days=10)
-    summary = gc.finish_year_access_run(
+    summary = gc.finish_access_run(
         draft["draft_id"],
         grid_rows=1,
         grid_columns=1,

@@ -56,9 +56,7 @@ class ServerTests(unittest.TestCase):
                 "convert_swath_to_field_of_regard",
                 "begin_access_run",
                 "set_access_region",
-                "finish_short_access_run",
-                "finish_year_access_run",
-                "run_satellite_access",
+                "finish_access_run",
                 "get_access_daily",
                 "get_access_cells",
                 "get_access_revisit",
@@ -451,7 +449,7 @@ class ServerTests(unittest.TestCase):
             self.server, "_finish_run", return_value=expected
         ) as finish:
             result = self.call_tool(
-                "finish_short_access_run",
+                "finish_access_run",
                 {
                     "draft_id": "draft_abc",
                     "grid_rows": 1,
@@ -474,7 +472,7 @@ class ServerTests(unittest.TestCase):
 
     def test_finish_access_rejects_unknown_draft(self):
         result = self.call_tool(
-            "finish_short_access_run",
+            "finish_access_run",
             {
                 "draft_id": "draft_nope",
                 "field_of_regard_deg": 50.0,
@@ -483,74 +481,6 @@ class ServerTests(unittest.TestCase):
         )
         self.assertTrue(result.is_error)
         self.assertIn("Unknown draft_id", result.content[0].text)
-
-    def test_finish_year_forwards_draft_and_geometry(self):
-        expected = {"result_id": "abc123", "summary_counts": {}}
-        with mock.patch.object(
-            self.server, "_finish_year_run", return_value=expected
-        ) as finish:
-            result = self.call_tool(
-                "finish_year_access_run",
-                {
-                    "draft_id": "draft_abc",
-                    "grid_rows": 2,
-                    "grid_columns": 2,
-                    "swath_width_km": 300.0,
-                    "geometry_reference": "https://example.com/iss",
-                },
-            )
-        self.assertFalse(result.is_error)
-        self.assertEqual(json.loads(result.content[0].text), expected)
-        finish.assert_called_once_with(
-            "draft_abc",
-            grid_rows=2,
-            grid_columns=2,
-            field_of_regard_deg=None,
-            swath_width_km=300.0,
-            geometry_reference="https://example.com/iss",
-            instrument_name=None,
-        )
-
-    def test_run_access_schema_and_forwards_flat_args(self):
-        tool = next(
-            tool for tool in self.list_tools() if tool.name == "run_satellite_access"
-        )
-        properties = tool.inputSchema["properties"]
-        for name in ["west_lon", "south_lat", "east_lon", "north_lat"]:
-            self.assertEqual(properties[name]["type"], "number")
-        self.assertNotIn("roi_bbox", properties)
-        expected = {"result_id": "abc123", "summary_counts": {}}
-        with mock.patch.object(
-            self.server, "_run_access", return_value=expected
-        ) as run:
-            result = self.call_tool(
-                "run_satellite_access",
-                {
-                    "satellite_identifier": "ISS",
-                    "start_time": "2026-09-18T00:00:00Z",
-                    "end_time": "2026-09-19T00:00:00Z",
-                    "west_lon": -112.0,
-                    "south_lat": 33.0,
-                    "east_lon": -111.0,
-                    "north_lat": 34.0,
-                    "swath_width_km": 300.0,
-                    "geometry_reference": "https://example.com/iss",
-                },
-            )
-        self.assertFalse(result.is_error)
-        self.assertEqual(json.loads(result.content[0].text), expected)
-        run.assert_called_once_with(
-            "ISS",
-            "2026-09-18T00:00:00Z",
-            "2026-09-19T00:00:00Z",
-            [-112.0, 33.0, -111.0, 34.0],
-            grid_rows=6,
-            grid_columns=6,
-            field_of_regard_deg=None,
-            swath_width_km=300.0,
-            geometry_reference="https://example.com/iss",
-            instrument_name=None,
-        )
 
     def test_get_access_daily_forwards_pagination(self):
         expected = {"result_id": "abc123", "daily": []}

@@ -4,12 +4,11 @@ This module runs TAT-C math for any CelesTrak satellite with an explicit
 geometry: exactly one of field_of_regard_deg or swath_width_km, plus a
 source string.
 
-Every path shares one runner. The single run takes everything at once.
-The begin and finish steps split the same work into small calls so
-small models can emit each call: begin locks the satellite and window;
-region sets the bounds; finish adds grid plus geometry and runs the
-analysis. Short and year finishes differ only in their limits and in
-fanning cells out across worker processes.
+The work is split into small calls so small models can emit each one:
+begin locks the satellite and window; region sets the bounds; finish
+adds grid plus geometry and runs the analysis. Finish picks its limits
+from the window: up to 144 cells for 3 days or less, up to 36 cells and
+worker processes for longer windows.
 """
 
 import multiprocessing
@@ -214,14 +213,13 @@ def _run_stage(
     geometry_reference: Optional[str],
     instrument_name: Optional[str],
     *,
-    long_window: bool = False,
     max_workers: int = 1,
 ) -> Dict[str, Any]:
     """Run TAT-C over a staged satellite, window, and region.
 
-    Short runs take windows of 3 days or less and up to 144 cells. Long
-    runs take windows over 3 days up to 366 days, up to 36 cells, and may
-    fan cells out across worker processes.
+    Windows of 3 days or less allow up to 144 cells. Longer windows, which
+    _stage_access already capped at 366 days and checked against the OMM
+    epoch, allow up to 36 cells and fan cells out across worker processes.
     """
     if stage.get("roi_bbox") is None:
         raise ValueError(
@@ -234,30 +232,16 @@ def _run_stage(
     start = _parse_utc(stage["window_start_utc"], "window_start_utc")
     end = _parse_utc(stage["window_end_utc_exclusive"], "window_end_utc_exclusive")
     duration = end - start
-    if long_window:
-        if duration <= SHORT_WINDOW_MAX:
-            raise ValueError(
-                "Year runs need a staged window longer than 3 days; "
-                "use the short finish tool for this draft"
-            )
-        if duration > MAX_YEAR_WINDOW:
-            raise ValueError("Year runs cover at most 366 days; stage a shorter window")
-        if abs(start - _parse_utc(stage["omm_epoch_utc"], "omm_epoch_utc")) > MAX_OMM_WINDOW_OFFSET:
-            raise ValueError(
-                "Year runs must start within 14 days of the draft OMM epoch "
-                f"{stage['omm_epoch_utc']} (our chosen request guardrail, not a "
-                "guarantee of prediction accuracy)"
-            )
-    elif duration > SHORT_WINDOW_MAX:
-        raise ValueError(
-            "Short runs cover at most 3 days; use the year finish tool "
-            "for this draft"
-        )
+    long_window = duration > SHORT_WINDOW_MAX
+    if not long_window:
+        max_workers = 1
     cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
     max_cells = MAX_YEAR_GRID_CELLS if long_window else MAX_GRID_CELLS
     if len(cells) > max_cells:
-        prefix = "Year grid" if long_window else "Grid"
-        raise ValueError(f"{prefix} must contain no more than {max_cells} cells")
+        raise ValueError(
+            f"Grid must contain no more than {max_cells} cells for this window"
+            + ("; windows over 3 days allow 36" if long_window else "")
+        )
 
     mean_altitude_m = float(create_orbit_from_omm(stage["omm_records"]).get_mean_altitude())
     geometry = _geometry_model(for_value, swath_value, reference, mean_altitude_m)
@@ -327,39 +311,6 @@ def _run_stage(
     }
 
 
-def compute_satellite_coverage(
-    satellite_identifier: str,
-    start_time: str,
-    end_time: str,
-    roi_bbox: Sequence[float],
-    grid_rows: int = 6,
-    grid_columns: int = 6,
-    field_of_regard_deg: Optional[Any] = None,
-    swath_width_km: Optional[Any] = None,
-    geometry_reference: Optional[str] = None,
-    instrument_name: Optional[str] = None,
-    *,
-    now: Optional[datetime] = None,
-) -> Dict[str, Any]:
-    """Compute modeled access for one satellite with explicit geometry."""
-    # Check geometry before the CelesTrak fetch so bad args fail fast.
-    _check_run_inputs(
-        instrument_name, field_of_regard_deg, swath_width_km, geometry_reference
-    )
-    stage = _stage_access(
-        satellite_identifier, start_time, end_time, roi_bbox, now=now
-    )
-    return _run_stage(
-        stage,
-        grid_rows,
-        grid_columns,
-        field_of_regard_deg,
-        swath_width_km,
-        geometry_reference,
-        instrument_name,
-    )
-
-
 def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
     days = full["daily"]
     observed_days = sum(1 for row in days if row["observed_cell_ids"])
@@ -396,42 +347,6 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
 
 def _save_and_summarize(full: Dict[str, Any]) -> Dict[str, Any]:
     return _compact_summary(full, _save_result(full))
-
-
-def run_satellite_access(
-    satellite_identifier: str,
-    start_time: str,
-    end_time: str,
-    roi_bbox: Sequence[float],
-    grid_rows: int = 6,
-    grid_columns: int = 6,
-    field_of_regard_deg: Optional[Any] = None,
-    swath_width_km: Optional[Any] = None,
-    geometry_reference: Optional[str] = None,
-    instrument_name: Optional[str] = None,
-    *,
-    now: Optional[datetime] = None,
-) -> Dict[str, Any]:
-    """Run coverage, save the full result, and return a compact summary.
-
-    The summary fits in chat. Daily rows, grid cells, and revisit numbers
-    stay in the store under the returned result ID for the fetch helpers.
-    """
-    return _save_and_summarize(
-        compute_satellite_coverage(
-            satellite_identifier,
-            start_time,
-            end_time,
-            roi_bbox,
-            grid_rows=grid_rows,
-            grid_columns=grid_columns,
-            field_of_regard_deg=field_of_regard_deg,
-            swath_width_km=swath_width_km,
-            geometry_reference=geometry_reference,
-            instrument_name=instrument_name,
-            now=now,
-        )
-    )
 
 
 def begin_access_run(
@@ -496,38 +411,13 @@ def finish_access_run(
     swath_width_km: Optional[Any] = None,
     geometry_reference: Optional[str] = None,
     instrument_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Run a short draft (3 days or less) and return a result ID with summary."""
-    return _save_and_summarize(
-        _run_stage(
-            _get_draft(draft_id),
-            grid_rows,
-            grid_columns,
-            field_of_regard_deg,
-            swath_width_km,
-            geometry_reference,
-            instrument_name,
-        )
-    )
-
-
-def finish_year_access_run(
-    draft_id: Any,
-    grid_rows: Any = 6,
-    grid_columns: Any = 6,
-    field_of_regard_deg: Optional[Any] = None,
-    swath_width_km: Optional[Any] = None,
-    geometry_reference: Optional[str] = None,
-    instrument_name: Optional[str] = None,
     *,
     _max_workers: int = MAX_YEAR_WORKERS,
 ) -> Dict[str, Any]:
-    """Run a long draft (over 3 days, up to 366) and return results by ID.
+    """Run a draft of any length and return a result ID with a summary.
 
-    Collection fans out across worker processes, so a full year takes
-    minutes. The window start must lie within 14 days of the draft OMM
-    epoch; the end may extend far beyond it, and long-horizon drift is
-    recorded in the method limits.
+    Windows over 3 days fan cells out across worker processes, so a full
+    year takes minutes; long-horizon drift is recorded in the method limits.
     """
     if (
         isinstance(_max_workers, bool)
@@ -546,7 +436,6 @@ def finish_year_access_run(
             swath_width_km,
             geometry_reference,
             instrument_name,
-            long_window=True,
             max_workers=_max_workers,
         )
     )
