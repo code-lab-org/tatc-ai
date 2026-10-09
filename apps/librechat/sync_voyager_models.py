@@ -55,6 +55,7 @@ NON_CHAT_MARKERS = (
     "audio",
     "reranker",
     "moderation",
+    "agentworld",
 )
 
 META = "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/meta.svg"
