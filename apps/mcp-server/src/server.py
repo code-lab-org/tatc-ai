@@ -77,7 +77,9 @@ SERVER_INSTRUCTIONS = (
     "swath or angle with a source instead of guessing. "
     "For coverage, call the begin tool, then the region tool, then the finish "
     "tool, then the fetch tools by result ID for daily rows, the cell map, or "
-    "revisit numbers. "
+    "revisit numbers. The begin tool takes several satellites separated by "
+    "commas to model a constellation. Set daylight_only on the finish tool for "
+    "optical imagers. "
     "Coverage is modeled access at each grid-cell center only: never claim "
     "every point of the region was scanned or that an acquisition occurred. "
     "A daily gap_area_km2 of 0 means every cell center had access that UTC "
@@ -513,24 +515,27 @@ def begin_access_run(
     start_time: str,
     end_time: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Lock the satellite and UTC window for an access run.
+    """Lock the satellites and UTC window for an access run.
 
+    Takes one satellite, or up to 6 separated by commas to model them
+    together as a constellation, e.g. "Sentinel-2A, Sentinel-2B".
     Validates the inputs against current CelesTrak elements and returns
-    a draft ID with the orbit mean altitude. Set the region with the
+    a draft ID with each satellite's orbit mean altitude. Set the region with the
     region tool, then finish with grid size, geometry, and source. Start
     must be an explicit UTC ISO-8601 value ending in Z or using +00:00.
     End is the same format and defaults to 24 hours after the start when
     omitted. The window is at most 366 days.
 
     Args:
-        satellite_identifier: Satellite name or NORAD ID for CelesTrak.
+        satellite_identifier: Satellite name or NORAD ID for CelesTrak, or
+            up to 6 of them separated by commas.
         start_time: Inclusive UTC start, e.g. "2026-09-18T04:00:00Z".
         end_time: Exclusive UTC end, later than start_time. Defaults to
             24 hours after start_time when omitted.
 
     Returns:
-        Draft ID, satellite, window, OMM epoch and mean altitude, and
-        the next step. No region or coverage numbers yet.
+        Draft ID, satellites with OMM epoch and mean altitude, window,
+        and the next step. No region or coverage numbers yet.
     """
     return _begin_run(satellite_identifier, start_time, end_time)
 
@@ -574,6 +579,7 @@ def finish_access_run(
     swath_width_km: Optional[float] = None,
     geometry_reference: Optional[str] = None,
     instrument_name: Optional[str] = None,
+    daylight_only: bool = False,
 ) -> Dict[str, Any]:
     """Run a staged access analysis and save it under a result ID.
 
@@ -581,10 +587,12 @@ def finish_access_run(
     one of field of regard or swath width, and a source string saying where
     the geometry came from. Never invent the angle or swath: use the
     geometry resolver result or a researcher-supplied number with its
-    source. Works for any staged window up to 366 days. Windows of 3 days
-    or less allow up to 144 cells; longer windows allow up to 36 cells and
-    take minutes. A swath is converted at the draft orbit altitude with
-    TAT-C math. Returns a compact summary with a result ID; daily rows and
+    source. For a constellation draft the same geometry applies to every
+    satellite. Set daylight_only for optical imagers so night passes do
+    not count. Works for any staged window up to 366 days. Windows of 3
+    days or less allow up to 144 cells; longer windows allow up to 36
+    cells, 72 cells times satellites, and take minutes. A swath is
+    converted at each satellite's orbit altitude with TAT-C math. Returns a compact summary with a result ID; daily rows and
     cells stay saved for the fetch tools. Modeled access does not confirm
     an acquisition.
 
@@ -595,8 +603,9 @@ def finish_access_run(
         field_of_regard_deg: Full cross-track angle in degrees, 0 to 360.
         swath_width_km: Ground swath width in km as an alternative.
         geometry_reference: Source for the angle or swath, required.
-        instrument_name: Label for the modeled scan. Defaults to the
-            satellite name plus modeled scan.
+        instrument_name: Label for the modeled scan. Defaults to modeled scan.
+        daylight_only: Keep only accesses with the sun up at the cell
+            center, for optical imagers. Defaults to false.
 
     Returns:
         Result ID, compact summary counts, metrics, geometry provenance,
@@ -610,6 +619,7 @@ def finish_access_run(
         swath_width_km=swath_width_km,
         geometry_reference=geometry_reference,
         instrument_name=instrument_name,
+        daylight_only=daylight_only,
     )
 
 
@@ -637,7 +647,8 @@ def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
     """Fetch the saved grid map by result ID as GeoJSON.
 
     Returns grid cells as a GeoJSON feature collection, each cell marked
-    observed or gap for the saved window. Filter with all, observed, or
+    observed or gap for the saved window with its access count, mean
+    access minutes, and mean revisit hours. Filter with all, observed, or
     gaps. Modeled access does not confirm an acquisition.
 
     Args:

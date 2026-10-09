@@ -7,6 +7,7 @@ mission-specific assumptions live here.
 """
 
 import math
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from statistics import mean, median
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -193,16 +194,38 @@ def _utc_days(start: datetime, end: datetime) -> Iterable[Tuple[date, datetime, 
         day += timedelta(days=1)
 
 
+def _per_cell_stats(reduced: gpd.GeoDataFrame) -> Dict[int, Dict[str, Any]]:
+    """TAT-C reduce_observations output keyed by cell ID."""
+    stats: Dict[int, Dict[str, Any]] = {}
+    for row in reduced.itertuples(index=False):
+        revisit = getattr(row, "revisit", pd.NaT)
+        stats[int(row.point_id)] = {
+            "access_count": int(row.samples),
+            "mean_access_minutes": round(pd.Timedelta(row.access).total_seconds() / 60, 3),
+            "mean_revisit_hours": (
+                None if pd.isna(revisit) else round(pd.Timedelta(revisit).total_seconds() / 3600, 3)
+            ),
+        }
+    return stats
+
+
 def _summarize_coverage(
     cells: Sequence[Dict[str, Any]],
     aggregated: gpd.GeoDataFrame,
+    reduced: gpd.GeoDataFrame,
     start: datetime,
     end: datetime,
 ) -> Dict[str, Any]:
-    """Summarize TAT-C's aggregated, per-cell observation intervals."""
+    """Turn TAT-C's merged accesses into daily area rows and gap metrics.
+
+    TAT-C's aggregate_observations has already merged overlapping accesses,
+    across satellites too, and reports each access's revisit; this adds the
+    per-UTC-day area accounting and window-edge gaps TAT-C does not compute.
+    """
     by_cell: Dict[int, List[Tuple[datetime, datetime]]] = {cell["id"]: [] for cell in cells}
     revisits_hours: List[float] = []
     access_minutes: List[float] = []
+    contributions: Counter = Counter()
     for row in aggregated.itertuples(index=False):
         cell_id = int(row.point_id)
         if cell_id not in by_cell:
@@ -212,6 +235,7 @@ def _summarize_coverage(
         if observation_end <= observation_start:
             continue
         by_cell[cell_id].append((observation_start, observation_end))
+        contributions.update({name.strip() for name in str(row.satellite).split(",")})
         access_minutes.append((observation_end - observation_start).total_seconds() / 60)
         revisit = getattr(row, "revisit", pd.NaT)
         if not pd.isna(revisit):
@@ -219,16 +243,8 @@ def _summarize_coverage(
             if revisit_hours >= 0:
                 revisits_hours.append(revisit_hours)
 
-    # Merge defensively as well: TAT-C already merges overlaps, but this keeps
-    # daily accounting robust to touching/duplicate intervals from data sources.
-    for cell_id, intervals in by_cell.items():
-        merged: List[Tuple[datetime, datetime]] = []
-        for left, right in sorted(intervals):
-            if merged and left <= merged[-1][1]:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], right))
-            else:
-                merged.append((left, right))
-        by_cell[cell_id] = merged
+    for intervals in by_cell.values():
+        intervals.sort()
 
     total_area = sum(cell["area_km2"] for cell in cells)
     daily = []
@@ -285,6 +301,7 @@ def _summarize_coverage(
             "revisit_sample_count": len(revisits_hours),
             "mean_access_minutes": stat(access_minutes, mean),
             "longest_unobserved_gap_hours": round(max(all_gaps_hours), 3) if all_gaps_hours else 0.0,
+            "access_periods_by_satellite": dict(sorted(contributions.items())),
             "revisit_definition": (
                 "For each grid cell, the next aggregated access start minus the "
                 "preceding access end; mean_revisit_hours is the arithmetic mean "
@@ -300,10 +317,14 @@ def _summarize_coverage(
                 "with a positive longest_unobserved_gap_hours."
             ),
         },
+        "per_cell": _per_cell_stats(reduced),
     }
 
 
-def _geojson_cells(cells: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _geojson_cells(
+    cells: Sequence[Dict[str, Any]], per_cell: Dict[int, Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    empty = {"access_count": 0, "mean_access_minutes": None, "mean_revisit_hours": None}
     result = []
     for cell in cells:
         west, south, east, north = cell["bounds"]
@@ -312,6 +333,7 @@ def _geojson_cells(cells: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "id": cell["id"],
                 "center": [round(cell["center_lon"], 7), round(cell["center_lat"], 7)],
                 "area_km2": round(cell["area_km2"], 3),
+                **per_cell.get(cell["id"], empty),
                 "geometry": {
                     "type": "Polygon",
                     "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]],

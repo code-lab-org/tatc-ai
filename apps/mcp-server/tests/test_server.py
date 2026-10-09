@@ -468,6 +468,7 @@ class ServerTests(unittest.TestCase):
             swath_width_km=None,
             geometry_reference="https://example.com/iss",
             instrument_name=None,
+            daylight_only=False,
         )
 
     def test_finish_access_rejects_unknown_draft(self):

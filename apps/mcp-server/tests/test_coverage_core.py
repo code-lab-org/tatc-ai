@@ -6,7 +6,7 @@ import geopandas as gpd
 import pandas as pd
 import pytest
 from shapely.geometry import Point as ShapelyPoint
-from tatc.analysis.coverage import aggregate_observations, collect_observations
+from tatc.analysis.coverage import aggregate_observations, collect_observations, reduce_observations
 from tatc.schemas import Instrument, Point, Satellite
 
 from src import coverage_core as mc
@@ -65,6 +65,11 @@ def _raw_observations(rows):
         crs="EPSG:4326",
     )
     return frame
+
+
+def _summarize(cells, raw, start, end):
+    aggregated = aggregate_observations(raw)
+    return mc._summarize_coverage(cells, aggregated, reduce_observations(aggregated), start, end)
 
 
 def _two_cells():
@@ -139,7 +144,7 @@ def test_utc_day_accounting_excludes_an_interval_ending_at_midnight():
             (1, -110.5, 33.5, "2026-01-02T00:00:00Z", "2026-01-02T00:30:00Z"),
         ]
     )
-    summary = mc._summarize_coverage(_two_cells(), aggregate_observations(raw), start, end)
+    summary = _summarize(_two_cells(), raw, start, end)
     first, second = summary["daily"]
     assert first["observed_cell_ids"] == [0]
     assert second["observed_cell_ids"] == [1]
@@ -149,7 +154,7 @@ def test_utc_day_accounting_excludes_an_interval_ending_at_midnight():
     assert second["gap_area_km2"] == 100.0
 
 
-def test_overlapping_observations_are_deduplicated_before_area_and_revisit():
+def test_tatc_merges_overlaps_before_area_and_revisit():
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 1, 2, tzinfo=timezone.utc)
     raw = _raw_observations(
@@ -159,20 +164,24 @@ def test_overlapping_observations_are_deduplicated_before_area_and_revisit():
             (0, -111.5, 33.5, "2026-01-01T03:00:00Z", "2026-01-01T04:00:00Z"),
         ]
     )
-    summary = mc._summarize_coverage(_two_cells(), aggregate_observations(raw), start, end)
+    summary = _summarize(_two_cells(), raw, start, end)
     assert summary["metrics"]["aggregated_observation_period_count"] == 2
     assert summary["metrics"]["mean_revisit_hours"] == 1.0
     assert summary["daily"][0]["observed_cell_ids"] == [0]
     assert summary["daily"][0]["observed_area_km2"] == 100.0
+    # Per-cell stats come straight from TAT-C reduce_observations.
+    assert summary["per_cell"][0] == {
+        "access_count": 2,
+        "mean_access_minutes": 90.0,
+        "mean_revisit_hours": 1.0,
+    }
+    assert 1 not in summary["per_cell"]
 
 
 def test_no_observations_report_all_gap_area_and_full_window_gap_with_null_revisit():
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = start + timedelta(hours=3)
-    empty = aggregate_observations(
-        _raw_observations([])
-    )
-    summary = mc._summarize_coverage(_two_cells(), empty, start, end)
+    summary = _summarize(_two_cells(), _raw_observations([]), start, end)
     assert summary["daily"][0]["observed_area_km2"] == 0.0
     assert summary["daily"][0]["observed_fraction"] == 0.0
     assert summary["daily"][0]["gap_area_km2"] == 300.0
@@ -193,9 +202,7 @@ def test_zero_daily_gap_area_can_coexist_with_positive_temporal_gap():
         ]
     )
 
-    summary = mc._summarize_coverage(
-        _two_cells(), aggregate_observations(raw), start, end
-    )
+    summary = _summarize(_two_cells(), raw, start, end)
 
     daily = summary["daily"][0]
     metrics = summary["metrics"]

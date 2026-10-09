@@ -63,16 +63,26 @@ def _raw(rows):
     )
 
 
+# A second fixture orbit: the ISS elements a quarter orbit later under
+# another catalog number, so constellation runs have two distinct satellites.
+TWIN_OMM = dict(ISS_OMM, OBJECT_NAME="ISS TWIN", NORAD_CAT_ID=99999, MEAN_ANOMALY=297.6718)
+FIXTURES = {
+    "ISS": {"norad_id": 25544, "name": "ISS (ZARYA)", "omm": [ISS_OMM]},
+    "TWIN": {"norad_id": 99999, "name": "ISS TWIN", "omm": [TWIN_OMM]},
+    "THIRD": {"norad_id": 25545, "name": "ISS THIRD", "omm": [dict(ISS_OMM, NORAD_CAT_ID=25545)]},
+}
+
+
 def _mock_sat(monkeypatch):
     monkeypatch.setattr(
         gc.celestrak_client,
         "get_satellite_info",
-        lambda identifier: {"norad_id": 25544, "name": "ISS (ZARYA)", "omm": [ISS_OMM]},
+        lambda identifier: FIXTURES.get(identifier.upper(), FIXTURES["ISS"]),
     )
 
 
 def _mock_collect(monkeypatch, present_ids=(0,)):
-    def fake_collect(point, satellite, start, end, **kwargs):
+    def fake_collect(point, satellites, start, end, **kwargs):
         if point.id in present_ids:
             return _raw(
                 [
@@ -87,7 +97,7 @@ def _mock_collect(monkeypatch, present_ids=(0,)):
             )
         return _raw([])
 
-    monkeypatch.setattr(gc, "collect_observations", fake_collect)
+    monkeypatch.setattr(gc, "collect_multi_observations", fake_collect)
 
 
 NOW = datetime(2026, 9, 18, 4, tzinfo=timezone.utc)
@@ -118,15 +128,16 @@ def test_for_path_reports_provenance_and_daily_accounting(monkeypatch):
         )
     )
     assert result["satellite"] == "ISS (ZARYA)"
-    assert result["norad_id"] == 25544
+    assert result["satellites"][0]["norad_id"] == 25544
     geometry = result["geometry_model"]
-    assert geometry["field_of_regard_deg"] == 50.0
+    assert geometry["per_satellite"][0]["field_of_regard_deg"] == 50.0
     assert geometry["geometry_input_kind"] == "field_of_regard_deg"
     assert geometry["geometry_reference"] == "https://example.com/iss-payload"
-    assert geometry["omm_mean_altitude_km"] > 300
+    assert geometry["per_satellite"][0]["omm_mean_altitude_km"] > 300
     assert result["daily"][0]["observed_cell_ids"] == [0]
     assert result["daily"][0]["gap_cell_ids"] == [1]
-    assert result["method"]["actual_acquisitions_known"] is False
+    assert result["evidence"]["actual_acquisitions_known"] is False
+    assert result["evidence"]["illumination_known_or_filtered"] is False
     assert "does not establish" in result["interpretation"]
 
 
@@ -144,7 +155,7 @@ def test_swath_path_converts_at_omm_altitude(monkeypatch):
     geometry = result["geometry_model"]
     assert geometry["geometry_input_kind"] == "swath_width_km"
     assert geometry["geometry_input_value"] == 300.0
-    assert 0 < geometry["field_of_regard_deg"] < 60
+    assert 0 < geometry["per_satellite"][0]["field_of_regard_deg"] < 60
     assert "Converted swath_width_km" in geometry["conversion_note"]
     assert result["daily"][0]["gap_cell_ids"] == []
 
@@ -270,8 +281,9 @@ def test_begin_returns_draft_with_altitude(monkeypatch):
     )
     assert draft["draft_id"].startswith("draft_")
     assert draft["satellite"] == "ISS (ZARYA)"
-    assert draft["norad_id"] == 25544
-    assert draft["omm_mean_altitude_km"] > 300
+    assert draft["satellites"][0]["norad_id"] == 25544
+    assert draft["satellites"][0]["omm_mean_altitude_km"] > 300
+    assert "omm_records" not in draft["satellites"][0]
     assert draft["roi_bbox"] is None
     assert "region" in draft["next_step"]
 
@@ -381,7 +393,7 @@ def _begin_long(monkeypatch, days=10):
 
 
 def _fake_year_collect(task):
-    _, _, _, cell_id, lat, lon, start, end = task
+    _, _, cell_id, lat, lon, start, end = task
     rows = []
     day = start
     while day < end:
@@ -414,7 +426,7 @@ def test_finish_saves_10day_result(monkeypatch):
     assert summary["result_id"]
     assert summary["summary_counts"]["total_days"] == 11
     assert summary["summary_counts"]["observed_days"] == 10
-    assert summary["geometry_model"]["field_of_regard_deg"] == 50.0
+    assert summary["geometry_model"]["per_satellite"][0]["field_of_regard_deg"] == 50.0
     from src import result_store
 
     stored = result_store.get_result(summary["result_id"])
@@ -433,10 +445,10 @@ def test_finish_picks_grid_limit_and_workers_from_window(monkeypatch):
 
     class NoPool:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("short windows must not start worker processes")
+            raise AssertionError("small jobs must not start worker processes")
 
     monkeypatch.setattr(gc, "ProcessPoolExecutor", NoPool)
-    # 49 cells: fine for a 1-day window, run in-process even with workers allowed.
+    # 49 cells: fine for a 1-day window; too little work to start workers.
     short = gc.finish_access_run(
         _staged(monkeypatch, end_iso="2026-09-19T04:00:00Z"),
         grid_rows=7,
@@ -446,7 +458,7 @@ def test_finish_picks_grid_limit_and_workers_from_window(monkeypatch):
         _max_workers=4,
     )
     assert short["summary_counts"]["grid_cell_count"] == 49
-    with pytest.raises(ValueError, match="windows over 3 days allow 36"):
+    with pytest.raises(ValueError, match="36 cells for windows over 3 days"):
         gc.finish_access_run(
             _begin_long(monkeypatch, days=10)["draft_id"],
             grid_rows=7,
@@ -473,3 +485,75 @@ def test_finish_real_execution_10day(monkeypatch):
     assert summary["metrics"]["observed_cell_count"] == 1
     cells = gc.get_access_cells(summary["result_id"])
     assert cells["total_cells"] == 1
+
+
+def _real_run(monkeypatch, satellites, days=1, **finish):
+    _mock_sat(monkeypatch)
+    end = NOW + timedelta(days=days)
+    draft = gc.begin_access_run(
+        satellites, "2026-09-18T04:00:00Z", end.strftime("%Y-%m-%dT%H:%M:%SZ"), now=NOW
+    )
+    gc.set_access_region(draft["draft_id"], [-112.5, 33.0, -111.5, 34.0])
+    return gc.finish_access_run(
+        draft["draft_id"],
+        grid_rows=1,
+        grid_columns=1,
+        field_of_regard_deg=110.0,
+        geometry_reference="https://example.com/x",
+        _max_workers=1,
+        **finish,
+    )
+
+
+def test_constellation_merges_both_satellites_in_tatc(monkeypatch):
+    solo = _real_run(monkeypatch, "ISS", days=2)
+    pair = _real_run(monkeypatch, "ISS, TWIN", days=2)
+    assert pair["satellite"] == "ISS (ZARYA) + ISS TWIN"
+    assert [s["norad_id"] for s in pair["satellites"]] == [25544, 99999]
+    by_satellite = pair["metrics"]["access_periods_by_satellite"]
+    assert set(by_satellite) == {"ISS (ZARYA)", "ISS TWIN"}
+    assert by_satellite["ISS (ZARYA)"] == solo["metrics"]["aggregated_observation_period_count"]
+    assert pair["metrics"]["aggregated_observation_period_count"] > solo["metrics"]["aggregated_observation_period_count"]
+    assert pair["metrics"]["longest_unobserved_gap_hours"] <= solo["metrics"]["longest_unobserved_gap_hours"]
+    cells = gc.get_access_cells(pair["result_id"])
+    assert cells["geojson"]["features"][0]["properties"]["access_count"] == (
+        pair["metrics"]["aggregated_observation_period_count"]
+    )
+
+
+def test_constellation_rejects_repeats_and_too_many(monkeypatch):
+    _mock_sat(monkeypatch)
+    with pytest.raises(ValueError, match="more than once"):
+        gc.begin_access_run("ISS, 25544", "2026-09-18T04:00:00Z", None, now=NOW)
+    with pytest.raises(ValueError, match="at most 6 satellites"):
+        gc.begin_access_run(",".join(["ISS"] * 7), "2026-09-18T04:00:00Z", None, now=NOW)
+
+
+def test_long_window_caps_cells_times_satellites(monkeypatch):
+    _mock_sat(monkeypatch)
+    # 36 cells is fine for one satellite over 10 days, too many for three.
+    draft = gc.begin_access_run(
+        "ISS, TWIN, THIRD", "2026-09-18T04:00:00Z", "2026-09-28T04:00:00Z", now=NOW
+    )
+    gc.set_access_region(draft["draft_id"], [-2.0, -1.0, 2.0, 1.0])
+    with pytest.raises(ValueError, match="36 cells x 3 satellites is too many"):
+        gc.finish_access_run(
+            draft["draft_id"], grid_rows=6, grid_columns=6,
+            field_of_regard_deg=50.0, geometry_reference="https://example.com/x",
+        )
+
+
+def test_daylight_only_drops_night_accesses_with_tatc(monkeypatch):
+    every = _real_run(monkeypatch, "ISS", days=3)
+    daylight = _real_run(monkeypatch, "ISS", days=3, daylight_only=True)
+    all_count = every["metrics"]["aggregated_observation_period_count"]
+    day_count = daylight["metrics"]["aggregated_observation_period_count"]
+    assert 0 < day_count < all_count
+    assert daylight["daylight_only"] is True
+    assert daylight["evidence"]["illumination_known_or_filtered"] is True
+    from src import result_store
+
+    limits = result_store.get_result(daylight["result_id"])["method"]["limits"]
+    assert any("req_target_sunlit" in limit for limit in limits)
+    with pytest.raises(ValueError, match="daylight_only must be true or false"):
+        _real_run(monkeypatch, "ISS", daylight_only="yes")
