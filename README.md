@@ -92,8 +92,8 @@ Local UI is branded as TATC AI (browser tab, welcome message, footer).
 Models are grouped under ASU Voyager, where all chat models come from for
 now. Every Voyager chat model has a labeled spec with its maker icon.
 The picker lists these specs only; raw provider entries are
-hidden. New chats default to the Llama 4 Scout 17B spec with TATC
-satellite tools pinned.
+hidden. New chats default to the Qwen 3 30B Instruct spec with TATC satellite
+tools pinned.
 
 When the proxy gains models, sync the picker:
 
