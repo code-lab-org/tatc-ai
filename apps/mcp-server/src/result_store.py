@@ -155,18 +155,6 @@ def get_result(result_id: Any) -> Dict[str, Any]:
         return entry["payload"]
 
 
-def describe_result(result_id: str) -> Dict[str, Any]:
-    """Return the ID plus its age, without the payload."""
-    payload = get_result(result_id)
-    with _lock:
-        saved_at = _results[result_id.strip()]["saved_at"]
-    return {
-        "result_id": result_id.strip(),
-        "age_hours": round((time.time() - saved_at) / 3600, 3),
-        "satellite": payload.get("satellite"),
-        "window_start_utc": payload.get("window_start_utc"),
-        "window_end_utc_exclusive": payload.get("window_end_utc_exclusive"),
-    }
 
 
 def clear() -> None:
@@ -208,15 +196,3 @@ def paginate(items: List[Any], offset: Any, limit: Any, name: str) -> Dict[str, 
         "total": len(items),
         "items": items[offset_value:offset_value + limit_value],
     }
-
-
-def result_ids() -> List[str]:
-    """Return stored IDs. Used by tests."""
-    with _lock:
-        return list(_results.keys())
-
-
-def _saved_at(result_id: str) -> Optional[float]:
-    with _lock:
-        entry = _results.get(result_id)
-        return entry["saved_at"] if entry else None

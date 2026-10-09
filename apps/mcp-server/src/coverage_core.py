@@ -19,7 +19,6 @@ from tatc.utils import (
     field_of_regard_to_swath_width,
 )
 
-MAX_WINDOW = timedelta(days=3)
 MAX_OMM_AGE = timedelta(days=14)
 MAX_OMM_WINDOW_OFFSET = timedelta(days=14)
 MAX_FUTURE_OMM_AGE = timedelta(days=1)
@@ -42,16 +41,6 @@ def _parse_utc(value: str, name: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
         raise ValueError(f"{name} must include a UTC offset, for example 2026-09-25T12:00:00Z")
     return parsed.astimezone(timezone.utc)
-
-
-def _validate_window(start_time: str, end_time: str) -> Tuple[datetime, datetime]:
-    start = _parse_utc(start_time, "start_time")
-    end = _parse_utc(end_time, "end_time")
-    if end <= start:
-        raise ValueError("end_time must be after start_time")
-    if end - start > MAX_WINDOW:
-        raise ValueError("Coverage window must be no longer than 3 days")
-    return start, end
 
 
 def _validate_bbox(roi_bbox: Sequence[float]) -> Tuple[float, float, float, float]:

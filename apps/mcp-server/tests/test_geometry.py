@@ -1,9 +1,9 @@
 """Geometry resolver tests: parsing, status, validation, conversion."""
 
 import pytest
+from tatc.utils import field_of_regard_to_swath_width
 
 from src.geometry import (
-    convert_for_to_swath_km,
     convert_swath_to_for,
     extract_geometry_candidates,
     resolve_geometry_status,
@@ -141,15 +141,11 @@ def test_validate_accepts_either_shape():
     )
 
 
-def test_modis_angle_gives_modis_like_swath():
-    swath = convert_for_to_swath_km(110.0, 705_000.0)
-    assert 2000 < swath < 2600
-
-
 def test_swath_round_trips_through_for():
     for_deg = convert_swath_to_for(290.0, 786_000.0)
     assert 0 < for_deg < 60
-    assert convert_for_to_swath_km(for_deg, 786_000.0) == pytest.approx(290.0, rel=0.01)
+    swath_m = field_of_regard_to_swath_width(786_000.0, for_deg)
+    assert swath_m / 1000.0 == pytest.approx(290.0, rel=0.01)
 
 
 @pytest.mark.parametrize(

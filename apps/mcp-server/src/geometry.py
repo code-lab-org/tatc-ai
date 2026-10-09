@@ -13,6 +13,8 @@ import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from tatc.utils import swath_width_to_field_of_regard
+
 # Words that mean the simple nadir cone model may misstate access.
 NON_NADIR_HINTS = (
     "limb",
@@ -110,14 +112,11 @@ def _add(
 
 def extract_geometry_candidates(
     specs: Optional[Dict[str, Any]],
-    oscar_url: Optional[str] = None,  # noqa: ARG001 - kept for provenance symmetry
 ) -> List[Dict[str, Any]]:
     """Pull numeric geometry candidates from OSCAR spec text.
 
     Args:
         specs: OSCAR spec table as field name to source text.
-        oscar_url: Kept so callers pass provenance through; the
-            candidates themselves cite the spec field and text.
 
     Returns:
         Candidate dicts with kind, value, unit, source field and
@@ -286,7 +285,6 @@ def convert_swath_to_for(swath_width_km: Any, altitude_m: Any) -> float:
     """Convert a ground swath width to a field of regard in degrees.
 
     Uses TAT-C's own converter so the math matches the coverage run.
-    Falls back to a spherical Earth formula when TAT-C is missing.
     """
     if isinstance(swath_width_km, bool):
         raise ValueError("swath_width_km must be a number")
@@ -303,53 +301,8 @@ def convert_swath_to_for(swath_width_km: Any, altitude_m: Any) -> float:
         raise ValueError(f"swath_width_km must be positive, got {swath_width_km!r}")
     if not math.isfinite(altitude) or altitude <= 0:
         raise ValueError(f"altitude_m must be positive, got {altitude_m!r}")
-    try:
-        from tatc.utils import swath_width_to_field_of_regard
-
-        result = float(
-            swath_width_to_field_of_regard(altitude, swath_km * 1000.0)
-        )
-    except ImportError:
-        # Spherical fallback: central angle from swath, then Snell-like
-        # geometry to the satellite nadir angle. Matches TAT-C closely
-        # for LEO swaths; TAT-C remains the reference when installed.
-        earth_r = 6371000.0
-        central = (swath_km * 1000.0 / 2.0) / earth_r
-        sin_nadir = earth_r / (earth_r + altitude) * math.sin(central)
-        sin_nadir = min(1.0, max(-1.0, sin_nadir))
-        result = math.degrees(2.0 * (central + math.asin(sin_nadir)))
+    result = float(swath_width_to_field_of_regard(altitude, swath_km * 1000.0))
     if not math.isfinite(result) or not 0 < result <= 360:
         raise ValueError(f"Conversion gave an invalid angle: {result!r}")
     return round(result, 6)
 
-
-def convert_for_to_swath_km(field_of_regard_deg: Any, altitude_m: Any) -> float:
-    """Convert a field of regard to a ground swath width in km."""
-    if isinstance(field_of_regard_deg, bool):
-        raise ValueError("field_of_regard_deg must be a number")
-    try:
-        for_deg = float(field_of_regard_deg)  # type: ignore[arg-type]
-        altitude = float(altitude_m)  # type: ignore[arg-type]
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "field_of_regard_deg and altitude_m must be numbers"
-        ) from exc
-    if not math.isfinite(for_deg) or not 0 < for_deg <= 360:
-        raise ValueError(
-            f"field_of_regard_deg must be between 0 and 360, got {field_of_regard_deg!r}"
-        )
-    if not math.isfinite(altitude) or altitude <= 0:
-        raise ValueError(f"altitude_m must be positive, got {altitude_m!r}")
-    try:
-        from tatc.utils import field_of_regard_to_swath_width
-
-        return round(float(field_of_regard_to_swath_width(altitude, for_deg)) / 1000.0, 6)
-    except ImportError:
-        earth_r = 6371000.0
-        half = math.radians(for_deg / 2.0)
-        sin_term = (earth_r + altitude) * math.sin(half) / earth_r
-        if sin_term >= 1.0:
-            width_m = 2.0 * earth_r * math.acos(earth_r / (earth_r + altitude))
-        else:
-            width_m = 2.0 * earth_r * (math.asin(sin_term) - half)
-        return round(width_m / 1000.0, 6)

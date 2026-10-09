@@ -102,20 +102,6 @@ def test_grid_rejects_an_axis_larger_than_12_partitions():
         mc._build_grid([-10, -10, 10, 10], 13, 12)
 
 
-@pytest.mark.parametrize(
-    "start, end, message",
-    [
-        ("2026-09-18T00:00:00", "2026-09-19T00:00:00Z", "UTC offset"),
-        ("2026-09-18T00:00:00-07:00", "2026-09-19T00:00:00Z", "UTC offset"),
-        ("2026-09-18T00:00:00Z", "2026-09-18T00:00:00Z", "after"),
-        ("2026-09-18T00:00:00Z", "2026-09-22T00:00:00Z", "no longer than 3 days"),
-    ],
-)
-def test_window_requires_explicit_utc_and_is_bounded(start, end, message):
-    with pytest.raises(ValueError, match=message):
-        mc._validate_window(start, end)
-
-
 def test_omm_epoch_must_be_fresh_for_now_and_requested_window():
     now = datetime(2026, 9, 25, tzinfo=timezone.utc)
     epoch, _ = mc._validate_omm_freshness(

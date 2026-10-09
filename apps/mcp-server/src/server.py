@@ -480,8 +480,7 @@ def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
     record = oscar_client.get_instrument(instrument_identifier)
     specs = record.get("specs") if isinstance(record, dict) else None
     candidates = extract_geometry_candidates(
-        specs if isinstance(specs, dict) else None,
-        record.get("oscar_url") if isinstance(record, dict) else None,
+        specs if isinstance(specs, dict) else None
     )
     status, reason, recommended = resolve_geometry_status(candidates)
     return {

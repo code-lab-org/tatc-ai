@@ -37,8 +37,7 @@ def test_unknown_and_blank_ids_fail_with_guidance():
 
 def test_expired_results_are_dropped(monkeypatch):
     result_id = result_store.save_result({"n": 1})
-    old = result_store._saved_at(result_id) - result_store.TTL_SECONDS - 1
-    result_store._results[result_id]["saved_at"] = old
+    result_store._results[result_id]["saved_at"] -= result_store.TTL_SECONDS + 1
     with pytest.raises(ValueError, match="expired"):
         result_store.get_result(result_id)
     assert result_store.count() == 0

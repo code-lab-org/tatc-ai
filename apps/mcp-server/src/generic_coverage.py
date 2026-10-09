@@ -756,16 +756,3 @@ def get_access_revisit(result_id: Any) -> Dict[str, Any]:
         "evidence_note": EVIDENCE_NOTE,
     }
 
-
-# Re-export for tests that patch through this module.
-__all__ = [
-    "compute_satellite_coverage",
-    "run_satellite_access",
-    "begin_access_run",
-    "set_access_region",
-    "finish_access_run",
-    "finish_year_access_run",
-    "get_access_daily",
-    "get_access_cells",
-    "get_access_revisit",
-]
