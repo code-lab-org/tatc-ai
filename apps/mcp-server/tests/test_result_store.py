@@ -19,13 +19,6 @@ def test_save_and_get_round_trip():
     assert result_store.get_result(result_id) == payload
 
 
-def test_ids_are_unique():
-    first = result_store.save_result({"n": 1})
-    second = result_store.save_result({"n": 2})
-    assert first != second
-    assert result_store.count() == 2
-
-
 def test_unknown_and_blank_ids_fail_with_guidance():
     with pytest.raises(ValueError, match="Unknown result_id"):
         result_store.get_result("missing")

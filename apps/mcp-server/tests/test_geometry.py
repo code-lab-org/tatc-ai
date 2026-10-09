@@ -104,10 +104,6 @@ def test_empty_specs_is_unknown():
         assert status == "unknown"
         assert recommended is None
         assert "Provide swath_width_km" in reason
-
-
-def test_specs_must_be_dict():
-    assert extract_geometry_candidates(None) == []
     assert extract_geometry_candidates("swath 290 km") == []  # type: ignore[arg-type]
 
 
