@@ -4,4 +4,4 @@ jsonschema>=4.20.0
 numpy<2.2
 python-dateutil>=2.8.2
 requests>=2.31.0
-tatc>=3.5.0
+tatc>=3.5.1

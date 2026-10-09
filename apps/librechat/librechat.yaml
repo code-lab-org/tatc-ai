@@ -9,7 +9,7 @@ mcpServers:
   tatc:
     type: streamable-http
     url: http://mcp-server:8000/mcp
-    timeout: 30000
+    timeout: 600000
     initTimeout: 15000
     serverInstructions: true
     chatMenu: true

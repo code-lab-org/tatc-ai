@@ -32,6 +32,38 @@ To build the image locally instead (e.g. to test before pushing):
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
 
+### Coverage estimates
+
+Coverage runs in small steps by reference. `begin_access_run` locks the
+satellite and UTC window and returns a draft ID with the orbit mean
+altitude. `set_access_region` sets four separate numeric bounds on the
+draft. `finish_short_access_run` takes the draft with grid size, exactly
+one of `field_of_regard_deg` or `swath_width_km`, and a required
+`geometry_reference` source string, and returns a result ID with a compact
+summary. Short windows cover at most 3 days and 144 cells.
+`finish_year_access_run` takes the same shape for staged windows longer
+than 3 days up to 366 days with at most 36 cells. `run_satellite_access`
+takes all short-run inputs at once for capable models.
+
+### Generic satellite coverage
+
+These MCP tools run the same TAT-C math for any satellite. OSCAR stays
+the discovery source and never silently becomes geometry.
+`resolve_instrument_geometry` parses an instrument's OSCAR spec text into
+numeric candidates with provenance and a status of conclusive, ambiguous,
+needs_review, or unknown. `convert_swath_to_field_of_regard` turns a swath
+width at an altitude into an angle with the same math the coverage run uses.
+When the resolver status is not conclusive, ask the researcher
+for a number with a source instead of guessing. All coverage tools report
+modeled access only, not actual acquisitions, clouds, or illumination.
+
+`get_access_daily` pages through daily rows by ID, `get_access_cells`
+returns the grid map as GeoJSON by ID with an all, observed, or gaps
+filter, and `get_access_revisit` returns revisit numbers by ID. Saved
+results and drafts expire after 24 hours. Use the run and fetch
+tools when the chat needs more than one view of the same calculation, so
+the model never carries the whole access table in context.
+
 ## Development stack
 
 Runs with localhost/direct port access:

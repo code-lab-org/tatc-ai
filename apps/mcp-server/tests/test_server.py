@@ -54,6 +54,14 @@ class ServerTests(unittest.TestCase):
                 "get_satellite_instruments",
                 "resolve_instrument_geometry",
                 "convert_swath_to_field_of_regard",
+                "begin_access_run",
+                "set_access_region",
+                "finish_short_access_run",
+                "finish_year_access_run",
+                "run_satellite_access",
+                "get_access_daily",
+                "get_access_cells",
+                "get_access_revisit",
                 "search_instruments",
                 "search_satellites",
             },
@@ -69,6 +77,19 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument info tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("geometry resolver tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("swath converter tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("begin tool locks", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("region tool sets", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("finish tools take", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("year finish tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("daily fetch tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("cells tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("revisit tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn(
+            "plain sentences", self.server.SERVER_INSTRUCTIONS
+        )
+        self.assertIn(
+            "result ID once", self.server.SERVER_INSTRUCTIONS
+        )
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
@@ -76,6 +97,10 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("get_satellite_instruments", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_instrument_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("resolve_instrument_geometry", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("get_modis_coverage", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn(
+            "simulate_modis_year_coverage", self.server.SERVER_INSTRUCTIONS
+        )
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)
@@ -373,6 +398,299 @@ class ServerTests(unittest.TestCase):
         payload = json.loads(result.content[0].text)
         self.assertGreater(payload["field_of_regard_deg"], 0)
         self.assertLess(payload["field_of_regard_deg"], 60)
+
+    def test_begin_access_schema_and_forwards_flat_bounds(self):
+        tool = next(
+            tool for tool in self.list_tools() if tool.name == "begin_access_run"
+        )
+        required = set(tool.inputSchema["required"])
+        self.assertEqual(required, {"satellite_identifier", "start_time"})
+        expected = {"draft_id": "draft_abc", "satellite": "ISS (ZARYA)"}
+        with mock.patch.object(
+            self.server, "_begin_run", return_value=expected
+        ) as begin:
+            result = self.call_tool(
+                "begin_access_run",
+                {
+                    "satellite_identifier": "ISS",
+                    "start_time": "2026-09-18T04:00:00Z",
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        begin.assert_called_once_with(
+            "ISS", "2026-09-18T04:00:00Z", None
+        )
+
+    def test_set_access_region_schema_and_forwards(self):
+        tool = next(
+            tool for tool in self.list_tools() if tool.name == "set_access_region"
+        )
+        properties = tool.inputSchema["properties"]
+        bound_fields = ["west_lon", "south_lat", "east_lon", "north_lat"]
+        self.assertTrue(set(bound_fields).issubset(tool.inputSchema["required"]))
+        for name in bound_fields:
+            self.assertEqual(properties[name]["type"], "number")
+        self.assertNotIn("roi_bbox", properties)
+        expected = {"draft_id": "draft_abc", "roi_bbox": [-2.0, -1.0, 2.0, 1.0]}
+        with mock.patch.object(
+            self.server, "_set_region", return_value=expected
+        ) as set_region:
+            result = self.call_tool(
+                "set_access_region",
+                {
+                    "draft_id": "draft_abc",
+                    "west_lon": -2.0,
+                    "south_lat": -1.0,
+                    "east_lon": 2.0,
+                    "north_lat": 1.0,
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        set_region.assert_called_once_with(
+            "draft_abc", [-2.0, -1.0, 2.0, 1.0]
+        )
+
+    def test_set_access_region_rejects_bad_bounds_without_draft(self):
+        result = self.call_tool(
+            "set_access_region",
+            {
+                "draft_id": "draft_nope",
+                "west_lon": 170.0,
+                "south_lat": -10.0,
+                "east_lon": -170.0,
+                "north_lat": 10.0,
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("antimeridian", result.content[0].text)
+
+    def test_begin_access_rejects_bad_window_without_network(self):
+        result = self.call_tool(
+            "begin_access_run",
+            {
+                "satellite_identifier": "ISS",
+                "start_time": "2026-09-18T04:00:00Z",
+                "end_time": "2027-09-25T04:00:00Z",
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("no longer than 366 days", result.content[0].text)
+
+    def test_finish_access_forwards_draft_and_geometry(self):
+        expected = {"result_id": "abc123", "summary_counts": {}}
+        with mock.patch.object(
+            self.server, "_finish_run", return_value=expected
+        ) as finish:
+            result = self.call_tool(
+                "finish_short_access_run",
+                {
+                    "draft_id": "draft_abc",
+                    "grid_rows": 1,
+                    "grid_columns": 2,
+                    "field_of_regard_deg": 50.0,
+                    "geometry_reference": "https://example.com/iss",
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        finish.assert_called_once_with(
+            "draft_abc",
+            grid_rows=1,
+            grid_columns=2,
+            field_of_regard_deg=50.0,
+            swath_width_km=None,
+            geometry_reference="https://example.com/iss",
+            instrument_name=None,
+        )
+
+    def test_finish_access_rejects_unknown_draft(self):
+        result = self.call_tool(
+            "finish_short_access_run",
+            {
+                "draft_id": "draft_nope",
+                "field_of_regard_deg": 50.0,
+                "geometry_reference": "https://example.com/iss",
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("Unknown draft_id", result.content[0].text)
+
+    def test_finish_year_forwards_draft_and_geometry(self):
+        expected = {"result_id": "abc123", "summary_counts": {}}
+        with mock.patch.object(
+            self.server, "_finish_year_run", return_value=expected
+        ) as finish:
+            result = self.call_tool(
+                "finish_year_access_run",
+                {
+                    "draft_id": "draft_abc",
+                    "grid_rows": 2,
+                    "grid_columns": 2,
+                    "swath_width_km": 300.0,
+                    "geometry_reference": "https://example.com/iss",
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        finish.assert_called_once_with(
+            "draft_abc",
+            grid_rows=2,
+            grid_columns=2,
+            field_of_regard_deg=None,
+            swath_width_km=300.0,
+            geometry_reference="https://example.com/iss",
+            instrument_name=None,
+        )
+
+    def test_finish_year_rejects_unknown_draft(self):
+        result = self.call_tool(
+            "finish_year_access_run",
+            {
+                "draft_id": "draft_nope",
+                "field_of_regard_deg": 50.0,
+                "geometry_reference": "https://example.com/iss",
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("Unknown draft_id", result.content[0].text)
+
+    def test_run_access_schema_and_forwards_flat_args(self):
+        tool = next(
+            tool for tool in self.list_tools() if tool.name == "run_satellite_access"
+        )
+        properties = tool.inputSchema["properties"]
+        for name in ["west_lon", "south_lat", "east_lon", "north_lat"]:
+            self.assertEqual(properties[name]["type"], "number")
+        self.assertNotIn("roi_bbox", properties)
+        expected = {"result_id": "abc123", "summary_counts": {}}
+        with mock.patch.object(
+            self.server, "_run_access", return_value=expected
+        ) as run:
+            result = self.call_tool(
+                "run_satellite_access",
+                {
+                    "satellite_identifier": "ISS",
+                    "start_time": "2026-09-18T00:00:00Z",
+                    "end_time": "2026-09-19T00:00:00Z",
+                    "west_lon": -112.0,
+                    "south_lat": 33.0,
+                    "east_lon": -111.0,
+                    "north_lat": 34.0,
+                    "swath_width_km": 300.0,
+                    "geometry_reference": "https://example.com/iss",
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        run.assert_called_once_with(
+            "ISS",
+            "2026-09-18T00:00:00Z",
+            "2026-09-19T00:00:00Z",
+            [-112.0, 33.0, -111.0, 34.0],
+            grid_rows=6,
+            grid_columns=6,
+            field_of_regard_deg=None,
+            swath_width_km=300.0,
+            geometry_reference="https://example.com/iss",
+            instrument_name=None,
+        )
+
+    def test_run_access_rejects_missing_source(self):
+        result = self.call_tool(
+            "run_satellite_access",
+            {
+                "satellite_identifier": "ISS",
+                "start_time": "2026-09-18T00:00:00Z",
+                "end_time": "2026-09-19T00:00:00Z",
+                "west_lon": -112.0,
+                "south_lat": 33.0,
+                "east_lon": -111.0,
+                "north_lat": 34.0,
+                "field_of_regard_deg": 50.0,
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("geometry_reference", result.content[0].text)
+
+    def test_run_access_rejects_doubled_geometry(self):
+        result = self.call_tool(
+            "run_satellite_access",
+            {
+                "satellite_identifier": "ISS",
+                "start_time": "2026-09-18T00:00:00Z",
+                "end_time": "2026-09-19T00:00:00Z",
+                "west_lon": -112.0,
+                "south_lat": 33.0,
+                "east_lon": -111.0,
+                "north_lat": 34.0,
+                "field_of_regard_deg": 50.0,
+                "swath_width_km": 300.0,
+                "geometry_reference": "https://example.com/iss",
+            },
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("exactly one", result.content[0].text)
+
+    def test_get_access_daily_forwards_pagination(self):
+        expected = {"result_id": "abc123", "daily": []}
+        with mock.patch.object(
+            self.server, "_access_daily", return_value=expected
+        ) as fetch:
+            result = self.call_tool(
+                "get_access_daily",
+                {"result_id": "abc123", "offset": 1, "limit": 2},
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        fetch.assert_called_once_with("abc123", 1, 2)
+
+    def test_get_access_daily_rejects_bad_limit(self):
+        result = self.call_tool(
+            "get_access_daily", {"result_id": "abc123", "limit": 0}
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("between 1 and 366", result.content[0].text)
+
+    def test_get_access_cells_schema_and_filter(self):
+        tool = next(
+            tool for tool in self.list_tools() if tool.name == "get_access_cells"
+        )
+        self.assertIn("result_id", tool.inputSchema["required"])
+        expected = {"result_id": "abc123", "geojson": {}}
+        with mock.patch.object(
+            self.server, "_access_cells", return_value=expected
+        ) as fetch:
+            result = self.call_tool(
+                "get_access_cells", {"result_id": "abc123", "include": "gaps"}
+            )
+        self.assertFalse(result.is_error)
+        fetch.assert_called_once_with("abc123", "gaps")
+
+    def test_get_access_cells_rejects_bad_filter(self):
+        result = self.call_tool(
+            "get_access_cells", {"result_id": "abc123", "include": "sometimes"}
+        )
+        self.assertTrue(result.is_error)
+        self.assertIn("all, observed, or gaps", result.content[0].text)
+
+    def test_get_access_revisit_returns_metrics(self):
+        expected = {"result_id": "abc123", "revisit": {}}
+        with mock.patch.object(
+            self.server, "_access_revisit", return_value=expected
+        ) as fetch:
+            result = self.call_tool(
+                "get_access_revisit", {"result_id": "abc123"}
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        fetch.assert_called_once_with("abc123")
+
+    def test_fetch_tools_reject_unknown_result_id(self):
+        result = self.call_tool("get_access_daily", {"result_id": "nope"})
+        self.assertTrue(result.is_error)
+        self.assertIn("Unknown result_id", result.content[0].text)
 
 
 if __name__ == "__main__":

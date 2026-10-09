@@ -15,7 +15,7 @@ mcpServers:
     type: streamable-http
     url: https://mcp.__DOMAIN__/mcp
     requiresOAuth: true
-    timeout: 30000
+    timeout: 600000
     initTimeout: 15000
     serverInstructions: true
     chatMenu: true

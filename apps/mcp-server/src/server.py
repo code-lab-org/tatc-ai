@@ -8,6 +8,14 @@ from dateutil import parser as date_parser
 from fastmcp import FastMCP
 
 from . import celestrak_client, oscar_client
+from .generic_coverage import get_access_cells as _access_cells
+from .generic_coverage import get_access_daily as _access_daily
+from .generic_coverage import get_access_revisit as _access_revisit
+from .generic_coverage import begin_access_run as _begin_run
+from .generic_coverage import finish_access_run as _finish_run
+from .generic_coverage import finish_year_access_run as _finish_year_run
+from .generic_coverage import set_access_region as _set_region
+from .generic_coverage import run_satellite_access as _run_access
 from .geometry import (
     convert_swath_to_for,
     extract_geometry_candidates,
@@ -61,6 +69,12 @@ SERVER_INSTRUCTIONS = (
     "Use the satellite info tool for metadata and current GP (OMM) elements. "
     "Use the ground-track tool only after resolving an exact satellite name or "
     "NORAD ID; its times are UTC and its position altitude is in meters. "
+    "A coverage area classifies a whole geodesic cell from modeled access at its "
+    "center only; never claim every point or part of the ROI was scanned or "
+    "that an actual acquisition occurred. "
+    "daily gap_area_km2 of 0 means every cell center had access at least once "
+    "that UTC day, not continuous observation; longest_unobserved_gap_hours "
+    "measures access-free time and can still be positive. "
     "Use the instrument search tool to find sensors by name, acronym, or type. "
     "Use the satellite-instruments tool when you need to compare the payloads "
     "on a satellite. "
@@ -73,6 +87,26 @@ SERVER_INSTRUCTIONS = (
     "instead of guessing. Use the swath converter tool to turn a swath width "
     "at an altitude into a field of regard with the same math the coverage "
     "run uses. "
+    "Coverage works by reference in small steps. The begin tool locks "
+    "the satellite and UTC window and returns a draft ID with the orbit "
+    "altitude. The region tool sets four separate numeric bounds on the "
+    "draft. The finish tools take that draft ID with grid size, exactly "
+    "one of field of regard or swath width, and a source string, then "
+    "return a result ID with a compact summary. "
+    "The short finish tool only handles staged windows of 3 days or less. "
+    "The year finish tool takes the same inputs for staged windows longer "
+    "than 3 days up to 366 days with at most 36 cells; it runs for minutes "
+    "and also returns by result ID. "
+    "The daily fetch tool pages through daily rows by ID, the cells tool "
+    "returns the grid map by ID with an all, observed, or gaps filter, and "
+    "the revisit tool returns revisit numbers by ID. Begin a run first, "
+    "then finish it, then fetch what the chat needs. "
+    "Talk to the researcher like a companion, in plain sentences with every "
+    "number that matters: the geometry value and its source, the metrics, "
+    "the window. Show the result ID once, since follow-up questions need it. "
+    "Never show draft IDs, function names, call syntax, or raw payloads, and "
+    "never narrate your tool steps. Ask for missing pieces conversationally, "
+    "like a place and dates. "
     "All tools are read-only."
 )
 
@@ -491,6 +525,273 @@ def convert_swath_to_field_of_regard(
         "swath_width_km": float(swath_width_km),
         "orbit_altitude_m": float(orbit_altitude_m),
     }
+
+
+@mcp.tool
+def begin_access_run(
+    satellite_identifier: str,
+    start_time: str,
+    end_time: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Lock the satellite and UTC window for an access run.
+
+    Validates the inputs against current CelesTrak elements and returns
+    a draft ID with the orbit mean altitude. Set the region with the
+    region tool, then finish with grid size, geometry, and source. Start
+    must be an explicit UTC ISO-8601 value ending in Z or using +00:00.
+    End is the same format and defaults to 24 hours after the start when
+    omitted. The window is at most 366 days; short finish needs 3 days
+    or less and year finish needs more than 3 days.
+
+    Args:
+        satellite_identifier: Satellite name or NORAD ID for CelesTrak.
+        start_time: Inclusive UTC start, e.g. "2026-09-18T04:00:00Z".
+        end_time: Exclusive UTC end, later than start_time. Defaults to
+            24 hours after start_time when omitted.
+
+    Returns:
+        Draft ID, satellite, window, OMM epoch and mean altitude, and
+        the next step. No region or coverage numbers yet.
+    """
+    return _begin_run(satellite_identifier, start_time, end_time)
+
+
+@mcp.tool
+def set_access_region(
+    draft_id: str,
+    west_lon: float,
+    south_lat: float,
+    east_lon: float,
+    north_lat: float,
+) -> Dict[str, Any]:
+    """Set the region on a staged access draft.
+
+    Takes four separate numbers in west, south, east, north order; do
+    not nest them in a list. Longitude boxes must not cross the
+    antimeridian and must be narrower than 180 degrees. Returns the
+    draft with its region and the next step.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        west_lon: Bounding-box west longitude, from -180 through less than 180.
+        south_lat: Bounding-box south latitude, from -90 through less than 90.
+        east_lon: Bounding-box east longitude, greater than west and at most 180.
+        north_lat: Bounding-box north latitude, greater than south and at most 90.
+
+    Returns:
+        Draft ID, satellite, window, region, and the next step.
+    """
+    return _set_region(
+        draft_id, [west_lon, south_lat, east_lon, north_lat]
+    )
+
+
+@mcp.tool
+def finish_short_access_run(
+    draft_id: str,
+    grid_rows: int = 6,
+    grid_columns: int = 6,
+    field_of_regard_deg: Optional[float] = None,
+    swath_width_km: Optional[float] = None,
+    geometry_reference: Optional[str] = None,
+    instrument_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run a staged access analysis and save it under a result ID.
+
+    Takes a draft ID with its region already set, plus grid size, exactly one of
+    field of regard or swath width, and a source string saying where the
+    geometry came from. Never invent the angle or swath: use the geometry
+    resolver result or a researcher-supplied number with its source. Only for
+    staged windows of 3 days or less; for a longer staged window use the year
+    finish tool instead. A swath is converted at the draft orbit altitude with
+    TAT-C math. The grid holds at most 144 cells. Returns a compact summary
+    with a result ID; daily rows and cells stay saved for the fetch tools.
+    Modeled access does not confirm an acquisition.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Number of equal latitude partitions, 1 through 12.
+        grid_columns: Number of equal longitude partitions, 1 through 12.
+        field_of_regard_deg: Full cross-track angle in degrees, 0 to 360.
+        swath_width_km: Ground swath width in km as an alternative.
+        geometry_reference: Source for the angle or swath, required.
+        instrument_name: Label for the modeled scan. Defaults to the
+            satellite name plus modeled scan.
+
+    Returns:
+        Result ID, compact summary counts, metrics, geometry provenance,
+        and evidence flags. Daily rows and cells are saved, not returned.
+    """
+    return _finish_run(
+        draft_id,
+        grid_rows=grid_rows,
+        grid_columns=grid_columns,
+        field_of_regard_deg=field_of_regard_deg,
+        swath_width_km=swath_width_km,
+        geometry_reference=geometry_reference,
+        instrument_name=instrument_name,
+    )
+
+
+@mcp.tool
+def run_satellite_access(
+    satellite_identifier: str,
+    start_time: str,
+    end_time: str,
+    west_lon: float,
+    south_lat: float,
+    east_lon: float,
+    north_lat: float,
+    grid_rows: int = 6,
+    grid_columns: int = 6,
+    field_of_regard_deg: Optional[float] = None,
+    swath_width_km: Optional[float] = None,
+    geometry_reference: Optional[str] = None,
+    instrument_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run modeled access and save it under a result ID with a summary.
+
+    Takes all inputs at once, so only use this when every argument is known:
+    explicit UTC window of at most 3 days, four separate numeric bounds, grid,
+    and exactly one of field of regard or swath width plus a source string.
+    When any of those are missing, use the begin tool instead and follow its
+    next steps. Returns a compact summary with a result ID; daily rows, grid
+    cells, and revisit numbers stay saved for the fetch tools. Modeled access
+    does not confirm an acquisition.
+
+    Args:
+        satellite_identifier: Satellite name or NORAD ID for CelesTrak.
+        start_time: Inclusive UTC start, e.g. "2026-09-25T00:00:00Z".
+        end_time: Exclusive UTC end, later than start_time.
+        west_lon: Bounding-box west longitude, from -180 through less than 180.
+        south_lat: Bounding-box south latitude, from -90 through less than 90.
+        east_lon: Bounding-box east longitude, greater than west and at most 180.
+        north_lat: Bounding-box north latitude, greater than south and at most 90.
+        grid_rows: Number of equal latitude partitions, 1 through 12.
+        grid_columns: Number of equal longitude partitions, 1 through 12.
+        field_of_regard_deg: Full cross-track angle in degrees, 0 to 360.
+        swath_width_km: Ground swath width in km as an alternative.
+        geometry_reference: Source for the angle or swath, required.
+        instrument_name: Label for the modeled scan. Defaults to the
+            satellite name plus modeled scan.
+
+    Returns:
+        Result ID, compact summary counts, metrics, geometry provenance,
+        and evidence flags. Daily rows and cells are saved, not returned.
+    """
+    return _run_access(
+        satellite_identifier,
+        start_time,
+        end_time,
+        [west_lon, south_lat, east_lon, north_lat],
+        grid_rows=grid_rows,
+        grid_columns=grid_columns,
+        field_of_regard_deg=field_of_regard_deg,
+        swath_width_km=swath_width_km,
+        geometry_reference=geometry_reference,
+        instrument_name=instrument_name,
+    )
+
+
+@mcp.tool
+def finish_year_access_run(
+    draft_id: str,
+    grid_rows: int = 6,
+    grid_columns: int = 6,
+    field_of_regard_deg: Optional[float] = None,
+    swath_width_km: Optional[float] = None,
+    geometry_reference: Optional[str] = None,
+    instrument_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run a long-window staged analysis and save it under a result ID.
+
+    Same shape as the short finish tool, but for staged windows longer
+    than 3 days up to 366 days with at most 36 grid cells. The draft must
+    already have a region set. Never invent the angle or swath: use the
+    geometry resolver result or a researcher-supplied number with its source.
+    The run takes minutes; the reply stays compact with a result ID while
+    daily rows and cells stay saved for the fetch tools. The staged window
+    start must lie within 14 days of the draft OMM epoch. Modeled access does
+    not confirm an acquisition.
+
+    Args:
+        draft_id: Draft ID from the begin tool with a long window.
+        grid_rows: Number of equal latitude partitions, 1 through 12.
+        grid_columns: Number of equal longitude partitions, 1 through 12.
+        field_of_regard_deg: Full cross-track angle in degrees, 0 to 360.
+        swath_width_km: Ground swath width in km as an alternative.
+        geometry_reference: Source for the angle or swath, required.
+        instrument_name: Label for the modeled scan. Defaults to the
+            satellite name plus modeled scan.
+
+    Returns:
+        Result ID, compact summary counts, metrics, geometry provenance,
+        and evidence flags. Daily rows and cells are saved, not returned.
+    """
+    return _finish_year_run(
+        draft_id,
+        grid_rows=grid_rows,
+        grid_columns=grid_columns,
+        field_of_regard_deg=field_of_regard_deg,
+        swath_width_km=swath_width_km,
+        geometry_reference=geometry_reference,
+        instrument_name=instrument_name,
+    )
+
+
+@mcp.tool
+def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[str, Any]:
+    """Fetch saved daily observed and gap areas by result ID.
+
+    Pages through the daily rows of a saved access run without
+    re-running the analysis. Offset starts at 0 and limit is 1 to 366.
+
+    Args:
+        result_id: Result ID from a saved access run.
+        offset: Number of daily rows to skip, 0 or more.
+        limit: Number of daily rows to return, 1 through 366.
+
+    Returns:
+        Daily rows with observed and gap areas and cell IDs, plus
+        evidence flags stating modeled access only.
+    """
+    return _access_daily(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
+    """Fetch the saved grid map by result ID as GeoJSON.
+
+    Returns grid cells as a GeoJSON feature collection, each cell marked
+    observed or gap for the saved window. Filter with all, observed, or
+    gaps. Modeled access does not confirm an acquisition.
+
+    Args:
+        result_id: Result ID from a saved access run.
+        include: Which cells to return: all, observed, or gaps.
+
+    Returns:
+        GeoJSON feature collection with per-cell status and evidence flags.
+    """
+    return _access_cells(result_id, include)
+
+
+@mcp.tool
+def get_access_revisit(result_id: str) -> Dict[str, Any]:
+    """Fetch saved revisit numbers by result ID.
+
+    Returns mean, median, and max revisit hours, mean access minutes,
+    and the longest unobserved gap with their definitions, without
+    re-running the analysis. Modeled access does not confirm an
+    acquisition.
+
+    Args:
+        result_id: Result ID from a saved access run.
+
+    Returns:
+        Revisit metrics with definitions and evidence flags.
+    """
+    return _access_revisit(result_id)
 
 
 def main() -> None:
