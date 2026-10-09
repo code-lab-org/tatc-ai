@@ -52,6 +52,8 @@ class ServerTests(unittest.TestCase):
                 "get_instrument_info",
                 "get_satellite_info",
                 "get_satellite_instruments",
+                "resolve_instrument_geometry",
+                "convert_swath_to_field_of_regard",
                 "search_instruments",
                 "search_satellites",
             },
@@ -65,12 +67,15 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument search tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("satellite-instruments tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("instrument info tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("geometry resolver tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("swath converter tool", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_instruments", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_instruments", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_instrument_info", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("resolve_instrument_geometry", self.server.SERVER_INSTRUCTIONS)
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)
@@ -301,6 +306,73 @@ class ServerTests(unittest.TestCase):
             )
         self.assertTrue(result.is_error)
         self.assertIn("junk", result.content[0].text)
+
+    def test_resolve_geometry_schema_and_status(self):
+        tool = next(
+            tool for tool in self.list_tools() if tool.name == "resolve_instrument_geometry"
+        )
+        self.assertIn("instrument_identifier", tool.inputSchema["required"])
+        description = " ".join(tool.description.lower().split())
+        self.assertIn("provenance", description)
+        self.assertIn("instead of guessing", description)
+        record = {
+            "slug": "msi",
+            "acronym": "MSI",
+            "name": "Multi-Spectral Instrument",
+            "type": "High resolution optical imagers",
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/msi",
+            "specs": {"Scanning Technique": "Pushbroom. Swath 290 km"},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "MSI"}
+            )
+        self.assertFalse(result.is_error)
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["geometry_status"], "conclusive")
+        self.assertEqual(payload["recommended_candidate"]["value"], 290.0)
+        self.assertIn("ask the researcher", payload["guidance"])
+
+    def test_resolve_geometry_unknown_when_no_numbers(self):
+        record = {
+            "slug": "x",
+            "acronym": "X",
+            "name": "X",
+            "type": "t",
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/x",
+            "specs": {"Resolution": "10 m"},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["geometry_status"], "unknown")
+        self.assertIsNone(payload["recommended_candidate"])
+
+    def test_convert_swath_schema_and_math(self):
+        tool = next(
+            tool
+            for tool in self.list_tools()
+            if tool.name == "convert_swath_to_field_of_regard"
+        )
+        self.assertTrue(
+            {"swath_width_km", "orbit_altitude_m"}.issubset(
+                tool.inputSchema["required"]
+            )
+        )
+        result = self.call_tool(
+            "convert_swath_to_field_of_regard",
+            {"swath_width_km": 290.0, "orbit_altitude_m": 786000.0},
+        )
+        self.assertFalse(result.is_error)
+        payload = json.loads(result.content[0].text)
+        self.assertGreater(payload["field_of_regard_deg"], 0)
+        self.assertLess(payload["field_of_regard_deg"], 60)
 
 
 if __name__ == "__main__":

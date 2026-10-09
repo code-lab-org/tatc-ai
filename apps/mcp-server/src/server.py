@@ -8,6 +8,11 @@ from dateutil import parser as date_parser
 from fastmcp import FastMCP
 
 from . import celestrak_client, oscar_client
+from .geometry import (
+    convert_swath_to_for,
+    extract_geometry_candidates,
+    resolve_geometry_status,
+)
 from .schema_formatter import format_ground_track_response
 from .tatc_integration import (
     calculate_footprint_from_position,
@@ -57,10 +62,17 @@ SERVER_INSTRUCTIONS = (
     "Use the ground-track tool only after resolving an exact satellite name or "
     "NORAD ID; its times are UTC and its position altitude is in meters. "
     "Use the instrument search tool to find sensors by name, acronym, or type. "
-    "Use the satellite-instruments tool to list the instruments on a named "
-    "satellite before coverage or observation questions. "
+    "Use the satellite-instruments tool when you need to compare the payloads "
+    "on a satellite. "
     "Use the instrument info tool for an instrument's measurement specs and "
     "carrying satellites; its spec values are source text, not parsed numbers. "
+    "Use the geometry resolver tool to turn those spec words into numeric "
+    "candidates with provenance; it never invents an angle and its status can "
+    "be conclusive, ambiguous, needs_review, or unknown. When the status is "
+    "not conclusive, ask the researcher for a swath or angle with a source "
+    "instead of guessing. Use the swath converter tool to turn a swath width "
+    "at an altitude into a field of regard with the same math the coverage "
+    "run uses. "
     "All tools are read-only."
 )
 
@@ -410,6 +422,75 @@ def get_instrument_info(instrument_identifier: str) -> Dict[str, Any]:
         satellites with dates and latency, spec fields, and oscar_url.
     """
     return oscar_client.get_instrument(instrument_identifier)
+
+
+@mcp.tool
+def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
+    """Turn OSCAR spec words into numeric geometry candidates with provenance.
+
+    Resolves an instrument by acronym, name, or OSCAR slug, then parses
+    its spec table for swath widths, fields of regard, fields of view,
+    and steering angles. Each candidate cites its spec field and text
+    with a confidence and a usable flag. The status is conclusive,
+    ambiguous, needs_review, or unknown. A non-conclusive status means
+    ask the researcher for a number with a source instead of guessing.
+
+    Args:
+        instrument_identifier: Instrument acronym, name, or OSCAR slug.
+
+    Returns:
+        Instrument identity, oscar_url, source-text specs, geometry
+        candidates with provenance, status, reason, and recommended
+        candidate when conclusive. Spec values stay source text.
+    """
+    record = oscar_client.get_instrument(instrument_identifier)
+    specs = record.get("specs") if isinstance(record, dict) else None
+    candidates = extract_geometry_candidates(
+        specs if isinstance(specs, dict) else None,
+        record.get("oscar_url") if isinstance(record, dict) else None,
+    )
+    status, reason, recommended = resolve_geometry_status(candidates)
+    return {
+        "slug": record.get("slug"),
+        "acronym": record.get("acronym"),
+        "name": record.get("name"),
+        "type": record.get("type"),
+        "oscar_url": record.get("oscar_url"),
+        "specs": specs,
+        "geometry_candidates": candidates,
+        "geometry_status": status,
+        "geometry_reason": reason,
+        "recommended_candidate": recommended,
+        "guidance": (
+            "When geometry_status is not conclusive, ask the researcher "
+            "for swath_width_km or field_of_regard_deg with a source. "
+            "Never invent an angle from descriptive text."
+        ),
+    }
+
+
+@mcp.tool
+def convert_swath_to_field_of_regard(
+    swath_width_km: float,
+    orbit_altitude_m: float,
+) -> Dict[str, Any]:
+    """Convert a ground swath width at an altitude to a field of regard.
+
+    Uses the same TAT-C math the generic coverage tool uses, so the
+    number matches the later run. Both inputs are flat numbers.
+
+    Args:
+        swath_width_km: Ground swath width in km, positive and finite.
+        orbit_altitude_m: Orbit altitude in meters, positive and finite.
+
+    Returns:
+        Field of regard in degrees with the inputs echoed back.
+    """
+    return {
+        "field_of_regard_deg": convert_swath_to_for(swath_width_km, orbit_altitude_m),
+        "swath_width_km": float(swath_width_km),
+        "orbit_altitude_m": float(orbit_altitude_m),
+    }
 
 
 def main() -> None:
