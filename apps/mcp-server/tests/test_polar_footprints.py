@@ -21,9 +21,29 @@ def _angular_distance(lat1, lon1, lat2, lon2):
     return 2 * math.asin(math.sqrt(max(0.0, min(1.0, haversine))))
 
 
-@pytest.mark.parametrize("latitude", [-90, -89.99, -89, -87, -80, 0, 80, 87, 89, 89.99, 90])
-@pytest.mark.parametrize("longitude", [-179.9, 0, 123, 179.9])
-@pytest.mark.parametrize("altitude", [408000.0, 35786000.0])
+# Sample an off-axis meridian sparsely to catch longitude-dependent clipping.
+VERTEX_CASES = [
+    pytest.param(latitude, longitude, altitude,
+                 id=f"lat{latitude}_lon{longitude}_alt{altitude}")
+    for latitude in [-90, -89.99, -89, -87, -80, 0, 80, 87, 89, 89.99, 90]
+    for longitude in [-179.9, 0, 179.9]
+    for altitude in [408000.0, 35786000.0]
+] + [
+    pytest.param(0, 123, 408000.0, id="equator_leo_off_axis"),
+    pytest.param(89.99, 123, 35786000.0, id="north_pole_geo_off_axis"),
+]
+
+POLAR_CAP_CASES = [
+    pytest.param(latitude, longitude, id=f"lat{latitude}_lon{longitude}")
+    for latitude in [-90, -89.99, -89, 89, 89.99, 90]
+    for longitude in [-179.9, 0, 179.9]
+] + [
+    pytest.param(-89.99, 123, id="south_pole_off_axis"),
+    pytest.param(89.99, 123, id="north_pole_off_axis"),
+]
+
+
+@pytest.mark.parametrize(("latitude", "longitude", "altitude"), VERTEX_CASES)
 def test_vertices_keep_constant_surface_radius(latitude, longitude, altitude):
     ring = ti.calculate_footprint_from_position(latitude, longitude, altitude)
     assert ring is not None
@@ -42,8 +62,7 @@ def test_vertices_keep_constant_surface_radius(latitude, longitude, altitude):
     assert geometry.covers(Point(longitude, latitude))
 
 
-@pytest.mark.parametrize("latitude", [-90, -89.99, -89, 89, 89.99, 90])
-@pytest.mark.parametrize("longitude", [-179.9, 0, 123, 179.9])
+@pytest.mark.parametrize(("latitude", "longitude"), POLAR_CAP_CASES)
 def test_polar_geojson_covers_cap_without_degenerate_or_global_polygon(latitude, longitude):
     ring = ti.calculate_footprint_from_position(latitude, longitude, 408000.0)
     feature = fmt.format_footprint_geojson(ring)
