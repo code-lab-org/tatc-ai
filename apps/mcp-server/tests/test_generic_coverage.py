@@ -374,7 +374,7 @@ def test_begin_defaults_end_to_24h(monkeypatch):
     )
     assert draft["window_start_utc"] == "2026-09-18T04:00:00Z"
     assert draft["window_end_utc_exclusive"] == "2026-09-19T04:00:00Z"
-    with pytest.raises(ValueError, match="must carry a UTC offset"):
+    with pytest.raises(ValueError, match="UTC offset"):
         gc.begin_access_run(
             "ISS", "2026-09-18T04:00:00", None, now=start
         )
@@ -521,7 +521,7 @@ def _fake_year_collect(task):
 
 def test_finish_year_saves_10day_result(monkeypatch):
     monkeypatch.setattr(
-        gc, "_collect_year_cell_observations", _fake_year_collect
+        gc, "_collect_cell_observations", _fake_year_collect
     )
     draft = _begin_long(monkeypatch, days=10)
     summary = gc.finish_year_access_run(
@@ -551,7 +551,7 @@ def test_finish_year_saves_10day_result(monkeypatch):
 
 def test_finish_year_swath_path(monkeypatch):
     monkeypatch.setattr(
-        gc, "_collect_year_cell_observations", _fake_year_collect
+        gc, "_collect_cell_observations", _fake_year_collect
     )
     draft = _begin_long(monkeypatch, days=10)
     summary = gc.finish_year_access_run(

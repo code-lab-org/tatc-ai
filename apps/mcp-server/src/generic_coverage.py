@@ -4,30 +4,33 @@ This module runs TAT-C math for any CelesTrak satellite with an explicit
 geometry: exactly one of field_of_regard_deg or swath_width_km, plus a
 source string.
 
-Two paths share one core. The single run takes everything at once.
+Every path shares one runner. The single run takes everything at once.
 The begin and finish steps split the same work into small calls so
 small models can emit each call: begin locks the satellite and window;
 region sets the bounds; finish adds grid plus geometry and runs the
-analysis.
+analysis. Short and year finishes differ only in their limits and in
+fanning cells out across worker processes.
 """
 
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import geopandas as gpd
 import pandas as pd
+from tatc.analysis.coverage import aggregate_observations, collect_observations
 from tatc.schemas import Instrument, Point, Satellite
 
 from . import celestrak_client
-from .geometry import convert_swath_to_for, validate_geometry_inputs
 from .coverage_core import (
     MAX_GRID_CELLS,
     MAX_OMM_AGE,
     MAX_OMM_WINDOW_OFFSET,
     MAX_YEAR_GRID_CELLS,
+    MAX_YEAR_WINDOW,
     MAX_YEAR_WORKERS,
+    SHORT_WINDOW_MAX,
     _build_grid,
     _geojson_cells,
     _parse_utc,
@@ -37,13 +40,14 @@ from .coverage_core import (
     _validate_window_against_omm,
     field_of_regard_to_swath_width,
 )
+from .geometry import convert_swath_to_for, validate_geometry_inputs
 from .result_store import get_draft as _get_draft
 from .result_store import get_result as _get_saved
 from .result_store import paginate as _paginate
 from .result_store import save_draft as _save_draft
 from .result_store import save_result as _save_result
+from .result_store import set_draft_region as _set_draft_region
 from .tatc_integration import create_orbit_from_omm
-from tatc.analysis.coverage import aggregate_observations, collect_observations
 
 
 EVIDENCE = {
@@ -58,6 +62,41 @@ EVIDENCE_NOTE = (
     "a recorded acquisition, cloud-free pixels, or usable imagery."
 )
 
+BASE_LIMITS = [
+    "Modeled orbital access is not confirmation of an actual instrument acquisition.",
+    "Cloud conditions are not modeled.",
+    "Illumination is not filtered or claimed; daylight suitability for optical products is unknown.",
+    "The provided viewing geometry is taken as given; a wrong angle or swath gives a wrong swath and wrong access.",
+    "Grid-cell center sampling is not pixel-resolution mapping; an observed cell does not mean every point in that cell or part of the ROI was scanned.",
+    "The within-14-day window relative to the latest OMM epoch is our chosen request guardrail, not a guarantee of prediction accuracy.",
+    "A daily gap_area_km2 of 0 means every grid-cell center had at least one modeled access that UTC day, not continuous observation.",
+]
+
+YEAR_LIMITS = [
+    "Long-horizon runs propagate one OMM epoch far beyond the 14-day short-window guardrail; timing of individual accesses drifts and only aggregate statistics should be quoted.",
+    "Year grids are limited to 36 cells; each cell spans at most 10 degrees per axis.",
+]
+
+
+def _utc_iso(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _check_run_inputs(
+    instrument_name: Optional[str],
+    field_of_regard_deg: Optional[Any],
+    swath_width_km: Optional[Any],
+    geometry_reference: Optional[str],
+) -> Tuple[Optional[float], Optional[float], str]:
+    """Validate the label and geometry; returns cleaned geometry values."""
+    if instrument_name is not None and (
+        not isinstance(instrument_name, str) or not instrument_name.strip()
+    ):
+        raise ValueError("instrument_name must be a non-empty string when given")
+    return validate_geometry_inputs(
+        field_of_regard_deg, swath_width_km, geometry_reference
+    )
+
 
 def _stage_access(
     satellite_identifier: str,
@@ -70,24 +109,10 @@ def _stage_access(
     """Validate satellite, window, and optional region; fetch OMM."""
     if not isinstance(satellite_identifier, str) or not satellite_identifier.strip():
         raise ValueError("satellite_identifier must be a non-empty string")
-    if end_time is None:
-        # A missing end means one UTC day from the start. Documented in
-        # the tool description so no model has to guess the default.
-        from dateutil import parser as date_parser
-
-        try:
-            parsed_start = date_parser.parse(start_time)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                f"start_time must be an explicit UTC ISO-8601 value, got {start_time!r}"
-            ) from exc
-        if parsed_start is None or parsed_start.tzinfo is None:
-            raise ValueError(
-                f"start_time must carry a UTC offset or Z, got {start_time!r}"
-            )
-        end_time = (parsed_start + timedelta(days=1)).isoformat().replace("+00:00", "Z")
     start = _parse_utc(start_time, "start_time")
-    end = _parse_utc(end_time, "end_time")
+    # A missing end means one UTC day from the start; the tool
+    # description documents this so no model has to guess.
+    end = start + timedelta(days=1) if end_time is None else _parse_utc(end_time, "end_time")
     if end <= start:
         raise ValueError("end_time must be after start_time")
     duration = end - start
@@ -101,7 +126,7 @@ def _stage_access(
     sat_name = str(sat_info.get("name") or satellite_identifier.strip())
     omm_records = sat_info.get("omm")
     latest_epoch, epoch_age_hours = _validate_omm_freshness(omm_records, norad_id, now)
-    if duration <= MIN_YEAR_WINDOW:
+    if duration <= SHORT_WINDOW_MAX:
         _validate_window_against_omm(start, end, latest_epoch)
     elif abs(start - latest_epoch) > MAX_OMM_WINDOW_OFFSET:
         raise ValueError(
@@ -115,115 +140,17 @@ def _stage_access(
         "satellite": sat_name,
         "norad_id": norad_id,
         "omm_records": omm_records,
-        "window_start_utc": start.isoformat().replace("+00:00", "Z"),
-        "window_end_utc_exclusive": end.isoformat().replace("+00:00", "Z"),
+        "window_start_utc": _utc_iso(start),
+        "window_end_utc_exclusive": _utc_iso(end),
         "roi_bbox": validated_bbox,
-        "omm_epoch_utc": latest_epoch.isoformat().replace("+00:00", "Z"),
+        "omm_epoch_utc": _utc_iso(latest_epoch),
         "omm_age_hours": round(epoch_age_hours, 3),
         "omm_mean_altitude_km": round(mean_altitude_m / 1000, 3),
     }
 
 
-def _execute_access(
-    stage: Dict[str, Any],
-    grid_rows: int,
-    grid_columns: int,
-    field_of_regard_deg: Optional[Any],
-    swath_width_km: Optional[Any],
-    geometry_reference: Optional[str],
-    instrument_name: Optional[str],
-    max_cells: int = MAX_GRID_CELLS,
-) -> Dict[str, Any]:
-    """Run TAT-C over staged satellite, window, and region."""
-    if stage.get("roi_bbox") is None:
-        raise ValueError(
-            "This draft has no region yet. Call the region tool with "
-            "four separate numeric bounds first"
-        )
-    if instrument_name is not None and (
-        not isinstance(instrument_name, str) or not instrument_name.strip()
-    ):
-        raise ValueError("instrument_name must be a non-empty string when given")
-    for_value, swath_value, reference = validate_geometry_inputs(
-        field_of_regard_deg, swath_width_km, geometry_reference
-    )
-    cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
-    if len(cells) > max_cells:
-        raise ValueError(f"Grid must contain no more than {max_cells} cells")
-    from dateutil import parser as date_parser
-
-    start = date_parser.parse(stage["window_start_utc"])
-    end = date_parser.parse(stage["window_end_utc_exclusive"])
-    if end - start > MIN_YEAR_WINDOW:
-        raise ValueError(
-            "Short runs cover at most 3 days; use the year finish tool "
-            "for this draft"
-        )
-    orbit = create_orbit_from_omm(stage["omm_records"])
-    mean_altitude_m = float(orbit.get_mean_altitude())
-
-    if swath_value is not None:
-        resolved_for = convert_swath_to_for(swath_value, mean_altitude_m)
-        input_kind = "swath_width_km"
-        input_value = swath_value
-        method_note = (
-            "Converted swath_width_km to field_of_regard_deg at the OMM "
-            "mean altitude with TAT-C swath_width_to_field_of_regard."
-        )
-    else:
-        assert for_value is not None
-        resolved_for = for_value
-        input_kind = "field_of_regard_deg"
-        input_value = for_value
-        method_note = "Used the provided field_of_regard_deg directly."
-
-    sat_name = stage["satellite"]
-    label = instrument_name.strip() if instrument_name else f"{sat_name} modeled scan"
-    instrument = Instrument(name=label, field_of_regard=resolved_for)
-    satellite = Satellite(name=f"{sat_name} {label}", orbit=orbit, instruments=[instrument])
-
-    collected = [
-        collect_observations(
-            Point(id=cell["id"], latitude=cell["center_lat"], longitude=cell["center_lon"]),
-            satellite,
-            start,
-            end,
-            instrument_index=0,
-            omit_solar=True,
-        )
-        for cell in cells
-    ]
-    observations = gpd.GeoDataFrame(
-        pd.concat(collected, ignore_index=True), geometry="geometry", crs="EPSG:4326"
-    )
-    aggregated = aggregate_observations(observations)
-    summary = _summarize_coverage(cells, aggregated, start, end)
-    summary["instrument_label"] = label
-    return _assemble_full_result(
-        stage,
-        cells,
-        grid_rows,
-        grid_columns,
-        resolved_for,
-        input_kind,
-        input_value,
-        reference,
-        method_note,
-        mean_altitude_m,
-        start,
-        end,
-        summary,
-    )
-
-
-MAX_YEAR_WINDOW = timedelta(days=366)
-MIN_YEAR_WINDOW = timedelta(days=3)
-
-
-def _collect_year_cell_observations(
-    task: Tuple[Any, ...],
-) -> Any:
-    """Collect one cell over a long window. Module-level for spawn pickling."""
+def _collect_cell_observations(task: Tuple[Any, ...]) -> Any:
+    """Collect one grid cell. Module-level so spawn workers can pickle it."""
     (
         omm_records,
         sat_label,
@@ -236,9 +163,7 @@ def _collect_year_cell_observations(
     ) = task
     orbit = create_orbit_from_omm(omm_records)
     instrument = Instrument(name=sat_label, field_of_regard=field_of_regard)
-    satellite = Satellite(
-        name=sat_label, orbit=orbit, instruments=[instrument]
-    )
+    satellite = Satellite(name=sat_label, orbit=orbit, instruments=[instrument])
     return collect_observations(
         Point(id=cell_id, latitude=latitude, longitude=longitude),
         satellite,
@@ -249,45 +174,128 @@ def _collect_year_cell_observations(
     )
 
 
-def _assemble_full_result(
-    stage: Dict[str, Any],
-    cells: Sequence[Dict[str, Any]],
-    grid_rows: int,
-    grid_columns: int,
-    resolved_for: float,
-    input_kind: str,
-    input_value: float,
+def _geometry_model(
+    for_value: Optional[float],
+    swath_value: Optional[float],
     reference: str,
-    method_note: str,
     mean_altitude_m: float,
-    start: datetime,
-    end: datetime,
-    summary: Dict[str, Any],
-    extra_limits: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    modeled_swath_km = field_of_regard_to_swath_width(
-        mean_altitude_m, resolved_for
-    ) / 1000.0
-    total_area = sum(cell["area_km2"] for cell in cells)
-    limits = [
-        "Modeled orbital access is not confirmation of an actual instrument acquisition.",
-        "Cloud conditions are not modeled.",
-        "Illumination is not filtered or claimed; daylight suitability for optical products is unknown.",
-        "The provided viewing geometry is taken as given; a wrong angle or swath gives a wrong swath and wrong access.",
-        "Grid-cell center sampling is not pixel-resolution mapping; an observed cell does not mean every point in that cell or part of the ROI was scanned.",
-        "The within-14-day window relative to the latest OMM epoch is our chosen request guardrail, not a guarantee of prediction accuracy.",
-        "A daily gap_area_km2 of 0 means every grid-cell center had at least one modeled access that UTC day, not continuous observation.",
-    ]
-    if extra_limits:
-        limits = limits + extra_limits
-    label = summary.get("instrument_label", "")
+    """Resolve the field of regard and describe where it came from."""
+    if swath_value is not None:
+        resolved_for = convert_swath_to_for(swath_value, mean_altitude_m)
+        input_kind, input_value = "swath_width_km", swath_value
+        note = (
+            "Converted swath_width_km to field_of_regard_deg at the OMM "
+            "mean altitude with TAT-C swath_width_to_field_of_regard."
+        )
+    else:
+        assert for_value is not None
+        resolved_for = for_value
+        input_kind, input_value = "field_of_regard_deg", for_value
+        note = "Used the provided field_of_regard_deg directly."
+    modeled_swath_km = field_of_regard_to_swath_width(mean_altitude_m, resolved_for) / 1000.0
     return {
-        "satellite": stage["satellite"],
+        "field_of_regard_deg": round(resolved_for, 6),
+        "geometry_input_kind": input_kind,
+        "geometry_input_value": input_value,
+        "geometry_reference": reference,
+        "conversion_note": note,
+        "modeled_swath_width_km_at_omm_mean_altitude": round(modeled_swath_km, 3),
+        "omm_mean_altitude_km": round(mean_altitude_m / 1000, 3),
+    }
+
+
+def _run_stage(
+    stage: Dict[str, Any],
+    grid_rows: Any,
+    grid_columns: Any,
+    field_of_regard_deg: Optional[Any],
+    swath_width_km: Optional[Any],
+    geometry_reference: Optional[str],
+    instrument_name: Optional[str],
+    *,
+    long_window: bool = False,
+    max_workers: int = 1,
+) -> Dict[str, Any]:
+    """Run TAT-C over a staged satellite, window, and region.
+
+    Short runs take windows of 3 days or less and up to 144 cells. Long
+    runs take windows over 3 days up to 366 days, up to 36 cells, and may
+    fan cells out across worker processes.
+    """
+    if stage.get("roi_bbox") is None:
+        raise ValueError(
+            "This draft has no region yet. Call the region tool with "
+            "four separate numeric bounds first"
+        )
+    for_value, swath_value, reference = _check_run_inputs(
+        instrument_name, field_of_regard_deg, swath_width_km, geometry_reference
+    )
+    start = _parse_utc(stage["window_start_utc"], "window_start_utc")
+    end = _parse_utc(stage["window_end_utc_exclusive"], "window_end_utc_exclusive")
+    duration = end - start
+    if long_window:
+        if duration <= SHORT_WINDOW_MAX:
+            raise ValueError(
+                "Year runs need a staged window longer than 3 days; "
+                "use the short finish tool for this draft"
+            )
+        if duration > MAX_YEAR_WINDOW:
+            raise ValueError("Year runs cover at most 366 days; stage a shorter window")
+        if abs(start - _parse_utc(stage["omm_epoch_utc"], "omm_epoch_utc")) > MAX_OMM_WINDOW_OFFSET:
+            raise ValueError(
+                "Year runs must start within 14 days of the draft OMM epoch "
+                f"{stage['omm_epoch_utc']} (our chosen request guardrail, not a "
+                "guarantee of prediction accuracy)"
+            )
+    elif duration > SHORT_WINDOW_MAX:
+        raise ValueError(
+            "Short runs cover at most 3 days; use the year finish tool "
+            "for this draft"
+        )
+    cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
+    max_cells = MAX_YEAR_GRID_CELLS if long_window else MAX_GRID_CELLS
+    if len(cells) > max_cells:
+        prefix = "Year grid" if long_window else "Grid"
+        raise ValueError(f"{prefix} must contain no more than {max_cells} cells")
+
+    mean_altitude_m = float(create_orbit_from_omm(stage["omm_records"]).get_mean_altitude())
+    geometry = _geometry_model(for_value, swath_value, reference, mean_altitude_m)
+    sat_name = stage["satellite"]
+    label = instrument_name.strip() if instrument_name else f"{sat_name} modeled scan"
+    tasks = [
+        (
+            stage["omm_records"],
+            label,
+            geometry["field_of_regard_deg"],
+            int(cell["id"]),
+            float(cell["center_lat"]),
+            float(cell["center_lon"]),
+            start,
+            end,
+        )
+        for cell in cells
+    ]
+    if max_workers == 1 or len(tasks) == 1:
+        collected = [_collect_cell_observations(task) for task in tasks]
+    else:
+        with ProcessPoolExecutor(
+            max_workers=min(max_workers, len(tasks)),
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
+            collected = list(pool.map(_collect_cell_observations, tasks))
+    observations = gpd.GeoDataFrame(
+        pd.concat(collected, ignore_index=True), geometry="geometry", crs="EPSG:4326"
+    )
+    summary = _summarize_coverage(cells, aggregate_observations(observations), start, end)
+    limits = BASE_LIMITS + (YEAR_LIMITS if long_window else [])
+    return {
+        "satellite": sat_name,
         "norad_id": stage["norad_id"],
         "instrument": label,
         "window_start_utc": stage["window_start_utc"],
         "window_end_utc_exclusive": stage["window_end_utc_exclusive"],
-        "window_duration_hours": round((end - start).total_seconds() / 3600, 3),
+        "window_duration_hours": round(duration.total_seconds() / 3600, 3),
         "roi_bbox": list(stage["roi_bbox"]),
         "grid_shape": [grid_rows, grid_columns],
         "interpretation": (
@@ -297,16 +305,8 @@ def _assemble_full_result(
             "never claim the whole ROI was scanned. Modeled access does not confirm "
             "an actual instrument acquisition."
         ),
-        "total_roi_area_km2": round(total_area, 3),
-        "geometry_model": {
-            "field_of_regard_deg": round(resolved_for, 6),
-            "geometry_input_kind": input_kind,
-            "geometry_input_value": input_value,
-            "geometry_reference": reference,
-            "conversion_note": method_note,
-            "modeled_swath_width_km_at_omm_mean_altitude": round(modeled_swath_km, 3),
-            "omm_mean_altitude_km": round(mean_altitude_m / 1000, 3),
-        },
+        "total_roi_area_km2": round(sum(cell["area_km2"] for cell in cells), 3),
+        "geometry_model": geometry,
         "omm": {
             "epoch_utc": stage["omm_epoch_utc"],
             "age_hours_at_calculation": stage["omm_age_hours"],
@@ -342,25 +342,20 @@ def compute_satellite_coverage(
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Compute modeled access for one satellite with explicit geometry."""
-    if not isinstance(satellite_identifier, str) or not satellite_identifier.strip():
-        raise ValueError("satellite_identifier must be a non-empty string")
-    if instrument_name is not None and (
-        not isinstance(instrument_name, str) or not instrument_name.strip()
-    ):
-        raise ValueError("instrument_name must be a non-empty string when given")
-    for_value, swath_value, reference = validate_geometry_inputs(
-        field_of_regard_deg, swath_width_km, geometry_reference
+    # Check geometry before the CelesTrak fetch so bad args fail fast.
+    _check_run_inputs(
+        instrument_name, field_of_regard_deg, swath_width_km, geometry_reference
     )
     stage = _stage_access(
         satellite_identifier, start_time, end_time, roi_bbox, now=now
     )
-    return _execute_access(
+    return _run_stage(
         stage,
         grid_rows,
         grid_columns,
-        for_value,
-        swath_value,
-        reference,
+        field_of_regard_deg,
+        swath_width_km,
+        geometry_reference,
         instrument_name,
     )
 
@@ -399,6 +394,10 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
     }
 
 
+def _save_and_summarize(full: Dict[str, Any]) -> Dict[str, Any]:
+    return _compact_summary(full, _save_result(full))
+
+
 def run_satellite_access(
     satellite_identifier: str,
     start_time: str,
@@ -418,20 +417,21 @@ def run_satellite_access(
     The summary fits in chat. Daily rows, grid cells, and revisit numbers
     stay in the store under the returned result ID for the fetch helpers.
     """
-    full = compute_satellite_coverage(
-        satellite_identifier,
-        start_time,
-        end_time,
-        roi_bbox,
-        grid_rows=grid_rows,
-        grid_columns=grid_columns,
-        field_of_regard_deg=field_of_regard_deg,
-        swath_width_km=swath_width_km,
-        geometry_reference=geometry_reference,
-        instrument_name=instrument_name,
-        now=now,
+    return _save_and_summarize(
+        compute_satellite_coverage(
+            satellite_identifier,
+            start_time,
+            end_time,
+            roi_bbox,
+            grid_rows=grid_rows,
+            grid_columns=grid_columns,
+            field_of_regard_deg=field_of_regard_deg,
+            swath_width_km=swath_width_km,
+            geometry_reference=geometry_reference,
+            instrument_name=instrument_name,
+            now=now,
+        )
     )
-    return _compact_summary(full, _save_result(full))
 
 
 def begin_access_run(
@@ -443,17 +443,14 @@ def begin_access_run(
 ) -> Dict[str, Any]:
     """Lock satellite and window; return a draft ID plus altitude.
 
-    The draft holds validated inputs and OMM elements. Set the region
-    with the region tool, then finish with grid plus exactly one geometry
-    and source. The OMM mean altitude comes back so a swath width can be
-    picked or converted before finishing.
+    The OMM mean altitude comes back so a swath width can be picked or
+    converted before finishing.
     """
     stage = _stage_access(
         satellite_identifier, start_time, end_time, None, now=now
     )
-    draft_id = _save_draft(stage)
     return {
-        "draft_id": draft_id,
+        "draft_id": _save_draft(stage),
         "satellite": stage["satellite"],
         "norad_id": stage["norad_id"],
         "window_start_utc": stage["window_start_utc"],
@@ -475,13 +472,10 @@ def set_access_region(
     roi_bbox: Sequence[float],
 ) -> Dict[str, Any]:
     """Set the region on a staged draft with four numeric bounds."""
-    from .result_store import set_draft_region as _set_region
-
     validated = list(_validate_bbox(roi_bbox))
-    stage = _set_region(draft_id, validated)
-    key = draft_id.strip() if isinstance(draft_id, str) else draft_id
+    stage = _set_draft_region(draft_id, validated)
     return {
-        "draft_id": key,
+        "draft_id": draft_id.strip(),
         "satellite": stage["satellite"],
         "window_start_utc": stage["window_start_utc"],
         "window_end_utc_exclusive": stage["window_end_utc_exclusive"],
@@ -503,18 +497,18 @@ def finish_access_run(
     geometry_reference: Optional[str] = None,
     instrument_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run the analysis for a draft and return a result ID with summary."""
-    stage = _get_draft(draft_id)
-    full = _execute_access(
-        stage,
-        grid_rows,
-        grid_columns,
-        field_of_regard_deg,
-        swath_width_km,
-        geometry_reference,
-        instrument_name,
+    """Run a short draft (3 days or less) and return a result ID with summary."""
+    return _save_and_summarize(
+        _run_stage(
+            _get_draft(draft_id),
+            grid_rows,
+            grid_columns,
+            field_of_regard_deg,
+            swath_width_km,
+            geometry_reference,
+            instrument_name,
+        )
     )
-    return _compact_summary(full, _save_result(full))
 
 
 def finish_year_access_run(
@@ -528,14 +522,12 @@ def finish_year_access_run(
     *,
     _max_workers: int = MAX_YEAR_WORKERS,
 ) -> Dict[str, Any]:
-    """Run a long-window analysis for a draft and return results by ID.
+    """Run a long draft (over 3 days, up to 366) and return results by ID.
 
-    Same shape as the short finish tool, but for staged windows longer
-    than 3 days up to 366 days with at most 36 grid cells. Collection
-    fans out across worker processes, so a full year takes minutes. The
-    window start must lie within 14 days of the draft OMM epoch; the end
-    may extend far beyond it, and long-horizon drift is recorded in the
-    method limits.
+    Collection fans out across worker processes, so a full year takes
+    minutes. The window start must lie within 14 days of the draft OMM
+    epoch; the end may extend far beyond it, and long-horizon drift is
+    recorded in the method limits.
     """
     if (
         isinstance(_max_workers, bool)
@@ -545,106 +537,19 @@ def finish_year_access_run(
         raise ValueError(
             f"_max_workers must be an integer between 1 and {MAX_YEAR_WORKERS}"
         )
-    stage = _get_draft(draft_id)
-    from dateutil import parser as date_parser
-
-    start = date_parser.parse(stage["window_start_utc"])
-    end = date_parser.parse(stage["window_end_utc_exclusive"])
-    latest_epoch = date_parser.parse(stage["omm_epoch_utc"])
-    duration = end - start
-    if duration <= MIN_YEAR_WINDOW:
-        raise ValueError(
-            "Year runs need a staged window longer than 3 days; "
-            "use the short finish tool for this draft"
+    return _save_and_summarize(
+        _run_stage(
+            _get_draft(draft_id),
+            grid_rows,
+            grid_columns,
+            field_of_regard_deg,
+            swath_width_km,
+            geometry_reference,
+            instrument_name,
+            long_window=True,
+            max_workers=_max_workers,
         )
-    if duration > MAX_YEAR_WINDOW:
-        raise ValueError(
-            "Year runs cover at most 366 days; stage a shorter window"
-        )
-    if abs(start - latest_epoch) > MAX_OMM_WINDOW_OFFSET:
-        raise ValueError(
-            "Year runs must start within 14 days of the draft OMM epoch "
-            f"{stage['omm_epoch_utc']} (our chosen request guardrail, not a "
-            "guarantee of prediction accuracy)"
-        )
-    if instrument_name is not None and (
-        not isinstance(instrument_name, str) or not instrument_name.strip()
-    ):
-        raise ValueError("instrument_name must be a non-empty string when given")
-    for_value, swath_value, reference = validate_geometry_inputs(
-        field_of_regard_deg, swath_width_km, geometry_reference
     )
-    cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
-    if len(cells) > MAX_YEAR_GRID_CELLS:
-        raise ValueError(
-            f"Year grid must contain no more than {MAX_YEAR_GRID_CELLS} cells"
-        )
-    orbit = create_orbit_from_omm(stage["omm_records"])
-    mean_altitude_m = float(orbit.get_mean_altitude())
-    if swath_value is not None:
-        resolved_for = convert_swath_to_for(swath_value, mean_altitude_m)
-        input_kind = "swath_width_km"
-        input_value = swath_value
-        method_note = (
-            "Converted swath_width_km to field_of_regard_deg at the OMM "
-            "mean altitude with TAT-C swath_width_to_field_of_regard."
-        )
-    else:
-        assert for_value is not None
-        resolved_for = for_value
-        input_kind = "field_of_regard_deg"
-        input_value = for_value
-        method_note = "Used the provided field_of_regard_deg directly."
-    sat_name = stage["satellite"]
-    label = instrument_name.strip() if instrument_name else f"{sat_name} modeled scan"
-    tasks = [
-        (
-            stage["omm_records"],
-            label,
-            resolved_for,
-            int(cell["id"]),
-            float(cell["center_lat"]),
-            float(cell["center_lon"]),
-            start,
-            end,
-        )
-        for cell in cells
-    ]
-    if _max_workers == 1 or len(tasks) == 1:
-        collected = [_collect_year_cell_observations(task) for task in tasks]
-    else:
-        worker_count = min(_max_workers, len(tasks))
-        with ProcessPoolExecutor(
-            max_workers=worker_count,
-            mp_context=multiprocessing.get_context("spawn"),
-        ) as pool:
-            collected = list(pool.map(_collect_year_cell_observations, tasks))
-    observations = gpd.GeoDataFrame(
-        pd.concat(collected, ignore_index=True), geometry="geometry", crs="EPSG:4326"
-    )
-    aggregated = aggregate_observations(observations)
-    summary = _summarize_coverage(cells, aggregated, start, end)
-    summary["instrument_label"] = label
-    full = _assemble_full_result(
-        stage,
-        cells,
-        grid_rows,
-        grid_columns,
-        resolved_for,
-        input_kind,
-        input_value,
-        reference,
-        method_note,
-        mean_altitude_m,
-        start,
-        end,
-        summary,
-        extra_limits=[
-            "Long-horizon runs propagate one OMM epoch far beyond the 14-day short-window guardrail; timing of individual accesses drifts and only aggregate statistics should be quoted.",
-            "Year grids are limited to 36 cells; each cell spans at most 10 degrees per axis.",
-        ],
-    )
-    return _compact_summary(full, _save_result(full))
 
 
 def get_access_daily(
@@ -657,7 +562,7 @@ def get_access_daily(
     payload = _get_saved(result_id)
     page = _paginate(payload["daily"], offset, limit, "daily")
     return {
-        "result_id": result_id.strip() if isinstance(result_id, str) else result_id,
+        "result_id": result_id.strip(),
         "satellite": payload["satellite"],
         "window_start_utc": payload["window_start_utc"],
         "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
@@ -710,7 +615,7 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
             }
         )
     return {
-        "result_id": result_id.strip() if isinstance(result_id, str) else result_id,
+        "result_id": result_id.strip(),
         "satellite": payload["satellite"],
         "window_start_utc": payload["window_start_utc"],
         "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
@@ -745,7 +650,7 @@ def get_access_revisit(result_id: Any) -> Dict[str, Any]:
         )
     }
     return {
-        "result_id": result_id.strip() if isinstance(result_id, str) else result_id,
+        "result_id": result_id.strip(),
         "satellite": payload["satellite"],
         "instrument": payload["instrument"],
         "window_start_utc": payload["window_start_utc"],

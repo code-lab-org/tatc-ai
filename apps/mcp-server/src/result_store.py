@@ -1,19 +1,20 @@
-"""Saved access results, fetched back by ID.
+"""Saved access results and drafts, fetched back by ID.
 
 A coverage run produces more rows and cells than a model should carry
 in chat. The run tool saves the full result here and returns a compact
 summary plus a result ID. Fetch tools page through daily rows, grid
-cells, and revisit numbers using that ID.
+cells, and revisit numbers using that ID. Staged runs keep their
+validated inputs here as drafts between the begin and finish calls.
 
-The store is in-memory with a 24-hour expiry and a cap of 200 results.
-The MCP server runs as a single uvicorn worker, so one process holds
-every result. A multi-worker deploy would need a shared store instead.
+The store is in-memory with a 24-hour expiry and a cap of 200 entries
+per kind. The MCP server runs as a single uvicorn worker, so one process
+holds every entry. A multi-worker deploy would need a shared store instead.
 """
 
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 TTL_SECONDS = 24 * 3600
 MAX_RESULTS = 200
@@ -22,139 +23,84 @@ _lock = threading.Lock()
 _results: Dict[str, Dict[str, Any]] = {}
 _drafts: Dict[str, Dict[str, Any]] = {}
 
-
-def _evict_locked(now: float) -> None:
-    expired = [
-        key for key, entry in _results.items()
-        if now - entry["saved_at"] > TTL_SECONDS
-    ]
-    for key in expired:
-        del _results[key]
-    while len(_results) > MAX_RESULTS:
-        oldest = min(_results, key=lambda k: _results[k]["saved_at"])
-        del _results[oldest]
+# Per kind: label, where the ID comes from, and which tool makes a new one.
+_RESULT = ("result", "a coverage run", "the access analysis tool")
+_DRAFT = ("draft", "the begin tool", "the begin tool")
 
 
-def set_draft_region(draft_id: Any, roi_bbox: Any) -> Dict[str, Any]:
-    """Set the region on a staged draft, returning the updated stage.
+def _evict_locked(table: Dict[str, Dict[str, Any]], now: float) -> None:
+    for key in [k for k, entry in table.items() if now - entry["saved_at"] > TTL_SECONDS]:
+        del table[key]
+    while len(table) > MAX_RESULTS:
+        del table[min(table, key=lambda k: table[k]["saved_at"])]
+
+
+def _save(table: Dict[str, Dict[str, Any]], key: str, payload: Dict[str, Any]) -> str:
+    now = time.time()
+    with _lock:
+        table[key] = {"saved_at": now, "payload": payload}
+        _evict_locked(table, now)
+    return key
+
+
+def _lookup_locked(
+    table: Dict[str, Dict[str, Any]], kind: tuple, raw_id: Any
+) -> Dict[str, Any]:
+    """Return the live payload for an ID, with model-friendly errors.
 
     Raises:
         ValueError: For unknown, expired, or malformed IDs.
     """
-    if not isinstance(draft_id, str) or not draft_id.strip():
+    label, source, tool = kind
+    if not isinstance(raw_id, str) or not raw_id.strip():
         raise ValueError(
-            "draft_id must be a non-empty string from the begin tool. "
-            "Run the begin tool first"
+            f"{label}_id must be a non-empty string from {source}. "
+            f"Run {tool} first"
         )
-    key = draft_id.strip()
-    now = time.time()
-    with _lock:
-        entry = _drafts.get(key)
-        if entry is None:
-            raise ValueError(
-                f"Unknown draft_id {key!r}. It may have expired after 24 "
-                "hours. Re-run the begin tool for a new one"
-            )
-        if now - entry["saved_at"] > TTL_SECONDS:
-            del _drafts[key]
-            raise ValueError(
-                f"Draft {key!r} expired after 24 hours. "
-                "Re-run the begin tool for a new one"
-            )
-        entry["payload"]["roi_bbox"] = roi_bbox
-        return entry["payload"]
+    key = raw_id.strip()
+    entry = table.get(key)
+    if entry is None:
+        raise ValueError(
+            f"Unknown {label}_id {key!r}. It may have expired after 24 "
+            f"hours. Re-run {tool} for a new one"
+        )
+    if time.time() - entry["saved_at"] > TTL_SECONDS:
+        del table[key]
+        raise ValueError(
+            f"{label.capitalize()} {key!r} expired after 24 hours. "
+            f"Re-run {tool} for a new one"
+        )
+    return entry["payload"]
 
 
 def save_result(payload: Dict[str, Any]) -> str:
     """Save a full access result, returning its result ID."""
-    result_id = uuid.uuid4().hex[:16]
-    now = time.time()
-    with _lock:
-        _results[result_id] = {"saved_at": now, "payload": payload}
-        _evict_locked(now)
-    return result_id
+    return _save(_results, uuid.uuid4().hex[:16], payload)
 
 
 def save_draft(stage: Dict[str, Any]) -> str:
     """Save a staged access run, returning its draft ID."""
-    draft_id = "draft_" + uuid.uuid4().hex[:12]
-    now = time.time()
-    with _lock:
-        _drafts[draft_id] = {"saved_at": now, "payload": stage}
-        _evict_drafts_locked(now)
-    return draft_id
-
-
-def _evict_drafts_locked(now: float) -> None:
-    expired = [
-        key for key, entry in _drafts.items()
-        if now - entry["saved_at"] > TTL_SECONDS
-    ]
-    for key in expired:
-        del _drafts[key]
-    while len(_drafts) > MAX_RESULTS:
-        oldest = min(_drafts, key=lambda k: _drafts[k]["saved_at"])
-        del _drafts[oldest]
-
-
-def get_draft(draft_id: Any) -> Dict[str, Any]:
-    """Return the staged payload for a draft ID.
-
-    Raises:
-        ValueError: For unknown, expired, or malformed IDs.
-    """
-    if not isinstance(draft_id, str) or not draft_id.strip():
-        raise ValueError(
-            "draft_id must be a non-empty string from the begin tool. "
-            "Run the begin tool first"
-        )
-    key = draft_id.strip()
-    now = time.time()
-    with _lock:
-        entry = _drafts.get(key)
-        if entry is None:
-            raise ValueError(
-                f"Unknown draft_id {key!r}. It may have expired after 24 "
-                "hours. Re-run the begin tool for a new one"
-            )
-        if now - entry["saved_at"] > TTL_SECONDS:
-            del _drafts[key]
-            raise ValueError(
-                f"Draft {key!r} expired after 24 hours. "
-                "Re-run the begin tool for a new one"
-            )
-        return entry["payload"]
+    return _save(_drafts, "draft_" + uuid.uuid4().hex[:12], stage)
 
 
 def get_result(result_id: Any) -> Dict[str, Any]:
-    """Return the saved payload for a result ID.
-
-    Raises:
-        ValueError: For unknown, expired, or malformed IDs.
-    """
-    if not isinstance(result_id, str) or not result_id.strip():
-        raise ValueError(
-            "result_id must be a non-empty string from a coverage run. "
-            "Run the access analysis tool first"
-        )
-    key = result_id.strip()
-    now = time.time()
+    """Return the saved payload for a result ID."""
     with _lock:
-        entry = _results.get(key)
-        if entry is None:
-            raise ValueError(
-                f"Unknown result_id {key!r}. It may have expired after 24 "
-                "hours. Re-run the access analysis tool for a new one"
-            )
-        if now - entry["saved_at"] > TTL_SECONDS:
-            del _results[key]
-            raise ValueError(
-                f"Result {key!r} expired after 24 hours. "
-                "Re-run the access analysis tool for a new one"
-            )
-        return entry["payload"]
+        return _lookup_locked(_results, _RESULT, result_id)
 
 
+def get_draft(draft_id: Any) -> Dict[str, Any]:
+    """Return the staged payload for a draft ID."""
+    with _lock:
+        return _lookup_locked(_drafts, _DRAFT, draft_id)
+
+
+def set_draft_region(draft_id: Any, roi_bbox: Any) -> Dict[str, Any]:
+    """Set the region on a staged draft, returning the updated stage."""
+    with _lock:
+        payload = _lookup_locked(_drafts, _DRAFT, draft_id)
+        payload["roi_bbox"] = roi_bbox
+        return payload
 
 
 def clear() -> None:

@@ -19,6 +19,8 @@ from tatc.utils import (
     field_of_regard_to_swath_width,
 )
 
+SHORT_WINDOW_MAX = timedelta(days=3)
+MAX_YEAR_WINDOW = timedelta(days=366)
 MAX_OMM_AGE = timedelta(days=14)
 MAX_OMM_WINDOW_OFFSET = timedelta(days=14)
 MAX_FUTURE_OMM_AGE = timedelta(days=1)
