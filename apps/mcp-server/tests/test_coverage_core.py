@@ -10,7 +10,7 @@ from tatc.analysis.coverage import aggregate_observations, collect_observations,
 from tatc.schemas import Instrument, Point, Satellite
 
 from src import coverage_core as mc
-from src.tatc_integration import create_orbit_from_omm, propagate_satellite
+from src.tatc_integration import create_orbit_from_omm, generate_ground_track
 
 
 ISS_OMM = {
@@ -220,7 +220,7 @@ def test_zero_daily_gap_area_can_coexist_with_positive_temporal_gap():
 def test_real_tatc_collect_and_aggregate_use_fixture_omm_without_network():
     orbit = create_orbit_from_omm([ISS_OMM])
     midpoint = orbit.get_epoch() + timedelta(minutes=30)
-    latitude, longitude, _ = propagate_satellite(orbit, midpoint)
+    [(_, latitude, longitude, _, _)] = generate_ground_track(orbit, midpoint, midpoint)
     satellite = Satellite(
         name="Fixture satellite",
         orbit=orbit,

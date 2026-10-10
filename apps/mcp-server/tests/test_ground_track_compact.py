@@ -8,6 +8,8 @@ import json
 from datetime import datetime
 from unittest import mock
 
+from shapely.geometry import Polygon
+
 from src import schema_formatter as fmt
 from src import server as srv
 
@@ -29,7 +31,7 @@ def test_position_rounding_keeps_exact_values():
 
 
 def test_footprint_coords_rounded_to_4():
-    ring = [[10.884655043035224 + i * 0.5, 45.201679462178106 - i * 0.3] for i in range(5)]
+    ring = Polygon([(10.884655043035224 + i * 0.5, 45.201679462178106 - i * 0.3 * (i % 2)) for i in range(5)])
     geo = fmt.format_footprint_geojson(ring)
     assert geo is not None
     for lon, lat in geo["geometry"]["coordinates"][0]:
@@ -38,10 +40,15 @@ def test_footprint_coords_rounded_to_4():
     assert coords[0] == coords[-1]
 
 
+FOOTPRINT = Polygon([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)])
 TRACK = [
     (datetime(2026, 1, 1, 0, 0, 0), 12.3456789, -105.1234567, 420240.527),
     (datetime(2026, 1, 1, 0, 1, 0), 15.4022222, -102.8088888, 419999.999),
 ]
+
+
+def fake_track(orbit, start, end, step, include_footprint=False):
+    return [(*row, FOOTPRINT if include_footprint else None) for row in TRACK]
 
 
 def _mocked_track(**kwargs):
@@ -50,19 +57,17 @@ def _mocked_track(**kwargs):
         return_value={"norad_id": 25544, "name": "ISS",
                       "omm": [{"OBJECT_NAME": "ISS", "NORAD_CAT_ID": 25544}]}), \
         mock.patch.object(srv, "create_orbit_from_omm", return_value=object()), \
-        mock.patch.object(srv, "compute_ground_track", return_value=list(TRACK)), \
-        mock.patch.object(srv, "calculate_footprint_from_position",
-                          return_value=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]) as fp:
+        mock.patch.object(srv, "compute_ground_track", side_effect=fake_track) as track:
         out = srv._generate_ground_track("ISS", "2026-01-01T00:00:00Z",
                                          "2 minutes", "1 minute", **kwargs)
-    return out, fp
+    return out, track
 
 
 def test_default_omits_footprint_and_skips_compute():
-    out, fp = _mocked_track()
+    out, track = _mocked_track()
     assert len(out) == 2
     assert all("footprint_geojson" not in m for m in out)
-    fp.assert_not_called()
+    assert track.call_args.kwargs["include_footprint"] is False
     assert out[0]["position_lla"] == {
         "lat_deg": 12.3457, "lon_deg": -105.1235, "alt_m": 420240.5}
 

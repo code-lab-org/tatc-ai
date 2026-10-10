@@ -1,9 +1,9 @@
 """Offline unit tests for pure logic: no network, no TAT-C propagation."""
 
-import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from shapely.geometry import MultiPolygon, Point, Polygon
 
 from src import validation as v
 from src import schema_formatter as fmt
@@ -227,28 +227,28 @@ def test_format_position_wraps_longitude():
     }
 
 
-def test_format_footprint_closes_ring_and_rejects_degenerate():
-    ring = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
-    geo = fmt.format_footprint_geojson(ring)
-    assert geo["type"] == "Feature"
+def test_format_footprint_keeps_polygons_and_antimeridian_splits():
+    square = Polygon([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+    geo = fmt.format_footprint_geojson(square)
+    assert geo["type"] == "Feature" and geo["properties"] == {}
     coords = geo["geometry"]["coordinates"][0]
-    assert coords[0] == coords[-1]
-    assert geo["properties"] == {}
-    assert fmt.format_footprint_geojson([[0.0, 0.0], [1.0, 1.0]]) is None
-    assert fmt.format_footprint_geojson([]) is None
-    assert fmt.format_footprint_geojson("not a list") is None
-    assert (
-        fmt.format_footprint_geojson([[0.0, 0.0], None, [1.0, 0.0], [1.0, 1.0]])
-        is not None
-    )
+    assert coords[0] == coords[-1] and all(len(c) == 2 for c in coords)
+    split = MultiPolygon([
+        Polygon([(179, 0), (180, 0), (180, 1), (179, 1)]),
+        Polygon([(-180, 0), (-179, 0), (-179, 1), (-180, 1)]),
+    ])
+    assert fmt.format_footprint_geojson(split)["geometry"]["type"] == "MultiPolygon"
+    assert fmt.format_footprint_geojson(None) is None
+    assert fmt.format_footprint_geojson(Polygon()) is None
+    assert fmt.format_footprint_geojson(Point(0, 0)) is None
 
 
 def test_format_ground_track_response_skips_bad_points_quietly(capsys):
     track = [
-        (datetime(2026, 1, 1), 10.0, 20.0, 400000.0),
-        (datetime(2026, 1, 1, 0, 1), 200.0, 20.0, 400000.0),
+        (datetime(2026, 1, 1), 10.0, 20.0, 400000.0, None),
+        (datetime(2026, 1, 1, 0, 1), 200.0, 20.0, 400000.0, None),
     ]
-    messages = fmt.format_ground_track_response("25544", track, None)
+    messages = fmt.format_ground_track_response("25544", track)
     assert len(messages) == 1
     assert messages[0]["id"] == "25544"
     assert capsys.readouterr().out == ""
@@ -331,66 +331,49 @@ def test_decayed_hint_names_the_dead_objects(monkeypatch):
 # tatc_integration pure geometry and failure paths
 
 
-def test_circular_footprint_is_closed_sane_and_pole_safe():
-    ring = ti._calculate_circular_footprint(0.0, 0.0, 408000.0, 60.0)
-    assert len(ring) == ti.FOOTPRINT_POLYGON_POINTS + 1
-    assert ring[0] == ring[-1]
-    assert all(-180 <= lon <= 180 and -90 <= lat <= 90 for lon, lat in ring)
-    first_lon, first_lat = ring[0]
-    radius_deg = abs(first_lat)
-    assert 1.0 < radius_deg < 5.0
-    # GEO altitude previously crashed in asin; now clamps to the horizon circle.
-    geo_ring = ti._calculate_circular_footprint(0.0, 0.0, 35786000.0, 60.0)
-    assert geo_ring[0] == geo_ring[-1]
-    expected_horizon = math.degrees(
-        math.acos(ti.EARTH_RADIUS_M / (ti.EARTH_RADIUS_M + 35786000.0))
-    )
-    assert abs(abs(geo_ring[0][1]) - expected_horizon) < 0.5
-    pole_ring = ti._calculate_circular_footprint(89.99, 0.0, 408000.0, 60.0)
-    assert len(pole_ring) == ti.FOOTPRINT_POLYGON_POINTS + 1
+ISS_OMM = {
+    "OBJECT_NAME": "ISS (ZARYA)", "OBJECT_ID": "1998-067A",
+    "EPOCH": "2026-10-08T23:34:55.716384", "MEAN_MOTION": 15.48782794,
+    "ECCENTRICITY": 0.00068216, "INCLINATION": 51.6313,
+    "RA_OF_ASC_NODE": 96.9458, "ARG_OF_PERICENTER": 239.5445,
+    "MEAN_ANOMALY": 120.487, "EPHEMERIS_TYPE": 0, "CLASSIFICATION_TYPE": "U",
+    "NORAD_CAT_ID": 25544, "ELEMENT_SET_NO": 999, "REV_AT_EPOCH": 58939,
+    "BSTAR": 0.00011684905, "MEAN_MOTION_DOT": 5.946e-5, "MEAN_MOTION_DDOT": 0,
+}
 
 
-def test_generate_ground_track_rejects_bad_step_without_calling_satellite():
-    class ExplodingSatellite:
-        def get_orbit_track(self, times):
-            raise AssertionError("must not be called")
+def test_ground_track_and_footprints_come_from_tatc():
+    orbit = ti.create_orbit_from_omm([ISS_OMM])
+    start = datetime(2026, 10, 10)
+    track = ti.generate_ground_track(orbit, start, start + timedelta(minutes=90), 60,
+                                     include_footprint=True)
+    assert len(track) == 91
+    time, lat, lon, alt, footprint = track[0]
+    assert time == start and time.tzinfo is None
+    assert -51.7 < lat < 51.7 and 380_000 < alt < 460_000
+    assert footprint.geom_type in ("Polygon", "MultiPolygon")
+    assert footprint.contains(Point(lon, lat))
+    # A 90-minute ISS track crosses the antimeridian; TAT-C splits it there.
+    assert any(f.geom_type == "MultiPolygon" for *_, f in track)
+    assert all(f is None for *_, f in ti.generate_ground_track(orbit, start, start, 60))
 
-    for bad_step in (0, -60, float("nan"), "abc"):
-        with pytest.raises(ValueError):
-            ti.generate_ground_track(
-                ExplodingSatellite(),
-                datetime(2026, 1, 1),
-                datetime(2026, 1, 2),
-                bad_step,
-            )
 
-
-def test_integration_rejects_oversized_track_before_propagation():
-    class ExplodingSatellite:
-        def get_orbit_track(self, times):
-            raise AssertionError("propagation must not be called")
+def test_ground_track_rejects_bad_step_and_oversized_tracks_before_tatc():
+    class ExplodingOrbit:
+        def __getattr__(self, name):
+            raise AssertionError("TAT-C must not be called")
 
     start = datetime(2026, 1, 1)
+    for bad_step in (0, -60, float("nan"), "abc"):
+        with pytest.raises(ValueError):
+            ti.generate_ground_track(ExplodingOrbit(), start, start + timedelta(days=1), bad_step)
     with pytest.raises(ValueError, match="2001.*2000"):
-        ti.generate_ground_track(
-            ExplodingSatellite(), start, start + timedelta(seconds=2000), 1
-        )
+        ti.generate_ground_track(ExplodingOrbit(), start, start + timedelta(seconds=2000), 1)
 
 
 def test_ensure_utc_rejects_non_datetimes():
     with pytest.raises(ValueError):
         ti._ensure_utc("now")
-
-
-def test_generate_ground_track_raises_when_nothing_propagates():
-    class BrokenSatellite:
-        def get_orbit_track(self, times):
-            raise RuntimeError("no ephemeris")
-
-    with pytest.raises(ValueError, match="[Pp]ropagat"):
-        ti.generate_ground_track(
-            BrokenSatellite(), datetime(2026, 1, 1), datetime(2026, 1, 1, 0, 5), 60
-        )
 
 
 def test_create_orbit_rejects_garbage_omm_offline():

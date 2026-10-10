@@ -21,7 +21,6 @@ from .geometry import (
 )
 from .schema_formatter import format_ground_track_response
 from .tatc_integration import (
-    calculate_footprint_from_position,
     create_orbit_from_omm,
     generate_ground_track as compute_ground_track,
 )
@@ -305,21 +304,13 @@ def _generate_ground_track(
 
     sat_info = celestrak_client.get_satellite_info(satellite_identifier)
     satellite = create_orbit_from_omm(sat_info["omm"])
-    ground_track = compute_ground_track(
-        satellite, start_time_dt, end_time_dt, step_seconds
-    )
     # Footprints are 86%+ of the payload and models rendering tables never
     # need them, so they are opt-in. Skipping also saves the compute.
-    footprints = None
-    if include_footprint:
-        footprints = [
-            calculate_footprint_from_position(lat_deg, lon_deg, alt_m)
-            for _, lat_deg, lon_deg, alt_m in ground_track
-        ]
-
-    return format_ground_track_response(
-        str(sat_info["norad_id"]), ground_track, footprints
+    ground_track = compute_ground_track(
+        satellite, start_time_dt, end_time_dt, step_seconds,
+        include_footprint=include_footprint,
     )
+    return format_ground_track_response(str(sat_info["norad_id"]), ground_track)
 
 
 @mcp.tool
@@ -340,9 +331,11 @@ def generate_ground_track(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
-        include_footprint: Include the footprint_geojson visibility polygon
-            per point. Defaults to False: footprints are ~86% of the payload
-            and tabular answers never need them. Set True for mapping.
+        include_footprint: Include footprint_geojson per point: the ground
+            area inside a 60 degree cone under the satellite, from TAT-C, as
+            a Polygon or a MultiPolygon split at the antimeridian. Defaults to
+            False: footprints are ~86% of the payload and tabular answers never
+            need them. Set True for mapping.
 
     Returns:
         Telemetry objects with id, time (ISO-8601 UTC), position_lla

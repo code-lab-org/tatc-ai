@@ -7,6 +7,7 @@ from datetime import datetime
 from unittest import mock
 
 from fastmcp import Client
+from shapely.geometry import Polygon
 
 
 class ServerTests(unittest.TestCase):
@@ -177,9 +178,7 @@ class ServerTests(unittest.TestCase):
         ), mock.patch.object(
             self.server,
             "compute_ground_track",
-            return_value=[(datetime(2026, 1, 1, 0, 0, 0), 51.5, -0.12, 408000.0)],
-        ), mock.patch.object(
-            self.server, "calculate_footprint_from_position", return_value=None
+            return_value=[(datetime(2026, 1, 1, 0, 0, 0), 51.5, -0.12, 408000.0, None)],
         ):
             result = self.call_tool(
                 "generate_ground_track",
@@ -220,11 +219,10 @@ class ServerTests(unittest.TestCase):
         ), mock.patch.object(
             self.server,
             "compute_ground_track",
-            return_value=[(datetime(2026, 1, 1, 0, 0, 0), 51.5, -0.12, 408000.0)],
-        ), mock.patch.object(
-            self.server,
-            "calculate_footprint_from_position",
-            return_value=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+            return_value=[(
+                datetime(2026, 1, 1, 0, 0, 0), 51.5, -0.12, 408000.0,
+                Polygon([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]),
+            )],
         ):
             result = self.call_tool(
                 "generate_ground_track",
