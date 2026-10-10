@@ -9,7 +9,7 @@ Checks score what the server actually computed.
 
 Usage, from apps/mcp-server:
     .venv/bin/python -m eval.run_eval --label baseline
-    .venv/bin/python -m eval.run_eval --label merged --tiers small
+    .venv/bin/python -m eval.run_eval --label trial --models glm-5-3 qwen38-27b
     .venv/bin/python -m eval.run_eval --compare eval/results/a.jsonl eval/results/b.jsonl
 
 Reads OPENAI_API_KEY and OPENAI_REVERSE_PROXY from apps/librechat/.env.
@@ -20,12 +20,10 @@ import argparse
 import asyncio
 import json
 import os
-import socket
 import sys
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 import uuid
 from collections import defaultdict
@@ -47,29 +45,15 @@ SUFFIX = "_mcp_tatc"
 MAX_TURNS = 14
 REQUEST_TIMEOUT = 240
 
-# Picked from the proxy's chat models to span sizes. Thinking variants and
-# models that took minutes to answer a one-tool probe are left out.
-TIERS = {
-    "small": [
-        "olmo3-7b-instruct",
-        "qwen3-30b-a3b-instruct-2507",
-        "glm-5-3-flash",
-        "granite41-30b",
-    ],
-    "medium": [
-        "llama4-scout-17b",
-        "gemma4-31b-it",
-        "qwen36-27b",
-        "olmo3-32b-instruct",
-    ],
-    "large": [
-        "gpt-oss-120b",
-        "qwen3-235b-a22b-instruct-2507",
-        "glm-5-3",
-        "kimi-k2-7-code",
-    ],
-}
-TIER_OF = {model: tier for tier, models in TIERS.items() for model in models}
+# The models TATC AI offers in LibreChat. Keep in sync with modelSpecs in
+# apps/librechat/librechat.yaml; pass --models to try others.
+MODELS = [
+    "glm-5-3",
+    "glm-5-3-flash",
+    "deepseek-v4-1-flash",
+    "mimo-v2-6-flash",
+    "glm-5-2",
+]
 
 
 def load_env(path: Path) -> Dict[str, str]:
@@ -80,16 +64,6 @@ def load_env(path: Path) -> Dict[str, str]:
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
     return values
-
-
-def pin_host(host: str, ip: str) -> None:
-    """Connect to host at ip, for machines whose hosts file pins a private IP."""
-    original = socket.getaddrinfo
-
-    def getaddrinfo(name, *args, **kwargs):
-        return original(ip if name == host else name, *args, **kwargs)
-
-    socket.getaddrinfo = getaddrinfo
 
 
 class ContextOverflow(Exception):
@@ -216,14 +190,12 @@ class Harness:
 
 def run(args: argparse.Namespace) -> Path:
     env = load_env(ENV_FILE)
-    if args.connect_ip:
-        pin_host(urllib.parse.urlparse(env["OPENAI_REVERSE_PROXY"]).hostname, args.connect_ip)
     replay = HttpReplay(offline=args.offline)
     replay.install()
     clock = Clock(replay.recorded_at)
     harness = Harness(env["OPENAI_REVERSE_PROXY"], env["OPENAI_API_KEY"], args.hide, clock)
     cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
-    models = args.models or [m for tier in args.tiers for m in TIERS[tier]]
+    models = args.models or MODELS
     jobs = [(m, c, r) for m in models for c in cases for r in range(args.repeats)]
 
     RESULTS.mkdir(exist_ok=True)
@@ -235,7 +207,7 @@ def run(args: argparse.Namespace) -> Path:
     def job(item):
         model, case, repeat = item
         started = time.time()
-        record = {"label": args.label, "model": model, "tier": TIER_OF.get(model, "other"),
+        record = {"label": args.label, "model": model,
                   "case": case.id, "tags": case.tags, "repeat": repeat}
         try:
             trace = harness.converse(model, case.prompt)
@@ -291,12 +263,11 @@ def summarize(paths: Sequence[Path]) -> None:
     rows = _load(paths)
     labels = sorted({r["label"] for r in rows})
     cases = sorted({r["case"] for r in rows})
-    models = sorted({r["model"] for r in rows}, key=lambda m: (list(TIERS).index(TIER_OF[m]) if m in TIER_OF else 9, m))
+    models = sorted({r["model"] for r in rows}, key=lambda m: (MODELS.index(m) if m in MODELS else 99, m))
     by = defaultdict(list)
     for r in rows:
         by[(r["label"], r["model"], r["case"])].append(r)
         by[(r["label"], r["model"], "*")].append(r)
-        by[(r["label"], r["tier"], "*")].append(r)
         by[(r["label"], "*", r["case"])].append(r)
         by[(r["label"], "*", "*")].append(r)
     for label in labels:
@@ -310,7 +281,6 @@ def summarize(paths: Sequence[Path]) -> None:
             line = f"{model[:33]:34}" + "".join(f"{_rate(by[(label, model, c)]):>13}" for c in cases)
             print(line + f"{_rate(group):>7}{errors:>10.1f}" + (f"  ({infra} infra)" if infra else ""))
         print(f"{'ALL':34}" + "".join(f"{_rate(by[(label, '*', c)]):>13}" for c in cases) + f"{_rate(by[(label, '*', '*')]):>7}")
-        print("by tier: " + ", ".join(f"{t} {_rate(by[(label, t, '*')]).strip()}" for t in TIERS))
         print(f"result ID reported in reply: {_rate(by[(label, '*', '*')], 'reported_result_id').strip()}")
     if len(labels) > 1:
         print("\n== failed checks by label")
@@ -347,14 +317,12 @@ def rescore(paths: Sequence[Path]) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="run", help="name for this tool set in the results")
-    parser.add_argument("--tiers", nargs="+", default=list(TIERS), choices=list(TIERS))
-    parser.add_argument("--models", nargs="+", help="model IDs instead of tiers")
+    parser.add_argument("--models", nargs="+", help="model IDs, default the LibreChat set")
     parser.add_argument("--cases", nargs="+", help="case IDs to run, default all")
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--hide", nargs="+", default=[], help="server tools to leave out")
     parser.add_argument("--offline", action="store_true", help="fail on HTTP responses not in the cache")
-    parser.add_argument("--connect-ip", help="IP to reach the proxy at, when the hosts file pins a private one")
     parser.add_argument("--compare", nargs="+", type=Path, help="summarize saved result files and exit")
     parser.add_argument("--rescore", action="store_true", help="with --compare, recheck traces first")
     args = parser.parse_args(argv)

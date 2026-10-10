@@ -167,10 +167,15 @@ def _asks_instead(trace: Trace, clock: Clock) -> Dict[str, bool]:
 
 
 def _gap_cells(trace: Trace, clock: Clock) -> Dict[str, bool]:
-    checks = _given([PHOENIX], 5.0, "field_of_regard_deg", 110.0, _exact(1))(trace, clock)
+    """A narrow swath leaves cells unseen; the reply must report them."""
+    checks = _given([DENVER, GRAND_JUNCTION], 10.0, "swath_width_km", 185.0, _exact(1))(trace, clock)
+    summary, _ = successful_finish(trace)
+    never = summary["summary_counts"]["never_observed_cell_count"] if summary else None
     checks["fetched_cells"] = any(
         call.name == "get_access_cells" and not call.error for call in trace.calls
     )
+    # The number of unseen cells, as digits, must appear in the reply.
+    checks["reported_gaps"] = never is not None and str(never) in re.findall(r"\d+", trace.final)
     return checks
 
 
@@ -206,13 +211,13 @@ def build_cases(clock: Clock) -> List[Case]:
         ),
         Case(
             "needs_review", ("geometry_unclear",),
-            "How often can the AMSR2 radiometer on GCOM-W see Phoenix, Arizona over the next 2 days?",
+            "How often can the radar on Sentinel-1A see Phoenix, Arizona over the next 2 days?",
             _asks_instead,
         ),
         Case(
             "fetch_gaps", ("short", "geometry_given", "fetch"),
-            f"Estimate Terra access over Phoenix, Arizona for 24 hours starting {d0}. {modis} "
-            "Then tell me which grid cells were never observed.",
+            f"Estimate Landsat 9 access over Colorado for 24 hours starting {d0}, using its "
+            "185 km swath from the USGS Landsat 9 page. Which parts of the state were never observed?",
             _gap_cells,
         ),
     ]
