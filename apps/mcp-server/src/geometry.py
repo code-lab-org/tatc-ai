@@ -16,9 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from tatc.utils import swath_width_to_field_of_regard
 
 # Words that mean the simple nadir cone model may misstate access.
+# Conical scanners are not listed: their stated ground swath is centered
+# on the track, so a cone with the same swath gives the same access.
 NON_NADIR_HINTS = (
     "limb",
-    "conical",
+    "side-looking",
     "oblique",
     "off-nadir",
     "off nadir",

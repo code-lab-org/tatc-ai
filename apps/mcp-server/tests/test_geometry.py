@@ -61,6 +61,18 @@ def test_limb_sounder_needs_review():
     assert status == "needs_review"
 
 
+def test_conical_scanner_swath_is_usable_but_side_looking_radar_is_not():
+    conical = extract_geometry_candidates(
+        {"Scanning Technique": "Conical: 55\xb0 zenith angle; swath: 1450 km"}
+    )
+    assert resolve_geometry_status(conical)[0] == "conclusive"
+    side = extract_geometry_candidates(
+        {"Scanning Technique": "Side-looking, 15-45\xb0 off-nadir, 250 km swath"}
+    )
+    assert side and side[0]["usable_for_coverage"] is False
+    assert resolve_geometry_status(side)[0] == "needs_review"
+
+
 def test_fov_reports_need_review_not_silent_use():
     specs = {"Swath": "FOV: 114 degree (cross track)."}
     candidates = extract_geometry_candidates(specs)

@@ -477,10 +477,13 @@ def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
         "geometry_status": status,
         "geometry_reason": reason,
         "recommended_candidate": recommended,
-        "guidance": (
-            "When geometry_status is not conclusive, ask the researcher "
-            "for swath_width_km or field_of_regard_deg with a source. "
-            "Never invent an angle from descriptive text."
+        "next_step": (
+            "Confirm this swath or angle with the researcher, then run coverage "
+            "with it and the oscar_url as geometry_reference."
+            if status == "conclusive"
+            else "Do not run coverage yet. Tell the researcher why the OSCAR "
+            "specs do not give one usable number, quote the spec text, and ask "
+            "them for a swath width or field of regard with a source."
         ),
     }
 

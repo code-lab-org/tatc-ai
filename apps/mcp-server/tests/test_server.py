@@ -337,7 +337,7 @@ class ServerTests(unittest.TestCase):
         payload = json.loads(result.content[0].text)
         self.assertEqual(payload["geometry_status"], "conclusive")
         self.assertEqual(payload["recommended_candidate"]["value"], 290.0)
-        self.assertIn("ask the researcher", payload["guidance"])
+        self.assertIn("Confirm this swath", payload["next_step"])
 
     def test_resolve_geometry_unknown_when_no_numbers(self):
         record = {
