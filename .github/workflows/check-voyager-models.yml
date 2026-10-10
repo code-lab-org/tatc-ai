@@ -1,0 +1,27 @@
+name: Check Voyager models
+
+on:
+  # Mondays 13:00 UTC. ASU changes models rarely, so weekly is plenty.
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Fails when a model TATC AI offers is no longer served, so GitHub
+      # emails the failure. New proxy models are listed in the job summary
+      # for a human to consider; nothing is added automatically.
+      # Needs a repo secret VOYAGER_API_KEY holding an ASU proxy key.
+      - name: Check offered models
+        run: |
+          OPENAI_API_KEY="${{ secrets.VOYAGER_API_KEY }}" \
+          OPENAI_REVERSE_PROXY="https://openai.rc.asu.edu/v1" \
+          python3 apps/librechat/check_voyager_models.py \
+            --summary "$GITHUB_STEP_SUMMARY"

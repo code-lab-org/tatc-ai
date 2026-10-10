@@ -70,12 +70,13 @@ responses, and scores what the server computed:
 
 ```bash
 cd apps/mcp-server
-.venv/bin/python -m eval.run_eval --label mychange --tiers small medium large
+.venv/bin/python -m eval.run_eval --label mychange
 .venv/bin/python -m eval.run_eval --compare eval/results/*.jsonl
 ```
 
-It reads the proxy key from `apps/librechat/.env` and sends prompts and
-tool schemas to the ASU proxy.
+By default it runs the models LibreChat offers; pass `--models` to try
+others. It reads the proxy key from `apps/librechat/.env`, sends prompts
+and tool schemas to the ASU proxy, and takes about half an hour.
 
 ## Development stack
 
@@ -102,26 +103,25 @@ Ground-track requests are capped at 2,000 output points. For example, a
 1-day request at 1-minute intervals produces 1,441 points.
 
 Local UI is branded as TATC AI (browser tab, welcome message, footer).
-Models are grouped under ASU Voyager, where all chat models come from for
-now. Every Voyager chat model has a labeled spec with its maker icon.
-The picker lists these specs only; raw provider entries are
-hidden. New chats default to the Qwen 3 30B Instruct spec with TATC satellite
-tools pinned.
+All chat models come from ASU Voyager. TATC AI offers five of them: the
+top Voyager models on the Artificial Analysis Intelligence Index that
+passed the tool-calling eval. They are GLM-5.3, GLM-5.3-Flash, DeepSeek
+V4.1 Flash, MiMo-V2.6-Flash, and Qwen 3.8 27B. New chats default to Qwen 3.8 27B
+with TATC satellite tools pinned.
 
-When the proxy gains models, sync the picker:
+The proxy serves more models, and any of them can be added. Add its ID to
+the endpoint's model list and a `modelSpecs` entry in both
+`apps/librechat/librechat.yaml` and `apps/librechat/librechat.deploy.yaml.template`,
+then run the tool-calling eval with `--models` before offering it.
 
 ```bash
-python3 apps/librechat/sync_voyager_models.py
-docker compose -f docker-compose.dev.yml restart librechat
+python3 apps/librechat/check_voyager_models.py
 ```
 
-The script adds new chat models with a guessed label and icon for review,
-drops retired ones, and keeps embedding, transcription, image, and video
-models out of the picker. Review its diff before committing.
-
-A weekly workflow does the same automatically and opens a PR when the proxy
-gains or retires models. It needs one repo secret: VOYAGER_API_KEY holding
-an ASU proxy key. Merging that PR deploys through the normal path.
+This lists offered models the proxy no longer serves, and proxy models
+that are not offered. A weekly workflow runs it and fails, which emails
+the repo owners, when an offered model disappears. It needs one repo
+secret: VOYAGER_API_KEY holding an ASU proxy key.
 
 ## Deployment stack
 
