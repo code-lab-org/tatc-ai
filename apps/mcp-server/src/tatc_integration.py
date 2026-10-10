@@ -16,32 +16,8 @@ DEFAULT_FOV_DEGREES = 60.0  # Default field of view for footprint calculation
 FOOTPRINT_POLYGON_POINTS = 16  # Number of points in circular footprint polygon
 EARTH_RADIUS_M = 6371000.0  # Earth radius in meters for footprint calculations
 
-try:
-    from tatc.schemas import GeneralPerturbationsOrbit
-
-    _HAS_GPO = True
-except ImportError:
-    GeneralPerturbationsOrbit = None  # type: ignore[assignment]
-    _HAS_GPO = False
-
-try:
-    from skyfield.api import wgs84
-
-    _HAS_WGS84 = True
-except ImportError:
-    wgs84 = None  # type: ignore[assignment]
-    _HAS_WGS84 = False
-
-TATC_AVAILABLE = _HAS_GPO and _HAS_WGS84
-
-
-def _require_tatc() -> None:
-    """Raise ImportError unless tatc and skyfield both imported."""
-    if not TATC_AVAILABLE:
-        raise ImportError(
-            "TAT-C libraries (tatc and skyfield) are not installed. "
-            "Install them with: pip install tatc"
-        )
+from skyfield.api import wgs84
+from tatc.schemas import GeneralPerturbationsOrbit
 
 
 def _ensure_utc(time: datetime) -> datetime:
@@ -64,8 +40,6 @@ def _extract_lla(subpoint) -> Tuple[float, float, float]:
 
 def create_orbit_from_omm(omm_records: List[Dict[str, Any]]) -> Any:
     """Create a TAT-C GeneralPerturbationsOrbit from OMM element records."""
-    _require_tatc()
-
     try:
         return GeneralPerturbationsOrbit.from_omm_json(json.dumps(omm_records))
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -81,8 +55,6 @@ def propagate_satellite(
     Propagate a satellite to a time and return (lat_deg, lon_deg, alt_m).
     Naive datetimes are assumed UTC.
     """
-    _require_tatc()
-
     try:
         time = _ensure_utc(time)
         track = satellite.get_orbit_track(time)  # Get orbit position at time
@@ -105,8 +77,6 @@ def generate_ground_track(
     Returns a list of (time, lat_deg, lon_deg, alt_m) tuples with naive UTC times.
     Raises ValueError if the step is not positive or no points could be produced.
     """
-    _require_tatc()
-
     try:
         step_seconds = float(step_seconds)
     except (TypeError, ValueError) as exc:

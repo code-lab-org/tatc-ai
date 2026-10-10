@@ -365,9 +365,7 @@ def test_generate_ground_track_rejects_bad_step_without_calling_satellite():
             )
 
 
-def test_integration_rejects_oversized_track_before_propagation(monkeypatch):
-    monkeypatch.setattr(ti, "_require_tatc", lambda: None)
-
+def test_integration_rejects_oversized_track_before_propagation():
     class ExplodingSatellite:
         def get_orbit_track(self, times):
             raise AssertionError("propagation must not be called")
