@@ -9,7 +9,7 @@ import io
 import json
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest import mock
 
 import cartopy.crs as ccrs
@@ -53,25 +53,12 @@ def _data(html):
     return json.loads(match.group(1).replace("<\\/", "</"))
 
 
-def test_unwrap_longitudes_keeps_antimeridian_crossing_continuous():
-    assert map_view.unwrap_longitudes([170.0, 179.0, -179.0, -170.0]) == [
-        170.0, 179.0, 181.0, 190.0]
-
-
-def test_unwrap_longitudes_westward_crossing():
-    assert map_view.unwrap_longitudes([-179.0, 179.0]) == [-179.0, -181.0]
-
-
-def test_unwrap_longitudes_leaves_normal_track_alone():
-    assert map_view.unwrap_longitudes([-10.0, 0.0, 15.5]) == [-10.0, 0.0, 15.5]
-
-
-def test_html_embeds_points_with_unwrapped_longitudes():
+def test_html_embeds_points_in_canonical_longitudes():
     html = map_view.build_ground_track_map_html(
         "ISS (ZARYA)", "25544",
         [_msg(10.0, 179.0, minute=0), _msg(11.0, -179.0, minute=1)], FAKE_PNG)
     points = _data(html)["points"]
-    assert [p["lon"] for p in points] == [179.0, 181.0]
+    assert [p["lon"] for p in points] == [179.0, -179.0]
     assert points[0]["time"] == "2026-01-01T00:00:00Z"
     assert points[0]["alt_km"] == 420.0
     assert "maplibre" in html.lower()
@@ -93,15 +80,13 @@ def test_html_escapes_script_breaking_names():
 
 
 def test_footprints_stay_in_canonical_coordinates():
-    # TAT-C footprints already sit in [-180, 180] and the globe draws them in
-    # place, so they are not shifted with the unwrapped point.
     footprint = _ring(-179.0, 0.0)
     html = map_view.build_ground_track_map_html(
         "ISS", "25544",
         [_msg(0.0, 179.0, footprint=_ring(179.0, 0.0)),
          _msg(0.0, -179.0, minute=1, footprint=footprint)], FAKE_PNG)
     points = _data(html)["points"]
-    assert points[1]["lon"] == 181.0
+    assert points[1]["lon"] == -179.0
     assert points[1]["footprint"] == footprint
 
 
@@ -124,7 +109,7 @@ def test_html_preserves_dateline_multipolygon_footprints():
         [_msg(0, 179), _msg(0, -179, minute=1, footprint=footprint)], FAKE_PNG,
     )
     point = _data(html)["points"][1]
-    assert point["lon"] == 181
+    assert point["lon"] == -179
     assert point["footprint"] == footprint
 
 
@@ -198,41 +183,116 @@ def _angle_deg(a, b):
     return math.degrees(math.acos(min(1.0, sum(x * y for x, y in zip(va, vb)))))
 
 
-def test_densify_track_keeps_samples_and_limits_segment_length():
-    lons, lats = [0.0, 30.0, 70.0], [0.0, 10.0, -20.0]
-    track = map_view.densify_track(lons, lats)
-    assert [0.0, 0.0] in track and [30.0, 10.0] in track and [70.0, -20.0] in track
-    assert len(track) > 60
-    assert all(_angle_deg(a, b) <= 1.0001 for a, b in zip(track, track[1:]))
+def _orbit_msgs(count, step_minutes=1, alt=420000.0):
+    """An inclined, eastward track that circles the Earth every 90 minutes."""
+    start = datetime(2026, 1, 1)
+    msgs = []
+    for i in range(count):
+        m = _msg(51.6 * math.sin(2 * math.pi * i * step_minutes / 90),
+                 ((-100 + 4 * i * step_minutes + 180) % 360) - 180, alt)
+        m["time"] = (start + timedelta(minutes=i * step_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        msgs.append(m)
+    return msgs
 
 
-def test_densify_track_follows_the_great_circle_not_the_straight_line():
+def test_great_circle_path_keeps_samples_and_limits_segment_length():
+    path = map_view.great_circle_path(0.0, 0.0, 30.0, 10.0)
+    assert path[0] == (0.0, 0.0) and path[-1] == (30.0, 10.0)
+    assert len(path) > 30
+    assert all(_angle_deg(a, b) <= 1.0001 for a, b in zip(path, path[1:]))
+
+
+def test_great_circle_path_follows_the_great_circle_not_the_straight_line():
     # Along 60N a great circle between two points bulges poleward of the
     # parallel, where a Mercator straight line would stay on it.
-    track = map_view.densify_track([0.0, 60.0], [60.0, 60.0])
-    assert max(lat for _, lat in track) > 63
+    path = map_view.great_circle_path(0.0, 60.0, 60.0, 60.0)
+    assert max(lat for _, lat in path) > 63
 
 
-def test_densify_track_stays_continuous_across_the_antimeridian():
-    track = map_view.densify_track([170.0, 190.0], [0.0, 0.0])
-    lons = [lon for lon, _ in track]
-    assert lons[0] == 170.0 and lons[-1] == 190.0
-    assert lons == sorted(lons)
-    assert all(b - a <= 1.0001 for a, b in zip(lons, lons[1:]))
+@pytest.mark.parametrize(("lon0", "lon1"), [(170.0, -170.0), (-170.0, 170.0)])
+def test_great_circle_path_is_continuous_across_the_antimeridian(lon0, lon1):
+    lons = [lon for lon, _ in map_view.great_circle_path(lon0, 0.0, lon1, 0.0)]
+    assert all(abs(b - a) <= 1.0001 for a, b in zip(lons, lons[1:]))
+    assert abs(lons[-1] - lons[0]) == 20.0
 
 
-def test_densify_track_handles_single_sample_and_repeated_sample():
-    assert map_view.densify_track([5.0], [6.0]) == [[5.0, 6.0]]
-    assert map_view.densify_track([5.0, 5.0], [6.0, 6.0]) == [[5.0, 6.0], [5.0, 6.0]]
+def test_great_circle_path_handles_repeated_sample():
+    assert map_view.great_circle_path(5.0, 6.0, 5.0, 6.0) == [(5.0, 6.0), (5.0, 6.0)]
 
 
-def test_html_embeds_densified_track_but_points_stay_samples():
+def test_split_at_antimeridian_leaves_other_paths_whole():
+    assert map_view.split_at_antimeridian([(-10.0, 0.0), (0.0, 5.0)]) == [
+        [[-10.0, 0.0], [0.0, 5.0]]]
+
+
+@pytest.mark.parametrize(("path", "seam"), [
+    ([(179.0, 0.0), (181.0, 10.0)], 180.0),
+    ([(-179.0, 0.0), (-181.0, 10.0)], -180.0),
+])
+def test_split_at_antimeridian_ends_and_starts_pieces_at_the_seam(path, seam):
+    west, east = map_view.split_at_antimeridian(path)
+    assert west[-1] == [seam, 5.0]
+    assert east[0] == [-seam, 5.0]
+    assert west[0] == [path[0][0], 0.0]
+    assert east[-1] == [path[1][0] - math.copysign(360, path[1][0]), 10.0]
+
+
+def _vertices(pieces):
+    return [v for piece in pieces for v in piece]
+
+
+def test_track_intervals_stay_within_the_world_over_many_orbits():
+    msgs = _orbit_msgs(300)  # 3.3 laps
+    lons = [m["position_lla"]["lon_deg"] for m in msgs]
+    lats = [m["position_lla"]["lat_deg"] for m in msgs]
+    intervals = map_view.track_intervals(lons, lats)
+
+    assert len(intervals) == 299
+    assert all(-180.0001 <= lon <= 180.0001
+               for pieces in intervals for lon, _ in _vertices(pieces))
+    # Each interval runs from its sample to the next one.
+    for i, pieces in enumerate(intervals):
+        assert _vertices(pieces)[0] == [lons[i], pytest.approx(lats[i], abs=1e-4)]
+        assert _vertices(pieces)[-1] == [lons[i + 1], pytest.approx(lats[i + 1], abs=1e-4)]
+    # Every dateline crossing splits an interval, with no gap in latitude.
+    split = [pieces for pieces in intervals if len(pieces) == 2]
+    assert len(split) == 3
+    for west, east in split:
+        assert abs(west[-1][0]) == 180.0 and east[0][0] == -west[-1][0]
+        assert west[-1][1] == east[0][1]
+
+
+def test_html_embeds_track_intervals_but_points_stay_samples():
     html = map_view.build_ground_track_map_html(
         "AQUA", "27424", [_msg(0, 0), _msg(0, 30, minute=5)], FAKE_PNG)
     data = _data(html)
     assert len(data["points"]) == 2
-    assert len(data["track"]) > 30
-    assert data["track"][0] == [0, 0] and data["track"][-1] == [30, 0]
+    assert len(data["track"]) == 1  # one interval between the two samples
+    track = _vertices(data["track"][0])
+    assert len(track) > 30
+    assert track[0] == [0, 0] and track[-1] == [30, 0]
+
+
+def test_current_orbit_half_window_is_half_a_kepler_period_in_samples():
+    # 420 km altitude: period 92.9 minutes, so 46.4 minutes each way.
+    msgs = _orbit_msgs(300)
+    times = [m["time"] for m in msgs]
+    assert map_view.current_orbit_half_window(times, [420000.0] * 300) == 47
+    # Higher orbits are slower, so the window grows with altitude.
+    assert map_view.current_orbit_half_window(times, [800000.0] * 300) == 51
+
+
+def test_current_orbit_half_window_covers_a_track_shorter_than_one_orbit():
+    times = [m["time"] for m in _orbit_msgs(91)]  # 90 minutes < 92.9
+    assert map_view.current_orbit_half_window(times, [420000.0] * 91) == 91
+    assert map_view.current_orbit_half_window(times[:1], [420000.0]) == 1
+
+
+def test_page_filters_the_current_orbit_on_static_sources():
+    html = map_view.build_ground_track_map_html(
+        "ISS", "25544", _orbit_msgs(300), FAKE_PNG)
+    assert _data(html)["half_window"] == 47
+    assert 'map.setFilter("orbit"' in html and 'map.setFilter("points"' in html
 
 
 def test_page_has_follow_toggle_and_footprints_on_by_default():
@@ -352,7 +412,7 @@ def test_map_tool_returns_summary_and_ui_resource():
     assert resource.mimeType == "text/html"
     assert "data:image/png;base64," in resource.text
     points = _data(resource.text)["points"]
-    assert [p["lon"] for p in points] == [179.5, 180.5]
+    assert [p["lon"] for p in points] == [179.5, -179.5]
     # Footprints are always computed: they only go into the HTML, never to the model.
     assert compute.call_args.kwargs["include_footprint"] is True
     assert all(p["footprint"] is not None for p in points)

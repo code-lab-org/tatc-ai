@@ -45,8 +45,10 @@ LibreChat renders inline from a `ui://` resource. Both are drawn in
 LibreChat's dark theme. On the globe, the Footprint box is checked by
 default, Follow keeps the satellite centered while playing or scrubbing
 until you move the map by hand, the drawn track follows great circles between
-samples, and footprints are cut at 85 degrees latitude, the limit of the
-globe's map tiles.
+samples and is split at the antimeridian, the current orbit (one period around
+the satellite, from Kepler's law on the mean altitude) is bright with hoverable
+points while the rest of the track is faded, and footprints are cut at 85
+degrees latitude, the limit of the globe's map tiles.
 
 ### Coverage estimates
 

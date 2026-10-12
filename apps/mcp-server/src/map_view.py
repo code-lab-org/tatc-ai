@@ -10,7 +10,8 @@ import base64
 import html
 import json
 import math
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import shapely
 from shapely.geometry import mapping, shape
@@ -21,19 +22,8 @@ MAX_LATITUDE = 85.0
 # The drawn track is a great circle through this many degrees at most between
 # vertices; MapLibre would otherwise draw straight Mercator lines between samples.
 MAX_TRACK_SEGMENT_DEG = 1.0
-
-
-def unwrap_longitudes(lons: List[float]) -> List[float]:
-    """Shift longitudes by 360 so a track crossing the antimeridian stays continuous."""
-    unwrapped = []
-    for lon in lons:
-        if unwrapped:
-            while lon - unwrapped[-1] > 180:
-                lon -= 360
-            while lon - unwrapped[-1] < -180:
-                lon += 360
-        unwrapped.append(lon)
-    return unwrapped
+EARTH_RADIUS_M = 6378137.0
+EARTH_MU_M3_S2 = 3.986004418e14
 
 
 def _unit_vector(lon: float, lat: float) -> List[float]:
@@ -43,30 +33,87 @@ def _unit_vector(lon: float, lat: float) -> List[float]:
             math.sin(lat_rad)]
 
 
-def densify_track(
-    lons: List[float], lats: List[float], max_step_deg: float = MAX_TRACK_SEGMENT_DEG
-) -> List[List[float]]:
-    """Return [lon, lat] vertices with great-circle points between samples.
+def _turn(lon: float) -> int:
+    """Which 360 degree copy of the world a longitude lies in; 0 is [-180, 180)."""
+    return math.floor((lon + 180) / 360)
 
-    The samples themselves are kept exactly. Input longitudes must already be
-    unwrapped; the result stays continuous across the antimeridian.
+
+def great_circle_path(
+    lon0: float, lat0: float, lon1: float, lat1: float,
+    max_step_deg: float = MAX_TRACK_SEGMENT_DEG,
+) -> List[Tuple[float, float]]:
+    """Return (lon, lat) vertices from one sample to the next along the great circle.
+
+    Both samples are kept exactly. Longitudes are continuous, so they may leave
+    [-180, 180] where the path crosses the antimeridian.
     """
-    coords = [(lons[0], lats[0])]
-    for lon, lat, prev_lon, prev_lat in zip(lons[1:], lats[1:], lons, lats):
-        a, b = _unit_vector(prev_lon, prev_lat), _unit_vector(lon, lat)
-        angle = math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(a, b)))))
-        pieces = math.ceil(math.degrees(angle) / max_step_deg)
-        for k in range(1, pieces):
-            # Spherical linear interpolation along the great circle.
-            t = k / pieces
-            wa = math.sin((1 - t) * angle) / math.sin(angle)
-            wb = math.sin(t * angle) / math.sin(angle)
-            x, y, z = (wa * u + wb * v for u, v in zip(a, b))
-            coords.append((math.degrees(math.atan2(y, x)),
-                           math.degrees(math.asin(max(-1.0, min(1.0, z))))))
-        coords.append((lon, lat))
-    unwrapped = unwrap_longitudes([lon for lon, _ in coords])
-    return [[round(lon, 4), round(lat, 4)] for lon, (_, lat) in zip(unwrapped, coords)]
+    a, b = _unit_vector(lon0, lat0), _unit_vector(lon1, lat1)
+    angle = math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(a, b)))))
+    pieces = math.ceil(math.degrees(angle) / max_step_deg)
+    path = [(lon0, lat0)]
+    for k in range(1, pieces):
+        # Spherical linear interpolation along the great circle.
+        t = k / pieces
+        wa = math.sin((1 - t) * angle) / math.sin(angle)
+        wb = math.sin(t * angle) / math.sin(angle)
+        x, y, z = (wa * u + wb * v for u, v in zip(a, b))
+        lon = math.degrees(math.atan2(y, x))
+        path.append((lon + 360 * round((path[-1][0] - lon) / 360),
+                     math.degrees(math.asin(max(-1.0, min(1.0, z))))))
+    lon1 += 360 * round((path[-1][0] - lon1) / 360)
+    path.append((lon1, lat1))
+    return path
+
+
+def split_at_antimeridian(path: List[Tuple[float, float]]) -> List[List[List[float]]]:
+    """Cut a continuous path into [lon, lat] pieces that stay within [-180, 180].
+
+    Where the path crosses the antimeridian one piece ends on the seam and the
+    next starts on the opposite seam at the same latitude, so nothing is drawn
+    across the map. Consecutive vertices must be less than 360 degrees apart.
+    """
+    (lon, lat), *rest = path
+    pieces = [[[round(lon - 360 * _turn(lon), 4), round(lat, 4)]]]
+    for lon1, lat1 in rest:
+        turn0, turn1 = _turn(lon), _turn(lon1)
+        if turn0 != turn1:
+            seam = 180 + 360 * min(turn0, turn1)
+            seam_lat = round(lat + (lat1 - lat) * (seam - lon) / (lon1 - lon), 4)
+            edge = 180.0 if turn1 > turn0 else -180.0
+            pieces[-1].append([edge, seam_lat])
+            pieces.append([[-edge, seam_lat]])
+        pieces[-1].append([round(lon1 - 360 * turn1, 4), round(lat1, 4)])
+        lon, lat = lon1, lat1
+    return pieces
+
+
+def track_intervals(lons: List[float], lats: List[float]) -> List[List[List[List[float]]]]:
+    """Return the track between each pair of consecutive samples.
+
+    Interval i runs from sample i to sample i + 1 along a great circle, as
+    [lon, lat] pieces cut at the antimeridian. Keeping the intervals separate
+    lets the page highlight a stretch of the track with a layer filter on i.
+    """
+    return [
+        split_at_antimeridian(great_circle_path(*start, *end))
+        for start, end in zip(zip(lons, lats), zip(lons[1:], lats[1:]))
+    ]
+
+
+def current_orbit_half_window(times: List[str], alts_m: List[float]) -> int:
+    """Return how many samples the current orbit reaches back and ahead.
+
+    The period comes from Kepler's third law on the mean altitude, a circular
+    orbit being close enough to highlight about one lap. A track shorter than
+    one period is all current orbit.
+    """
+    semi_major_axis = EARTH_RADIUS_M + sum(alts_m) / len(alts_m)
+    period_s = 2 * math.pi * math.sqrt(semi_major_axis ** 3 / EARTH_MU_M3_S2)
+    start, end = (datetime.fromisoformat(t) for t in (times[0], times[-1]))
+    duration_s = (end - start).total_seconds()
+    if duration_s <= period_s:
+        return len(times)
+    return math.ceil(period_s / 2 / (duration_s / (len(times) - 1)))
 
 
 def clip_footprint(footprint: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -92,18 +139,23 @@ def build_ground_track_map_html(
 ) -> str:
     """Return the map page for formatted ground-track telemetry messages."""
     lats = [m["position_lla"]["lat_deg"] for m in messages]
-    lons = unwrap_longitudes([m["position_lla"]["lon_deg"] for m in messages])
+    lons = [m["position_lla"]["lon_deg"] for m in messages]
+    alts_m = [m["position_lla"]["alt_m"] for m in messages]
     points = [
         {
             "time": m["time"],
             "lat": lat,
             "lon": lon,
-            "alt_km": round(m["position_lla"]["alt_m"] / 1000, 1),
+            "alt_km": round(alt_m / 1000, 1),
             "footprint": clip_footprint(m.get("footprint_geojson")),
         }
-        for m, lat, lon in zip(messages, lats, lons)
+        for m, lat, lon, alt_m in zip(messages, lats, lons, alts_m)
     ]
-    data = {"points": points, "track": densify_track(lons, lats)}
+    data = {
+        "points": points,
+        "track": track_intervals(lons, lats),
+        "half_window": current_orbit_half_window([m["time"] for m in messages], alts_m),
+    }
     title = f"{name} (NORAD {norad_id})"
     # Escape "</" so a value cannot close the <script> block early.
     data_json = json.dumps(data).replace("</", "<\\/")
@@ -194,8 +246,7 @@ const DATA = __DATA__;
 <script>
 const pts = DATA.points;
 const color = "#d6336c";
-const wrapLon = (lon) => (((lon + 540) % 360) - 180).toFixed(4);
-const describe = (p) => `${p.time} · ${p.lat}, ${wrapLon(p.lon)} · ${p.alt_km} km`;
+const describe = (p) => `${p.time} · ${p.lat}, ${p.lon} · ${p.alt_km} km`;
 
 const PLAY_INTERVAL_MS = 200;
 const empty = { type: "FeatureCollection", features: [] };
@@ -245,9 +296,20 @@ const slider = document.getElementById("slider");
 const footprintBox = document.getElementById("footprint");
 slider.max = pts.length - 1;
 
+// The current orbit is the stretch of track within half_window samples of the
+// satellite. Moving it is a filter change on static sources: no data is re-sent.
+function highlightOrbit(i) {
+  const lo = Math.max(0, i - DATA.half_window);
+  const hi = Math.min(pts.length - 1, i + DATA.half_window);
+  const inWindow = (upper) => ["all", [">=", ["get", "i"], lo], [upper, ["get", "i"], hi]];
+  map.setFilter("orbit", inWindow("<"));
+  map.setFilter("points", inWindow("<="));
+}
+
 function show(i) {
   const p = pts[i];
   slider.value = i;
+  highlightOrbit(i);
   sat.setLngLat([p.lon, p.lat]);
   document.getElementById("readout").textContent = describe(p);
   map.getSource("footprint").setData(footprintBox.checked && p.footprint ? p.footprint : empty);
@@ -278,12 +340,17 @@ for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type,
 for (const type of ["dragstart", "rotatestart", "pitchstart"]) map.on(type, () => setFollowing(false));
 
 map.on("load", () => {
-  // Track (densified along great circles); clicking a point moves the slider there, hovering shows its details.
+  // The whole track is faded, the current orbit bright. Both draw the same
+  // source, one feature per sample interval, along great circles. Points on
+  // the current orbit can be clicked to move the slider there, and hovered for details.
   map.addSource("track", { type: "geojson", data: {
-    type: "Feature", properties: {},
-    geometry: { type: "LineString", coordinates: DATA.track },
+    type: "FeatureCollection",
+    features: DATA.track.map((pieces, i) => ({ type: "Feature", properties: { i },
+      geometry: { type: "MultiLineString", coordinates: pieces } })),
   } });
   map.addLayer({ id: "track", type: "line", source: "track",
+    paint: { "line-color": color, "line-width": 1.5, "line-opacity": 0.35 } });
+  map.addLayer({ id: "orbit", type: "line", source: "track",
     paint: { "line-color": color, "line-width": 3 } });
   map.addSource("points", { type: "geojson", data: {
     type: "FeatureCollection",
