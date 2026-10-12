@@ -60,7 +60,12 @@ def offered_models(path: Path) -> list:
     import yaml
 
     specs = yaml.safe_load(path.read_text())["modelSpecs"]["list"]
-    return [spec["preset"]["model"] for spec in specs]
+    # CreateAI specs are served by another API, so they are not checked here.
+    return [
+        spec["preset"]["model"]
+        for spec in specs
+        if spec["preset"]["endpoint"] == "ASU Voyager"
+    ]
 
 
 def main() -> int:

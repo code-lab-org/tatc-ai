@@ -47,10 +47,15 @@ SUFFIX = "_mcp_tatc"
 MAX_TURNS = 14
 REQUEST_TIMEOUT = 240
 
-# The models TATC AI offers, read from LibreChat's modelSpecs so the two
-# lists cannot drift apart; pass --models to try others.
+# The ASU Voyager models TATC AI offers, read from LibreChat's modelSpecs so
+# the two lists cannot drift apart; pass --models to try others. CreateAI
+# specs are skipped: the eval talks to the Voyager proxy.
 LIBRECHAT_CONFIG = HERE.parents[1] / "librechat" / "librechat.yaml"
-_PRESETS = [spec["preset"] for spec in yaml.safe_load(LIBRECHAT_CONFIG.read_text())["modelSpecs"]["list"]]
+_PRESETS = [
+    spec["preset"]
+    for spec in yaml.safe_load(LIBRECHAT_CONFIG.read_text())["modelSpecs"]["list"]
+    if spec["preset"]["endpoint"] == "ASU Voyager"
+]
 MODELS = [preset["model"] for preset in _PRESETS]
 # Models LibreChat is told not to stream; the probe reports them without failing.
 NO_STREAMING = {preset["model"] for preset in _PRESETS if preset.get("disableStreaming")}

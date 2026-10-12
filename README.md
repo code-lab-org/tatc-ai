@@ -128,14 +128,15 @@ Ground-track requests are capped at 2,000 output points. For example, a
 1-day request at 1-minute intervals produces 1,441 points.
 
 Local UI is branded as TATC AI (browser tab, welcome message, footer).
-All chat models come from ASU Voyager. TATC AI offers five of them: the
-top Voyager models on the Artificial Analysis Intelligence Index that
-passed the tool-calling eval. They are GLM-5.3, GLM-5.3-Flash, DeepSeek
-V4.1 Flash, MiMo-V2.6-Flash, and Qwen 3.8 27B. New chats default to Qwen 3.8 27B
-with TATC satellite tools pinned.
-The ASU CreateAI endpoint is still configured alongside them.
+TATC AI offers five ASU Voyager models: the top Voyager models on the
+Artificial Analysis Intelligence Index that passed the tool-calling eval.
+They are GLM-5.3, GLM-5.3-Flash, DeepSeek V4.1 Flash, MiMo-V2.6-Flash, and
+Qwen 3.8 27B. It also offers 50 ASU CreateAI models (Amazon Nova, Claude,
+Gemini, Gemma, Llama, and OpenAI), grouped separately in the model menu; the
+Voyager eval and model check cover only the Voyager models. New chats default
+to Qwen 3.8 27B with TATC satellite tools pinned.
 
-The proxy serves more models, and any of them can be added. Add its ID to
+The Voyager proxy serves more models, and any of them can be added. Add its ID to
 the endpoint's model list and a `modelSpecs` entry in both
 `apps/librechat/librechat.yaml` and `apps/librechat/librechat.deploy.yaml.template`,
 then run the tool-calling eval with `--models` before offering it.
@@ -201,12 +202,15 @@ same issuer URL without depending on outbound internet DNS.
 ## Auto-deploy
 
 `.github/workflows/deploy.yml` redeploys the EC2 instance over SSH:
-- on every push to `main` (picks up config/compose/Dex changes), and
-- after `build-mcp-server.yml` finishes pushing a new image (picks up mcp-server
-  code changes, after the image is actually available in GHCR rather than
-  racing it).
+- on a push to `main` that does not change the MCP server image inputs
+  (`apps/mcp-server/**` or `build-mcp-server.yml`), deploying config/compose/Dex
+  changes immediately, and
+- after `build-mcp-server.yml` finishes pushing a new image. A push that changes
+  those inputs skips the immediate deploy, so new config never runs against the
+  old image; if the build fails, nothing deploys until the next push. If the
+  push cannot be diffed (a force push), it deploys immediately.
 
-Both triggers run the same thing: `config/deploy/deploy.sh` on the instance,
+Either way it runs the same thing: `config/deploy/deploy.sh` on the instance,
 which does `git merge --ff-only` then `docker compose -f
 docker-compose.deploy.yml pull && ... up -d`. It fails loudly rather than
 overwriting anything if the checkout has diverged from `main`.
