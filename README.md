@@ -38,9 +38,15 @@ docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp
 altitude in meters) and, with `include_footprint`, a TAT-C footprint per
 point: the ground area inside a 60 degree cone under the satellite, as a
 GeoJSON Polygon or a MultiPolygon split at the antimeridian.
-`ground_track_map` takes the same arguments and returns a short text summary
-plus an interactive globe page (MapLibre) with a static Cartopy picture,
-which LibreChat renders inline from a `ui://` resource.
+`ground_track_map` takes the satellite, start time, duration, and step
+interval, always includes footprints, and returns a short text summary plus
+an interactive globe page (MapLibre) with a static Cartopy picture, which
+LibreChat renders inline from a `ui://` resource. Both are drawn in
+LibreChat's dark theme. On the globe, the Footprint box is checked by
+default, Follow keeps the satellite centered while playing or scrubbing
+until you move the map by hand, the drawn track follows great circles between
+samples, and footprints are cut at 85 degrees latitude, the limit of the
+globe's map tiles.
 
 ### Coverage estimates
 
@@ -87,6 +93,13 @@ cd apps/mcp-server
 By default it runs the models LibreChat offers; pass `--models` to try
 others. It reads the proxy key from `apps/librechat/.env`, sends prompts
 and tool schemas to the ASU proxy, and takes about half an hour.
+
+The conversations are not streamed, but LibreChat streams. So each run
+first sends every model one short streamed request and reports `stream:
+ok`, `missing role`, or `no tool call`. LibreChat drops tool calls from a
+stream whose first delta has no `role`. Models marked `disableStreaming` in
+`librechat.yaml` (GLM-5.3 and DeepSeek) are noted rather than failed. `--stream-only`
+runs just this check.
 
 ## Development stack
 

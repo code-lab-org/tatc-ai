@@ -94,7 +94,8 @@ SERVER_INSTRUCTIONS = (
     "never narrate your tool steps. Ask for missing pieces conversationally, "
     "like a place and dates. "
     "When the user asks to visualize, map, plot, or show a ground track, use "
-    "the ground track map tool with the same arguments as the ground-track tool. "
+    "the ground track map tool with the satellite, start time, duration, and "
+    "step interval you would give the ground-track tool. "
     "All tools are read-only."
 )
 
@@ -329,7 +330,7 @@ def generate_ground_track(
     include_footprint: bool = False,
 ) -> List[Dict[str, Any]]:
     """Generate a satellite ground track over a time period. To show it on an
-    interactive map, use the ground track map tool with the same arguments.
+    interactive map, use the ground track map tool instead.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -343,7 +344,7 @@ def generate_ground_track(
             area inside a 60 degree cone under the satellite, from TAT-C, as
             a Polygon or a MultiPolygon split at the antimeridian. Defaults to
             False: footprints are ~86% of the payload and tabular answers never
-            need them. Set True for mapping.
+            need them.
 
     Returns:
         Telemetry objects with id, time (ISO-8601 UTC), position_lla
@@ -362,11 +363,11 @@ def ground_track_map(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
-    include_footprint: bool = True,
 ) -> ToolResult:
     """Visualize, map, or plot a satellite ground track on an interactive map.
     Use this whenever the user asks to see, show, draw, or visualize where a
-    satellite goes. Takes the same arguments as the ground-track tool.
+    satellite goes. The map always includes TAT-C footprints, which the user
+    can toggle.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -376,18 +377,15 @@ def ground_track_map(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
-        include_footprint: Let the user show the footprint on the map: the
-            ground area inside a 60 degree cone under the satellite, from
-            TAT-C, as a Polygon or a MultiPolygon split at the antimeridian.
-            Defaults to True; footprints stay in the map, not the reply.
 
     Returns:
         A short text summary and the map (interactive and static views),
         which is shown to the user.
     """
+    # Footprints stay in the map page; they never reach the model.
     sat_info, messages = _compute_ground_track(
         satellite_identifier, start_time, duration, step_interval,
-        include_footprint,
+        include_footprint=True,
     )
     norad_id = str(sat_info["norad_id"])
     name = sat_info.get("name", norad_id)

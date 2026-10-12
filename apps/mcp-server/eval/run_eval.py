@@ -11,6 +11,7 @@ Usage, from apps/mcp-server:
     .venv/bin/python -m eval.run_eval --label baseline
     .venv/bin/python -m eval.run_eval --label trial --models glm-5-3 qwen38-27b
     .venv/bin/python -m eval.run_eval --compare eval/results/a.jsonl eval/results/b.jsonl
+    .venv/bin/python -m eval.run_eval --stream-only    # just the streaming probe
 
 Reads VOYAGER_API_KEY and VOYAGER_BASE_URL from apps/librechat/.env.
 Sends prompts and tool schemas to the ASU proxy; no project code or data.
@@ -49,10 +50,25 @@ REQUEST_TIMEOUT = 240
 # The models TATC AI offers, read from LibreChat's modelSpecs so the two
 # lists cannot drift apart; pass --models to try others.
 LIBRECHAT_CONFIG = HERE.parents[1] / "librechat" / "librechat.yaml"
-MODELS = [
-    spec["preset"]["model"]
-    for spec in yaml.safe_load(LIBRECHAT_CONFIG.read_text())["modelSpecs"]["list"]
-]
+_PRESETS = [spec["preset"] for spec in yaml.safe_load(LIBRECHAT_CONFIG.read_text())["modelSpecs"]["list"]]
+MODELS = [preset["model"] for preset in _PRESETS]
+# Models LibreChat is told not to stream; the probe reports them without failing.
+NO_STREAMING = {preset["model"] for preset in _PRESETS if preset.get("disableStreaming")}
+STREAM_PROMPT = "Look up the ISS with the satellite search tool."
+
+
+def judge_stream(events: List[Dict[str, Any]]) -> str:
+    """Judge streamed chunks the way LibreChat's LangChain client reads them.
+
+    It starts a message from the first delta's role and drops tool calls
+    streamed without one.
+    """
+    deltas = [e["choices"][0]["delta"] for e in events if e.get("choices")]
+    if not deltas or deltas[0].get("role") != "assistant":
+        return "missing role"
+    if not any(d.get("tool_calls") for d in deltas):
+        return "no tool call"
+    return "ok"
 
 
 def load_env(path: Path) -> Dict[str, str]:
@@ -140,6 +156,24 @@ class Harness:
             time.sleep(5 * (attempt + 1))
         raise RuntimeError(f"model call failed: {error!r}")
 
+    def probe_stream(self, model: str) -> str:
+        """Stream one short tool-using request and judge it with judge_stream."""
+        body = json.dumps({
+            "model": model, "stream": True, "max_tokens": 512, "tools": self.tools,
+            "messages": [{"role": "system", "content": self.system},
+                         {"role": "user", "content": STREAM_PROMPT}],
+        }).encode()
+        request = urllib.request.Request(
+            self.base_url + "/chat/completions", data=body,
+            headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+                lines = [line.decode().strip() for line in response]
+        except OSError as exc:  # includes URLError and HTTPError
+            return f"error {exc!r}"[:80]
+        return judge_stream([json.loads(line[5:]) for line in lines
+                             if line.startswith("data:") and "[DONE]" not in line])
+
     def converse(self, model: str, prompt: str) -> Trace:
         trace = Trace(prompt=prompt)
         messages: List[Dict[str, Any]] = [
@@ -187,7 +221,18 @@ class Harness:
         return trace
 
 
-def run(args: argparse.Namespace) -> Path:
+def probe_streams(harness: Harness, models: Sequence[str]) -> List[str]:
+    """Report one line per model; models in NO_STREAMING are noted, not failed."""
+    with ThreadPoolExecutor(len(models)) as pool:
+        verdicts = list(pool.map(harness.probe_stream, models))
+    return [
+        f"stream: {model:32} {verdict}"
+        + (" (disableStreaming)" if model in NO_STREAMING else "" if verdict == "ok" else "  <- FAIL")
+        for model, verdict in zip(models, verdicts)
+    ]
+
+
+def run(args: argparse.Namespace) -> None:
     env = load_env(ENV_FILE)
     replay = HttpReplay(offline=args.offline)
     replay.install()
@@ -195,6 +240,10 @@ def run(args: argparse.Namespace) -> Path:
     harness = Harness(env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"], args.hide, clock)
     cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
     models = args.models or MODELS
+    streams = probe_streams(harness, models)
+    if args.stream_only:
+        print("\n".join(streams))
+        return
     jobs = [(m, c, r) for m in models for c in cases for r in range(args.repeats)]
 
     RESULTS.mkdir(exist_ok=True)
@@ -241,7 +290,7 @@ def run(args: argparse.Namespace) -> Path:
     finally:
         replay.save()
     summarize([out])
-    return out
+    print("\n" + "\n".join(streams))
 
 
 def _load(paths: Sequence[Path]) -> List[Dict[str, Any]]:
@@ -321,6 +370,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--hide", nargs="+", default=[], help="server tools to leave out")
+    parser.add_argument("--stream-only", action="store_true", help="only run the streaming probe")
     parser.add_argument("--offline", action="store_true", help="fail on HTTP responses not in the cache")
     parser.add_argument("--compare", nargs="+", type=Path, help="summarize saved result files and exit")
     parser.add_argument("--rescore", action="store_true", help="with --compare, recheck traces first")

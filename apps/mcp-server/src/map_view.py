@@ -9,7 +9,18 @@ picture drawn on the server.
 import base64
 import html
 import json
-from typing import Any, Dict, List
+import math
+from typing import Any, Dict, List, Optional
+
+import shapely
+from shapely.geometry import mapping, shape
+
+# MapLibre's globe stretches geometry beyond the Web Mercator limit (85.0511)
+# to the pole, which draws a wedge toward it. Footprints are cut at 85.
+MAX_LATITUDE = 85.0
+# The drawn track is a great circle through this many degrees at most between
+# vertices; MapLibre would otherwise draw straight Mercator lines between samples.
+MAX_TRACK_SEGMENT_DEG = 1.0
 
 
 def unwrap_longitudes(lons: List[float]) -> List[float]:
@@ -25,43 +36,77 @@ def unwrap_longitudes(lons: List[float]) -> List[float]:
     return unwrapped
 
 
-def _footprint_near(footprint: Dict[str, Any], lon: float) -> Dict[str, Any]:
-    """Move a footprint polygon next to its point's (unwrapped) longitude."""
-    geometry = footprint["geometry"]
-    # Already-cut dateline pieces and polar caps use canonical GeoJSON
-    # coordinates. The globe renders them directly; unwrapping their vertices
-    # would undo the seam cuts or collapse the cap's edge along the pole.
-    if geometry["type"] == "MultiPolygon":
+def _unit_vector(lon: float, lat: float) -> List[float]:
+    lon_rad, lat_rad = math.radians(lon), math.radians(lat)
+    return [math.cos(lat_rad) * math.cos(lon_rad),
+            math.cos(lat_rad) * math.sin(lon_rad),
+            math.sin(lat_rad)]
+
+
+def densify_track(
+    lons: List[float], lats: List[float], max_step_deg: float = MAX_TRACK_SEGMENT_DEG
+) -> List[List[float]]:
+    """Return [lon, lat] vertices with great-circle points between samples.
+
+    The samples themselves are kept exactly. Input longitudes must already be
+    unwrapped; the result stays continuous across the antimeridian.
+    """
+    coords = [(lons[0], lats[0])]
+    for lon, lat, prev_lon, prev_lat in zip(lons[1:], lats[1:], lons, lats):
+        a, b = _unit_vector(prev_lon, prev_lat), _unit_vector(lon, lat)
+        angle = math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(a, b)))))
+        pieces = math.ceil(math.degrees(angle) / max_step_deg)
+        for k in range(1, pieces):
+            # Spherical linear interpolation along the great circle.
+            t = k / pieces
+            wa = math.sin((1 - t) * angle) / math.sin(angle)
+            wb = math.sin(t * angle) / math.sin(angle)
+            x, y, z = (wa * u + wb * v for u, v in zip(a, b))
+            coords.append((math.degrees(math.atan2(y, x)),
+                           math.degrees(math.asin(max(-1.0, min(1.0, z))))))
+        coords.append((lon, lat))
+    unwrapped = unwrap_longitudes([lon for lon, _ in coords])
+    return [[round(lon, 4), round(lat, 4)] for lon, (_, lat) in zip(unwrapped, coords)]
+
+
+def clip_footprint(footprint: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Cut a footprint Feature to |lat| <= MAX_LATITUDE for display.
+
+    Footprints already come split at the antimeridian in [-180, 180], which the
+    globe draws in place, so only the polar part needs trimming.
+    """
+    if footprint is None:
+        return None
+    geometry = shape(footprint["geometry"])
+    if -MAX_LATITUDE <= geometry.bounds[1] and geometry.bounds[3] <= MAX_LATITUDE:
         return footprint
-    ring = geometry["coordinates"][0]
-    if any(abs(coord[1]) == 90 for coord in ring):
-        return footprint
-    lons = unwrap_longitudes([lon] + [c[0] for c in ring])[1:]
-    shifted = [[x, c[1]] for x, c in zip(lons, ring)]
-    return {**footprint, "geometry": {"type": "Polygon", "coordinates": [shifted]}}
+    clipped = shapely.set_precision(
+        shapely.clip_by_rect(geometry, -180, -MAX_LATITUDE, 180, MAX_LATITUDE), 1e-4)
+    if clipped.is_empty or clipped.geom_type not in ("Polygon", "MultiPolygon"):
+        return None
+    return {**footprint, "geometry": mapping(clipped)}
 
 
 def build_ground_track_map_html(
     name: str, norad_id: str, messages: List[Dict[str, Any]], png: bytes
 ) -> str:
     """Return the map page for formatted ground-track telemetry messages."""
+    lats = [m["position_lla"]["lat_deg"] for m in messages]
     lons = unwrap_longitudes([m["position_lla"]["lon_deg"] for m in messages])
     points = [
         {
             "time": m["time"],
-            "lat": m["position_lla"]["lat_deg"],
+            "lat": lat,
             "lon": lon,
             "alt_km": round(m["position_lla"]["alt_m"] / 1000, 1),
-            "footprint": (
-                _footprint_near(m["footprint_geojson"], lon)
-                if "footprint_geojson" in m else None
-            ),
+            "footprint": clip_footprint(m.get("footprint_geojson")),
         }
-        for m, lon in zip(messages, lons)
+        for m, lat, lon in zip(messages, lats, lons)
     ]
+    data = {"points": points, "track": densify_track(lons, lats)}
     title = f"{name} (NORAD {norad_id})"
     # Escape "</" so a value cannot close the <script> block early.
-    data_json = json.dumps({"points": points}).replace("</", "<\\/")
+    data_json = json.dumps(data).replace("</", "<\\/")
     return (
         _TEMPLATE
         .replace("__TITLE__", html.escape(title))
@@ -80,14 +125,44 @@ _TEMPLATE = """<!doctype html>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"
   integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
 <style>
-  body { margin: 0; font: 13px system-ui, sans-serif; background: #fff; }
+  /* LibreChat's dark theme colors. */
+  :root {
+    color-scheme: dark;
+    accent-color: #10b981;
+    --bg: #212121; --surface: #2f2f2f; --hover: #424242; --border: #595959;
+    --text: #ececec; --muted: #cdcdcd; --active: #047857;
+  }
+  body { margin: 0; font: 13px system-ui, sans-serif; background: var(--bg); color: var(--text); }
   header, .controls { display: flex; align-items: center; gap: 8px; margin: 8px 12px; }
   h1 { font-size: 14px; margin: 0 auto 0 0; }
-  #map { height: 400px; background: #000; }
+  button, select {
+    font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px;
+  }
+  button:hover { background: var(--hover); }
+  button[aria-pressed="true"] { background: var(--active); color: #fff; border-color: var(--active); }
+  /* A lighter framed panel, so the globe stands out from the page. */
+  #map {
+    height: 400px; margin: 8px 12px; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: radial-gradient(circle, var(--hover), var(--surface));
+  }
   #slider { flex: 1; }
-  #readout { margin: 0 12px 8px; color: #555; }
+  #readout { margin: 0 12px 8px; color: var(--muted); }
   #static img { display: block; width: 100%; }
-  .now { background: #2b8a3e; color: #fff; padding: 1px 6px; border-radius: 4px; }
+  .now { background: var(--active); color: #fff; padding: 1px 6px; border-radius: 4px; }
+  /* MapLibre controls, popup and attribution on the dark surface. */
+  .maplibregl-ctrl-group { background: var(--surface); }
+  .maplibregl-ctrl-group button + button { border-top: 1px solid var(--border); }
+  .maplibregl-ctrl-group button, .maplibregl-ctrl-attrib-button { background-color: transparent; border-radius: 0; }
+  .maplibregl-ctrl-group button:hover { background: var(--hover); }
+  .maplibregl-ctrl-icon, .maplibregl-ctrl-attrib-button { filter: invert(1); }
+  .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib.maplibregl-compact {
+    background: rgba(33, 33, 33, 0.85); color: var(--text);
+  }
+  .maplibregl-ctrl-attrib a { color: var(--text); }
+  .maplibregl-popup-content { background: var(--surface); color: var(--text); }
+  .maplibregl-popup-tip { display: none; }
 </style>
 </head>
 <body>
@@ -101,8 +176,8 @@ _TEMPLATE = """<!doctype html>
   <div class="controls">
     <button id="play">Play</button>
     <input id="slider" type="range" min="0" value="0">
-    <button id="center">Center</button>
-    <label><input id="footprint" type="checkbox"> Footprint</label>
+    <button id="follow" aria-pressed="false">Follow</button>
+    <label><input id="footprint" type="checkbox" checked> Footprint</label>
     <select id="basemap">
       <option value="streets">Streets</option>
       <option value="imagery">Imagery</option>
@@ -122,6 +197,7 @@ const color = "#d6336c";
 const wrapLon = (lon) => (((lon + 540) % 360) - 180).toFixed(4);
 const describe = (p) => `${p.time} · ${p.lat}, ${wrapLon(p.lon)} · ${p.alt_km} km`;
 
+const PLAY_INTERVAL_MS = 200;
 const empty = { type: "FeatureCollection", features: [] };
 
 // 3D globe with two Esri basemaps; both work without an API key.
@@ -175,13 +251,37 @@ function show(i) {
   sat.setLngLat([p.lon, p.lat]);
   document.getElementById("readout").textContent = describe(p);
   map.getSource("footprint").setData(footprintBox.checked && p.footprint ? p.footprint : empty);
+  if (following && !pointerDown) panToSatellite();
 }
 
+// Follow keeps the satellite centered by easing the globe linearly over one
+// play step. Moving the map by hand turns it off; zooming does not.
+let following = false;
+const followButton = document.getElementById("follow");
+const panToSatellite = () =>
+  map.easeTo({ center: sat.getLngLat(), duration: PLAY_INTERVAL_MS, easing: (t) => t });
+function setFollowing(on) {
+  following = on;
+  followButton.setAttribute("aria-pressed", on);
+  followButton.textContent = on ? "Following" : "Follow";
+  if (on) panToSatellite();
+}
+followButton.onclick = () => setFollowing(!following);
+
+// Each follow step restarts a camera animation, and that cancels MapLibre's
+// own drag gestures. So steps pause while a pointer is down, and a pan, rotate,
+// or tilt gesture (fired for user input only, not for easeTo) ends following.
+let pointerDown = false;
+// Release is watched on the window, so letting go outside the map still counts.
+map.getCanvasContainer().addEventListener("pointerdown", () => { pointerDown = true; });
+for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type, () => { pointerDown = false; });
+for (const type of ["dragstart", "rotatestart", "pitchstart"]) map.on(type, () => setFollowing(false));
+
 map.on("load", () => {
-  // Track; clicking a point moves the slider there, hovering shows its details.
+  // Track (densified along great circles); clicking a point moves the slider there, hovering shows its details.
   map.addSource("track", { type: "geojson", data: {
     type: "Feature", properties: {},
-    geometry: { type: "LineString", coordinates: pts.map((p) => [p.lon, p.lat]) },
+    geometry: { type: "LineString", coordinates: DATA.track },
   } });
   map.addLayer({ id: "track", type: "line", source: "track",
     paint: { "line-color": color, "line-width": 3 } });
@@ -209,8 +309,9 @@ map.on("load", () => {
   resize();
 });
 
-document.getElementById("center").onclick = () => map.flyTo({ center: sat.getLngLat() });
+// The basemap layers exist once the style loads; ignore earlier changes.
 document.getElementById("basemap").onchange = (e) => {
+  if (!map.isStyleLoaded()) return;
   map.setLayoutProperty("streets", "visibility", e.target.value === "streets" ? "visible" : "none");
   map.setLayoutProperty("imagery", "visibility", e.target.value === "imagery" ? "visible" : "none");
 };
@@ -225,7 +326,7 @@ play.onclick = () => {
     return;
   }
   play.textContent = "Pause";
-  timer = setInterval(() => show((Number(slider.value) + 1) % pts.length), 200);
+  timer = setInterval(() => show((Number(slider.value) + 1) % pts.length), PLAY_INTERVAL_MS);
 };
 
 // LibreChat sizes the iframe from this message; otherwise it stays 150px tall.
