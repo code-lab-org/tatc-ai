@@ -1,32 +1,28 @@
-name: Deploy to EC2
+name: Build and deploy
 
+# One run per push to main: rebuild the MCP server image if its inputs
+# changed, then redeploy EC2. The deploy waits for the build, so new config
+# never runs against the old image, and a failed build deploys nothing.
 on:
   push:
     branches:
       - main
-  workflow_run:
-    workflows: ["Build and push MCP server image"]
-    types:
-      - completed
-    branches:
-      - main
   workflow_dispatch:
 
-# Serialize deploys so two SSH sessions never race `docker compose up -d`
-# against each other. A push to main that changes the MCP server image inputs
-# (see the `changes` job) skips its own push-triggered deploy and deploys once
-# the image build finishes; queueing rather than cancelling still keeps any
-# overlapping runs from racing.
+# Serialize runs so two builds never race the `latest` tag and two SSH
+# sessions never race `docker compose up -d`.
 concurrency:
   group: deploy-ec2
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/code-lab-org/tatc-ai-mcp-server
+
 jobs:
-  # On pushes, detect whether the MCP server image will be rebuilt. If so, the
-  # deploy waits for the workflow_run trigger so new config never runs against
-  # the old image. Keep the paths in sync with build-mcp-server.yml.
   changes:
-    if: github.event_name == 'push'
     runs-on: ubuntu-26.04
     outputs:
       image: ${{ steps.diff.outputs.image }}
@@ -41,25 +37,55 @@ jobs:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
-          # A new branch (all-zero BEFORE) or force push (BEFORE no longer in
-          # history) cannot be diffed. Deploy now in that case: the worst
-          # outcome is a brief old-image window, whereas waiting could mean
-          # no deploy at all if no build is triggered.
-          image=false
-          if git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            git diff --quiet "$BEFORE" "$SHA" -- apps/mcp-server .github/workflows/build-mcp-server.yml || image=true
+          # Rebuild unless this push can be diffed and leaves the image inputs
+          # unchanged. Manual runs, new branches (all-zero BEFORE) and force
+          # pushes (BEFORE no longer in history) always rebuild.
+          image=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null &&
+             git diff --quiet "$BEFORE" "$SHA" -- apps/mcp-server .github/workflows/deploy.yml; then
+            image=false
           fi
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
-  deploy:
+  build:
     needs: changes
-    # Pushes that rebuild the image are deployed by the workflow_run trigger
-    # once the build succeeds; manual runs always deploy.
+    if: needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: apps/mcp-server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [changes, build]
+    # Deploy after a successful build, or right away when no build was needed.
     if: >-
-      ${{ !cancelled() && (
-        (github.event_name == 'push' && needs.changes.outputs.image == 'false') ||
-        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-        github.event_name == 'workflow_dispatch') }}
+      ${{ !cancelled() && needs.changes.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     runs-on: ubuntu-26.04
     steps:
       - name: Set up deploy key
