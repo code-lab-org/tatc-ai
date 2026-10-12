@@ -15,10 +15,10 @@ Stub monorepo for an application stack with:
 
 ## MCP server
 
-`.github/workflows/build-mcp-server.yml` builds and pushes the MCP server
-image to `ghcr.io/code-lab-org/tatc-ai-mcp-server` on every push to `main`
-that touches `apps/mcp-server/**`, tagged with both `latest` and the commit
-SHA it was built from.
+`.github/workflows/deploy.yml` builds and pushes the MCP server image to
+`ghcr.io/code-lab-org/tatc-ai-mcp-server` on every push to `main` that
+touches `apps/mcp-server/**`, tagged with both `latest` and the commit SHA
+it was built from, then deploys it (see [Auto-deploy](#auto-deploy)).
 
 `docker-compose.deploy.yml` pulls `ghcr.io/code-lab-org/tatc-ai-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}`.
 Leave `MCP_SERVER_IMAGE_TAG` unset (or `latest`) so [Auto-deploy](#auto-deploy)
@@ -201,16 +201,15 @@ same issuer URL without depending on outbound internet DNS.
 
 ## Auto-deploy
 
-`.github/workflows/deploy.yml` redeploys the EC2 instance over SSH:
-- on a push to `main` that does not change the MCP server image inputs
-  (`apps/mcp-server/**` or `build-mcp-server.yml`), deploying config/compose/Dex
-  changes immediately, and
-- after `build-mcp-server.yml` finishes pushing a new image. A push that changes
-  those inputs skips the immediate deploy, so new config never runs against the
-  old image; if the build fails, nothing deploys until the next push. If the
-  push cannot be diffed (a force push), it deploys immediately.
+`.github/workflows/deploy.yml` runs once per push to `main` (or by hand), as
+three jobs: `changes` checks whether the MCP server image inputs
+(`apps/mcp-server/**` or the workflow itself) changed, `build` rebuilds and
+pushes the image only if they did, and `deploy` redeploys the EC2 instance
+over SSH after a successful build, or right away when no build was needed. New
+config never runs against the old image, and a failed build deploys nothing.
+Manual runs and pushes that cannot be diffed (a force push) always rebuild.
 
-Either way it runs the same thing: `config/deploy/deploy.sh` on the instance,
+The deploy runs `config/deploy/deploy.sh` on the instance,
 which does `git merge --ff-only` then `docker compose -f
 docker-compose.deploy.yml pull && ... up -d`. It fails loudly rather than
 overwriting anything if the checkout has diverged from `main`.

@@ -29,4 +29,4 @@ Read `README.md` before changing the stack or its deployment setup.
 - Before opening each pull request, create or identify an issue that explains why the change is needed.
 - Link the issue from every pull request. Use `Closes #number` when the pull request resolves it.
 - Every push to `main`, including documentation changes, triggers an EC2 deployment and restarts LibreChat.
-- Each successful MCP image build on `main` triggers another deployment after publication.
+- Pushes that change `apps/mcp-server/**` rebuild the MCP image first and deploy only after it is published.
