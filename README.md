@@ -100,7 +100,7 @@ The conversations are not streamed, but LibreChat streams. So each run
 first sends every model one short streamed request and reports `stream:
 ok`, `missing role`, or `no tool call`. LibreChat drops tool calls from a
 stream whose first delta has no `role`. Models marked `disableStreaming` in
-`librechat.yaml` (GLM-5.3 and DeepSeek) are noted rather than failed. `--stream-only`
+`librechat.yaml` are noted rather than failed. `--stream-only`
 runs just this check.
 
 ## Development stack

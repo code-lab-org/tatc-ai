@@ -131,8 +131,6 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: glm-5-3
-        # The proxy's stream for this model omits delta.role, so LangChain drops its tool calls.
-        disableStreaming: true
     - name: glm-5-3-flash
       label: GLM-5.3-Flash
       description: Z.ai GLM chat model via ASU Voyager.
@@ -157,8 +155,6 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: deepseek-v4-1-flash
-        # The proxy's stream for this model omits delta.role, so LangChain drops its tool calls.
-        disableStreaming: true
     - name: mimo-v2-6-flash
       label: MiMo-V2.6-Flash
       description: Xiaomi MiMo chat model via ASU Voyager.
