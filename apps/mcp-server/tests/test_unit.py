@@ -127,7 +127,7 @@ def test_server_rejects_oversized_ground_track_before_external_helpers(monkeypat
     monkeypatch.setattr(srv, "compute_ground_track", unexpected_call)
 
     with pytest.raises(ValueError, match="2001.*2000"):
-        srv._generate_ground_track(
+        srv._compute_ground_track(
             "ISS",
             start_time="2026-01-01T00:00:00Z",
             duration="2000 seconds",

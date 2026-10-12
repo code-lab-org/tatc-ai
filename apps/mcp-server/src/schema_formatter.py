@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
+from shapely import orient_polygons
 from shapely.geometry import mapping
 
 from .validation import validate_altitude as _validate_altitude
@@ -49,10 +50,12 @@ def format_footprint_geojson(footprint: Any) -> Optional[Dict[str, Any]]:
     TAT-C returns a Polygon, or a MultiPolygon when the footprint crosses
     the antimeridian. Coordinates are [lon, lat] rounded to 4 decimals
     (~11 m) to keep tool results compact; the zero elevation is dropped.
+    Exterior rings run counterclockwise and holes clockwise, as RFC 7946
+    section 3.1.6 recommends; TAT-C returns them the other way round.
     """
     if footprint is None or getattr(footprint, "is_empty", True):
         return None
-    geometry = mapping(footprint)
+    geometry = mapping(orient_polygons(footprint))
     if geometry["type"] not in ("Polygon", "MultiPolygon"):
         return None
 

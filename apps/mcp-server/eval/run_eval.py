@@ -12,7 +12,7 @@ Usage, from apps/mcp-server:
     .venv/bin/python -m eval.run_eval --label trial --models glm-5-3 qwen38-27b
     .venv/bin/python -m eval.run_eval --compare eval/results/a.jsonl eval/results/b.jsonl
 
-Reads OPENAI_API_KEY and OPENAI_REVERSE_PROXY from apps/librechat/.env.
+Reads VOYAGER_API_KEY and VOYAGER_BASE_URL from apps/librechat/.env.
 Sends prompts and tool schemas to the ASU proxy; no project code or data.
 """
 
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+import yaml
 from fastmcp import Client
 
 from .cases import Call, Clock, Trace, build_cases
@@ -45,14 +46,12 @@ SUFFIX = "_mcp_tatc"
 MAX_TURNS = 14
 REQUEST_TIMEOUT = 240
 
-# The models TATC AI offers in LibreChat. Keep in sync with modelSpecs in
-# apps/librechat/librechat.yaml; pass --models to try others.
+# The models TATC AI offers, read from LibreChat's modelSpecs so the two
+# lists cannot drift apart; pass --models to try others.
+LIBRECHAT_CONFIG = HERE.parents[1] / "librechat" / "librechat.yaml"
 MODELS = [
-    "glm-5-3",
-    "glm-5-3-flash",
-    "deepseek-v4-1-flash",
-    "mimo-v2-6-flash",
-    "glm-5-2",
+    spec["preset"]["model"]
+    for spec in yaml.safe_load(LIBRECHAT_CONFIG.read_text())["modelSpecs"]["list"]
 ]
 
 
@@ -193,7 +192,7 @@ def run(args: argparse.Namespace) -> Path:
     replay = HttpReplay(offline=args.offline)
     replay.install()
     clock = Clock(replay.recorded_at)
-    harness = Harness(env["OPENAI_REVERSE_PROXY"], env["OPENAI_API_KEY"], args.hide, clock)
+    harness = Harness(env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"], args.hide, clock)
     cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
     models = args.models or MODELS
     jobs = [(m, c, r) for m in models for c in cases for r in range(args.repeats)]

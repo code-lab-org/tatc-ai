@@ -2,10 +2,12 @@
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dateutil import parser as date_parser
 from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
+from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 
 from . import celestrak_client, oscar_client
 from .generic_coverage import get_access_cells as _access_cells
@@ -19,7 +21,9 @@ from .geometry import (
     extract_geometry_candidates,
     resolve_geometry_status,
 )
+from .map_view import build_ground_track_map_html
 from .schema_formatter import format_ground_track_response
+from .static_map import render_static_map_png
 from .tatc_integration import (
     create_orbit_from_omm,
     generate_ground_track as compute_ground_track,
@@ -89,6 +93,8 @@ SERVER_INSTRUCTIONS = (
     "Never show draft IDs, function names, call syntax, or raw payloads, and "
     "never narrate your tool steps. Ask for missing pieces conversationally, "
     "like a place and dates. "
+    "When the user asks to visualize, map, plot, or show a ground track, use "
+    "the ground track map tool with the same arguments as the ground-track tool. "
     "All tools are read-only."
 )
 
@@ -279,14 +285,14 @@ def parse_duration(duration_str: str) -> timedelta:
 # block the event loop.
 
 
-def _generate_ground_track(
+def _compute_ground_track(
     satellite_identifier: str,
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
     include_footprint: bool = False,
-) -> List[Dict[str, Any]]:
-    """Generate ground track telemetry for a satellite."""
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Return the satellite info and its ground track telemetry."""
     start_time_dt = (
         _utcnow_naive() if start_time is None else parse_time_input(start_time)
     )
@@ -310,7 +316,8 @@ def _generate_ground_track(
         satellite, start_time_dt, end_time_dt, step_seconds,
         include_footprint=include_footprint,
     )
-    return format_ground_track_response(str(sat_info["norad_id"]), ground_track)
+    messages = format_ground_track_response(str(sat_info["norad_id"]), ground_track)
+    return sat_info, messages
 
 
 @mcp.tool
@@ -321,7 +328,8 @@ def generate_ground_track(
     step_interval: Optional[str] = None,
     include_footprint: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Generate a satellite ground track over a time period.
+    """Generate a satellite ground track over a time period. To show it on an
+    interactive map, use the ground track map tool with the same arguments.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -341,10 +349,63 @@ def generate_ground_track(
         Telemetry objects with id, time (ISO-8601 UTC), position_lla
         (lat_deg, lon_deg, alt_m), and optional footprint_geojson.
     """
-    return _generate_ground_track(
+    _, messages = _compute_ground_track(
         satellite_identifier, start_time, duration, step_interval,
         include_footprint,
     )
+    return messages
+
+
+@mcp.tool
+def ground_track_map(
+    satellite_identifier: str,
+    start_time: Optional[str] = None,
+    duration: Optional[str] = None,
+    step_interval: Optional[str] = None,
+    include_footprint: bool = True,
+) -> ToolResult:
+    """Visualize, map, or plot a satellite ground track on an interactive map.
+    Use this whenever the user asks to see, show, draw, or visualize where a
+    satellite goes. Takes the same arguments as the ground-track tool.
+
+    Args:
+        satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
+        start_time: Start time as ISO-8601, "now", or relative like "in one hour".
+            Defaults to "now".
+        duration: How long to generate, e.g. "1 hour" or "60 minutes".
+            Defaults to 1 hour. Maximum 30 days and 2000 output points.
+        step_interval: Time step between points, e.g. "30 sec" or "1 minute".
+            Defaults to 1 minute. Between 1 second and 1 hour.
+        include_footprint: Let the user show the footprint on the map: the
+            ground area inside a 60 degree cone under the satellite, from
+            TAT-C, as a Polygon or a MultiPolygon split at the antimeridian.
+            Defaults to True; footprints stay in the map, not the reply.
+
+    Returns:
+        A short text summary and the map (interactive and static views),
+        which is shown to the user.
+    """
+    sat_info, messages = _compute_ground_track(
+        satellite_identifier, start_time, duration, step_interval,
+        include_footprint,
+    )
+    norad_id = str(sat_info["norad_id"])
+    name = sat_info.get("name", norad_id)
+    summary = (
+        f"Showing an interactive ground track map of {name} (NORAD {norad_id}), "
+        f"{messages[0]['time']} to {messages[-1]['time']}, {len(messages)} points. "
+        "Place the map's UI marker in your reply; do not draw an ASCII map."
+    )
+    png = render_static_map_png(f"{name} (NORAD {norad_id})", messages)
+    html = build_ground_track_map_html(name, norad_id, messages, png)
+    return ToolResult(content=[
+        TextContent(type="text", text=summary),
+        EmbeddedResource(type="resource", resource=TextResourceContents(
+            uri=f"ui://tatc/ground-track/{norad_id}/{messages[0]['time']}",
+            mimeType="text/html",
+            text=html,
+        )),
+    ])
 
 
 @mcp.tool
@@ -373,6 +434,7 @@ def search_satellites(query: str, limit: int = 10) -> List[Dict[str, Any]]:
 
     Returns:
         Objects with norad_id, name, object_type, country, and launch_date.
+        An empty list means no matches; upstream failures are reported as errors.
     """
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
         raise ValueError("limit must be an integer between 1 and 50")

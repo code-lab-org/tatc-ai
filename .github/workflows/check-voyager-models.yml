@@ -21,7 +21,7 @@ jobs:
       # Needs a repo secret VOYAGER_API_KEY holding an ASU proxy key.
       - name: Check offered models
         run: |
-          OPENAI_API_KEY="${{ secrets.VOYAGER_API_KEY }}" \
-          OPENAI_REVERSE_PROXY="https://openai.rc.asu.edu/v1" \
+          VOYAGER_API_KEY="${{ secrets.VOYAGER_API_KEY }}" \
+          VOYAGER_BASE_URL="https://openai.rc.asu.edu/v1" \
           python3 apps/librechat/check_voyager_models.py \
             --summary "$GITHUB_STEP_SUMMARY"

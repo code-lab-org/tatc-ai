@@ -51,6 +51,7 @@ class ServerTests(unittest.TestCase):
             {
                 "generate_ground_track",
                 "get_instrument_info",
+                "ground_track_map",
                 "get_satellite_info",
                 "get_satellite_instruments",
                 "resolve_instrument_geometry",
@@ -81,6 +82,20 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("get_satellite_instruments", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_instrument_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("resolve_instrument_geometry", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("ground_track_map", self.server.SERVER_INSTRUCTIONS)
+
+    def test_map_tool_role_phrase_snake_cases_to_its_name(self):
+        # Models guess a tool's name by snake-casing the role phrase in the
+        # instructions ("satellite search tool" -> satellite_search), so the
+        # map tool's phrase must snake-case to its real name.
+        self.assertIn("ground track map tool", self.server.SERVER_INSTRUCTIONS)
+        tools = {tool.name: tool for tool in self.list_tools()}
+        description = tools["ground_track_map"].description.lower()
+        for word in ("visualize", "map", "plot"):
+            self.assertIn(word, description)
+        self.assertIn(
+            "ground track map tool", tools["generate_ground_track"].description
+        )
 
     def test_no_auth_when_oidc_not_configured(self):
         self.assertIsNone(self.server.mcp.auth)
@@ -146,6 +161,16 @@ class ServerTests(unittest.TestCase):
         result = self.call_tool("search_satellites", {"query": "ISS", "limit": 0})
         self.assertTrue(result.is_error)
         self.assertIn("between 1 and 50", result.content[0].text)
+
+    def test_search_upstream_outage_is_a_tool_error(self):
+        with mock.patch.object(
+            self.server.celestrak_client.requests,
+            "get",
+            side_effect=self.server.celestrak_client.requests.Timeout("offline"),
+        ):
+            result = self.call_tool("search_satellites", {"query": "TARGET"})
+        self.assertTrue(result.is_error)
+        self.assertIn("CelesTrak satellite search is unavailable", result.content[0].text)
 
     def test_get_satellite_info_returns_dict(self):
         expected = {

@@ -71,7 +71,7 @@ def main() -> int:
     env = dict(os.environ)
     if ENV_FILE.exists():
         env = {**load_env(ENV_FILE), **env}
-    missing_settings = [v for v in ("OPENAI_API_KEY", "OPENAI_REVERSE_PROXY") if not env.get(v)]
+    missing_settings = [v for v in ("VOYAGER_API_KEY", "VOYAGER_BASE_URL") if not env.get(v)]
     if missing_settings:
         print(f"missing required settings: {', '.join(missing_settings)}")
         return 1
@@ -80,7 +80,7 @@ def main() -> int:
     if offered_models(FILES[1]) != offered:
         print("librechat.yaml and librechat.deploy.yaml.template offer different models")
         return 1
-    live = fetch_models(env["OPENAI_REVERSE_PROXY"], env["OPENAI_API_KEY"])
+    live = fetch_models(env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"])
     gone = [m for m in offered if m not in live]
     available = [
         m for m in live

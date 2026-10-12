@@ -8,26 +8,30 @@ import json
 from datetime import datetime
 from unittest import mock
 
+import pytest
 from shapely.geometry import Polygon
 
 from src import schema_formatter as fmt
 from src import server as srv
 
 
-def test_position_rounds_to_4_4_1():
-    assert fmt.format_position_lla(12.3456789, -105.1234567, 420240.527) == {
-        "lat_deg": 12.3457,
-        "lon_deg": -105.1235,
-        "alt_m": 420240.5,
-    }
-
-
-def test_position_rounding_keeps_exact_values():
-    assert fmt.format_position_lla(51.5, -0.12, 408000.0) == {
-        "lat_deg": 51.5,
-        "lon_deg": -0.12,
-        "alt_m": 408000.0,
-    }
+@pytest.mark.parametrize(
+    ("position", "expected"),
+    [
+        pytest.param(
+            (12.3456789, -105.1234567, 420240.527),
+            {"lat_deg": 12.3457, "lon_deg": -105.1235, "alt_m": 420240.5},
+            id="rounds-to-published-precision",
+        ),
+        pytest.param(
+            (51.5, -0.12, 408000.0),
+            {"lat_deg": 51.5, "lon_deg": -0.12, "alt_m": 408000.0},
+            id="keeps-exact-values",
+        ),
+    ],
+)
+def test_position_rounds_to_4_4_1(position, expected):
+    assert fmt.format_position_lla(*position) == expected
 
 
 def test_footprint_coords_rounded_to_4():
@@ -58,8 +62,8 @@ def _mocked_track(**kwargs):
                       "omm": [{"OBJECT_NAME": "ISS", "NORAD_CAT_ID": 25544}]}), \
         mock.patch.object(srv, "create_orbit_from_omm", return_value=object()), \
         mock.patch.object(srv, "compute_ground_track", side_effect=fake_track) as track:
-        out = srv._generate_ground_track("ISS", "2026-01-01T00:00:00Z",
-                                         "2 minutes", "1 minute", **kwargs)
+        _, out = srv._compute_ground_track("ISS", "2026-01-01T00:00:00Z",
+                                           "2 minutes", "1 minute", **kwargs)
     return out, track
 
 

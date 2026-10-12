@@ -17,9 +17,8 @@ mcpServers:
 
 endpoints:
   custom:
-    # All chat models come from ASU Voyager for now, so they are grouped
-    # here instead of under the built-in OpenAI label. The key and proxy URL
-    # reuse the existing OPENAI_* env vars, so no new secrets are needed.
+    # Voyager chat models are grouped here instead of under the built-in
+    # OpenAI label.
     # TATC AI offers a short list: the top ASU Voyager models on the
     # Artificial Analysis Intelligence Index that can call tools. The proxy
     # serves more; to offer one, add its ID here and a modelSpecs entry
@@ -27,8 +26,8 @@ endpoints:
     # tool-calling eval in apps/mcp-server/eval with --models to check it.
     # fetch stays off so only the listed models appear in the picker.
     - name: ASU Voyager
-      apiKey: ${OPENAI_API_KEY}
-      baseURL: ${OPENAI_REVERSE_PROXY}
+      apiKey: ${VOYAGER_API_KEY}
+      baseURL: ${VOYAGER_BASE_URL}
       models:
         default:
           - glm-5-3
@@ -40,6 +39,67 @@ endpoints:
       titleConvo: true
       titleModel: qwen38-27b
       modelDisplayLabel: ASU Voyager
+    # Only models verified for chat, streaming, and tool calls are listed;
+    # the API also serves embedding, speech, image, and realtime models.
+    - name: ASU CreateAI
+      apiKey: ${CREATEAI_API_KEY}
+      baseURL: ${CREATEAI_BASE_URL}
+      models:
+        default:
+          - aws/nova2-lite
+          - aws/nova-lite
+          - aws/nova-micro
+          - aws/nova-pro
+          - aws/claude4_5_haiku
+          - aws/claude4_sonnet
+          - aws/claude4_5_sonnet
+          - aws/claude5_sonnet
+          - aws/claude4_1_opus
+          - aws/claude4_5_opus
+          - aws/claude4_6_opus
+          - aws/claude4_7_opus
+          - aws/claude4_8_opus
+          - aws/claude5_opus
+          - gcp-deepmind/geminiflash2_5
+          - gcp-deepmind/geminiflash2_5-lite
+          - gcp-deepmind/geminiflash3
+          - gcp-deepmind/geminiflash3_1_lite
+          - gcp-deepmind/geminipro3_1
+          - gcp-deepmind/geminiflash3_5
+          - gcp-deepmind/geminiflash3_7
+          - asu-air/gemma4_31b_it
+          - asu-air/llama4_maverick-17b
+          - asu-air/llama4_scout-17b
+          - asu-air/muse-glimmer-30b
+          - aws/gpt-oss-20b
+          - aws/gpt-oss-120b
+          - openai/gpt4o_mini
+          - openai/gpt4_1
+          - openai/gpt4_1-mini
+          - openai/o3
+          - openai/gpt5
+          - openai/gpt5_mini
+          - openai/gpt5_nano
+          - openai/gpt5_1
+          - openai/gpt5_1_instant
+          - openai/gpt5_1_thinking
+          - openai/gpt5_2
+          - openai/gpt5_2_pro
+          - openai/gpt5_4_mini
+          - openai/gpt5_4_nano
+          - openai/gpt5_4_thinking
+          - openai/gpt5_4_pro
+          - openai/gpt5_5
+          - openai/gpt5_5_thinking
+          - openai/gpt5_5_pro
+          - openai/gpt5_6_luna
+          - openai/gpt5_6_sol
+          - openai/gpt5_6_terra
+          - openai/gpt6_astra
+        fetch: false
+      titleConvo: true
+      titleModel: aws/claude4_5_haiku
+      modelDisplayLabel: ASU CreateAI
 
 interface:
   customWelcome: 'Welcome to TATC AI - ask about satellites, orbits, and ground tracks.'
