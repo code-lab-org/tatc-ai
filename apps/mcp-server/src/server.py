@@ -9,13 +9,23 @@ from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
 from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 
-from . import celestrak_client
+from . import celestrak_client, oscar_client
+from .generic_coverage import get_access_cells as _access_cells
+from .generic_coverage import get_access_daily as _access_daily
+from .generic_coverage import get_access_revisit as _access_revisit
+from .generic_coverage import begin_access_run as _begin_run
+from .generic_coverage import finish_access_run as _finish_run
+from .generic_coverage import set_access_region as _set_region
+from .geometry import (
+    convert_swath_to_for,
+    extract_geometry_candidates,
+    resolve_geometry_status,
+)
 from .map_view import build_ground_track_map_html
 from .schema_formatter import format_ground_track_response
 from .static_map import render_static_map_png
 from .tatc_integration import (
-    calculate_footprint_from_position,
-    create_satellite_from_tle,
+    create_orbit_from_omm,
     generate_ground_track as compute_ground_track,
 )
 from .validation import (
@@ -57,12 +67,35 @@ SERVER_INSTRUCTIONS = (
     # and models that follow these instructions literally call the bare name,
     # which fails with "tool not found".
     "Use the satellite search tool when a satellite name is broad or ambiguous. "
-    "Use the satellite info tool for metadata and current TLE data. "
+    "Use the satellite info tool for metadata and current GP (OMM) elements. "
     "Use the ground-track tool only after resolving an exact satellite name or "
     "NORAD ID; its times are UTC and its position altitude is in meters. "
+    "Use the instrument search tool to find sensors by name, acronym, or type. "
+    "Use the satellite-instruments tool when you need to compare the payloads "
+    "on a satellite. "
+    "Use the instrument info tool for an instrument's measurement specs and "
+    "carrying satellites; its spec values are source text, not parsed numbers. "
+    "Use the geometry resolver tool to turn those spec words into numeric "
+    "candidates. When its status is not conclusive, ask the researcher for a "
+    "swath or angle with a source instead of guessing. "
+    "For coverage, call the begin tool, then the region tool, then the finish "
+    "tool, then the fetch tools by result ID for daily rows, the cell map, or "
+    "revisit numbers. The begin tool takes several satellites separated by "
+    "commas to model a constellation. Set daylight_only on the finish tool for "
+    "optical imagers. "
+    "Coverage is modeled access at each grid-cell center only: never claim "
+    "every point of the region was scanned or that an acquisition occurred. "
+    "A daily gap_area_km2 of 0 means every cell center had access that UTC "
+    "day, not continuous observation. "
+    "Talk to the researcher like a companion, in plain sentences with every "
+    "number that matters: the geometry value and its source, the metrics, "
+    "the window. Show the result ID once, since follow-up questions need it. "
+    "Never show draft IDs, function names, call syntax, or raw payloads, and "
+    "never narrate your tool steps. Ask for missing pieces conversationally, "
+    "like a place and dates. "
     "When the user asks to visualize, map, plot, or show a ground track, use "
-    "the ground track map tool with the same arguments as the ground-track tool. "
-    "Render TLE lines in a fenced code block so they are not wrapped. "
+    "the ground track map tool with the satellite, start time, duration, and "
+    "step interval you would give the ground-track tool. "
     "All tools are read-only."
 )
 
@@ -277,38 +310,15 @@ def _compute_ground_track(
     validate_ground_track_sample_count(start_time_dt, end_time_dt, step_seconds)
 
     sat_info = celestrak_client.get_satellite_info(satellite_identifier)
-    satellite = create_satellite_from_tle(sat_info["tle_line1"], sat_info["tle_line2"])
-    ground_track = compute_ground_track(
-        satellite, start_time_dt, end_time_dt, step_seconds
-    )
+    satellite = create_orbit_from_omm(sat_info["omm"])
     # Footprints are 86%+ of the payload and models rendering tables never
     # need them, so they are opt-in. Skipping also saves the compute.
-    footprints = None
-    if include_footprint:
-        footprints = [
-            calculate_footprint_from_position(lat_deg, lon_deg, alt_m)
-            for _, lat_deg, lon_deg, alt_m in ground_track
-        ]
-
-    messages = format_ground_track_response(
-        str(sat_info["norad_id"]), ground_track, footprints
+    ground_track = compute_ground_track(
+        satellite, start_time_dt, end_time_dt, step_seconds,
+        include_footprint=include_footprint,
     )
+    messages = format_ground_track_response(str(sat_info["norad_id"]), ground_track)
     return sat_info, messages
-
-
-def _generate_ground_track(
-    satellite_identifier: str,
-    start_time: Optional[str] = None,
-    duration: Optional[str] = None,
-    step_interval: Optional[str] = None,
-    include_footprint: bool = False,
-) -> List[Dict[str, Any]]:
-    """Generate ground track telemetry for a satellite."""
-    _, messages = _compute_ground_track(
-        satellite_identifier, start_time, duration, step_interval,
-        include_footprint,
-    )
-    return messages
 
 
 @mcp.tool
@@ -320,7 +330,7 @@ def generate_ground_track(
     include_footprint: bool = False,
 ) -> List[Dict[str, Any]]:
     """Generate a satellite ground track over a time period. To show it on an
-    interactive map, use the ground track map tool with the same arguments.
+    interactive map, use the ground track map tool instead.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -330,19 +340,21 @@ def generate_ground_track(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
-        include_footprint: Include the footprint_geojson visibility polygon
-            per point. Defaults to False: footprints are ~86% of the payload
-            and tabular answers never need them. Set True for mapping.
-            Dateline-crossing footprints may use GeoJSON MultiPolygon geometry.
+        include_footprint: Include footprint_geojson per point: the ground
+            area inside a 60 degree cone under the satellite, from TAT-C, as
+            a Polygon or a MultiPolygon split at the antimeridian. Defaults to
+            False: footprints are ~86% of the payload and tabular answers never
+            need them.
 
     Returns:
         Telemetry objects with id, time (ISO-8601 UTC), position_lla
         (lat_deg, lon_deg, alt_m), and optional footprint_geojson.
     """
-    return _generate_ground_track(
+    _, messages = _compute_ground_track(
         satellite_identifier, start_time, duration, step_interval,
         include_footprint,
     )
+    return messages
 
 
 @mcp.tool
@@ -351,11 +363,11 @@ def ground_track_map(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
-    include_footprint: bool = True,
 ) -> ToolResult:
     """Visualize, map, or plot a satellite ground track on an interactive map.
     Use this whenever the user asks to see, show, draw, or visualize where a
-    satellite goes. Takes the same arguments as the ground-track tool.
+    satellite goes. The map always includes TAT-C footprints, which the user
+    can toggle.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -365,16 +377,15 @@ def ground_track_map(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
-        include_footprint: Let the user show the visibility footprint on the
-            map. Defaults to True; footprints stay in the map, not the reply.
 
     Returns:
         A short text summary and the map (interactive and static views),
         which is shown to the user.
     """
+    # Footprints stay in the map page; they never reach the model.
     sat_info, messages = _compute_ground_track(
         satellite_identifier, start_time, duration, step_interval,
-        include_footprint,
+        include_footprint=True,
     )
     norad_id = str(sat_info["norad_id"])
     name = sat_info.get("name", norad_id)
@@ -397,13 +408,13 @@ def ground_track_map(
 
 @mcp.tool
 def get_satellite_info(satellite_identifier: str) -> Dict[str, Any]:
-    """Get satellite metadata and current TLE data from CelesTrak.
+    """Get satellite metadata and current GP (OMM) elements from CelesTrak.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS") or NORAD ID.
 
     Returns:
-        Object with norad_id, name, tle_line1, and tle_line2.
+        Object with norad_id, name, and omm (a list of OMM element records).
     """
     return celestrak_client.get_satellite_info(satellite_identifier)
 
@@ -426,6 +437,302 @@ def search_satellites(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
         raise ValueError("limit must be an integer between 1 and 50")
     return celestrak_client.search_satellites_by_name(query, limit=limit)
+
+
+@mcp.tool
+def search_instruments(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Search the WMO OSCAR database for Earth observation instruments.
+
+    Args:
+        query: Instrument name, acronym, or partial name (e.g., "ABI", "MODIS").
+        limit: Maximum number of results, between 1 and 50. Defaults to 10.
+
+    Returns:
+        Objects with slug, label, and oscar_url. Follow oscar_url for the
+        full OSCAR record, or use the satellite-instruments tool for a
+        satellite's instrument list with status and latency fields.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+        raise ValueError("limit must be an integer between 1 and 50")
+    return oscar_client.search_instruments(query, limit=limit)
+
+
+@mcp.tool
+def get_satellite_instruments(satellite_identifier: str) -> Dict[str, Any]:
+    """Get the instruments on a satellite, with OSCAR mission metadata.
+
+    Use this to build the instrument model input for observation or
+    coverage analysis. Resolves names and acronyms against the full OSCAR
+    satellite list; unknown or ambiguous names return an error.
+
+    Args:
+        satellite_identifier: Satellite acronym, name, or OSCAR slug.
+
+    Returns:
+        Satellite metadata (agency, status, orbit, altitude, launch and
+        end-of-life dates, oscar_url) plus instruments with per-satellite
+        status, start date, end of life, and data latency.
+    """
+    return oscar_client.resolve_satellite(satellite_identifier)
+
+
+@mcp.tool
+def get_instrument_info(instrument_identifier: str) -> Dict[str, Any]:
+    """Get an OSCAR instrument record with measurement specs.
+
+    Resolves an instrument by acronym, name, or OSCAR slug. Spec fields
+    such as Resolution, Coverage / Cycle, and Scanning Technique are source
+    text from the OSCAR instrument page, not parsed numbers.
+
+    Args:
+        instrument_identifier: Instrument acronym, name, or OSCAR slug.
+
+    Returns:
+        Instrument identity, classification, measured variables, carrying
+        satellites with dates and latency, spec fields, and oscar_url.
+    """
+    return oscar_client.get_instrument(instrument_identifier)
+
+
+@mcp.tool
+def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
+    """Turn OSCAR spec words into numeric geometry candidates with provenance.
+
+    Resolves an instrument by acronym, name, or OSCAR slug, then parses
+    its spec table for swath widths, fields of regard, fields of view,
+    and steering angles. Each candidate cites its spec field and text
+    with a confidence and a usable flag. The status is conclusive,
+    ambiguous, needs_review, or unknown. A non-conclusive status means
+    ask the researcher for a number with a source instead of guessing.
+
+    Args:
+        instrument_identifier: Instrument acronym, name, or OSCAR slug.
+
+    Returns:
+        Instrument identity, oscar_url, source-text specs, geometry
+        candidates with provenance, status, reason, and recommended
+        candidate when conclusive. Spec values stay source text.
+    """
+    record = oscar_client.get_instrument(instrument_identifier)
+    specs = record.get("specs") if isinstance(record, dict) else None
+    candidates = extract_geometry_candidates(
+        specs if isinstance(specs, dict) else None
+    )
+    status, reason, recommended = resolve_geometry_status(candidates)
+    return {
+        "slug": record.get("slug"),
+        "acronym": record.get("acronym"),
+        "name": record.get("name"),
+        "type": record.get("type"),
+        "oscar_url": record.get("oscar_url"),
+        "specs": specs,
+        "geometry_candidates": candidates,
+        "geometry_status": status,
+        "geometry_reason": reason,
+        "recommended_candidate": recommended,
+        "next_step": (
+            "Confirm this swath or angle with the researcher, then run coverage "
+            "with it and the oscar_url as geometry_reference."
+            if status == "conclusive"
+            else "Do not run coverage yet. Tell the researcher why the OSCAR "
+            "specs do not give one usable number, quote the spec text, and ask "
+            "them for a swath width or field of regard with a source."
+        ),
+    }
+
+
+@mcp.tool
+def convert_swath_to_field_of_regard(
+    swath_width_km: float,
+    orbit_altitude_m: float,
+) -> Dict[str, Any]:
+    """Convert a ground swath width at an altitude to a field of regard.
+
+    Uses the same TAT-C math the generic coverage tool uses, so the
+    number matches the later run. Both inputs are flat numbers.
+
+    Args:
+        swath_width_km: Ground swath width in km, positive and finite.
+        orbit_altitude_m: Orbit altitude in meters, positive and finite.
+
+    Returns:
+        Field of regard in degrees with the inputs echoed back.
+    """
+    return {
+        "field_of_regard_deg": convert_swath_to_for(swath_width_km, orbit_altitude_m),
+        "swath_width_km": float(swath_width_km),
+        "orbit_altitude_m": float(orbit_altitude_m),
+    }
+
+
+@mcp.tool
+def begin_access_run(
+    satellite_identifier: str,
+    start_time: str,
+    end_time: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Lock the satellites and UTC window for an access run.
+
+    Takes one satellite, or up to 6 separated by commas to model them
+    together as a constellation, e.g. "Sentinel-2A, Sentinel-2B".
+    Validates the inputs against current CelesTrak elements and returns
+    a draft ID with each satellite's orbit mean altitude. Set the region with the
+    region tool, then finish with grid size, geometry, and source. Start
+    must be an explicit UTC ISO-8601 value ending in Z or using +00:00.
+    End is the same format and defaults to 24 hours after the start when
+    omitted. The window is at most 366 days.
+
+    Args:
+        satellite_identifier: Satellite name or NORAD ID for CelesTrak, or
+            up to 6 of them separated by commas.
+        start_time: Inclusive UTC start, e.g. "2026-09-18T04:00:00Z".
+        end_time: Exclusive UTC end, later than start_time. Defaults to
+            24 hours after start_time when omitted.
+
+    Returns:
+        Draft ID, satellites with OMM epoch and mean altitude, window,
+        and the next step. No region or coverage numbers yet.
+    """
+    return _begin_run(satellite_identifier, start_time, end_time)
+
+
+@mcp.tool
+def set_access_region(
+    draft_id: str,
+    west_lon: float,
+    south_lat: float,
+    east_lon: float,
+    north_lat: float,
+) -> Dict[str, Any]:
+    """Set the region on a staged access draft.
+
+    Takes four separate numbers in west, south, east, north order; do
+    not nest them in a list. Longitude boxes must not cross the
+    antimeridian and must be narrower than 180 degrees. Returns the
+    draft with its region and the next step.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        west_lon: Bounding-box west longitude, from -180 through less than 180.
+        south_lat: Bounding-box south latitude, from -90 through less than 90.
+        east_lon: Bounding-box east longitude, greater than west and at most 180.
+        north_lat: Bounding-box north latitude, greater than south and at most 90.
+
+    Returns:
+        Draft ID, satellite, window, region, and the next step.
+    """
+    return _set_region(
+        draft_id, [west_lon, south_lat, east_lon, north_lat]
+    )
+
+
+@mcp.tool
+def finish_access_run(
+    draft_id: str,
+    grid_rows: int = 6,
+    grid_columns: int = 6,
+    field_of_regard_deg: Optional[float] = None,
+    swath_width_km: Optional[float] = None,
+    geometry_reference: Optional[str] = None,
+    instrument_name: Optional[str] = None,
+    daylight_only: bool = False,
+) -> Dict[str, Any]:
+    """Run a staged access analysis and save it under a result ID.
+
+    Takes a draft ID with its region already set, plus grid size, exactly
+    one of field of regard or swath width, and a source string saying where
+    the geometry came from. Never invent the angle or swath: use the
+    geometry resolver result or a researcher-supplied number with its
+    source. For a constellation draft the same geometry applies to every
+    satellite. Set daylight_only for optical imagers so night passes do
+    not count. Works for any staged window up to 366 days. Windows of 3
+    days or less allow up to 144 cells; longer windows allow up to 36
+    cells, 72 cells times satellites, and take minutes. A swath is
+    converted at each satellite's orbit altitude with TAT-C math. Returns a compact summary with a result ID; daily rows and
+    cells stay saved for the fetch tools. Modeled access does not confirm
+    an acquisition.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Number of equal latitude partitions, 1 through 12.
+        grid_columns: Number of equal longitude partitions, 1 through 12.
+        field_of_regard_deg: Full cross-track angle in degrees, 0 to 360.
+        swath_width_km: Ground swath width in km as an alternative.
+        geometry_reference: Source for the angle or swath, required.
+        instrument_name: Label for the modeled scan. Defaults to modeled scan.
+        daylight_only: Keep only accesses with the sun up at the cell
+            center, for optical imagers. Defaults to false.
+
+    Returns:
+        Result ID, compact summary counts, metrics, geometry provenance,
+        and evidence flags. Daily rows and cells are saved, not returned.
+    """
+    return _finish_run(
+        draft_id,
+        grid_rows=grid_rows,
+        grid_columns=grid_columns,
+        field_of_regard_deg=field_of_regard_deg,
+        swath_width_km=swath_width_km,
+        geometry_reference=geometry_reference,
+        instrument_name=instrument_name,
+        daylight_only=daylight_only,
+    )
+
+
+@mcp.tool
+def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[str, Any]:
+    """Fetch saved daily observed and gap areas by result ID.
+
+    Pages through the daily rows of a saved access run without
+    re-running the analysis. Offset starts at 0 and limit is 1 to 366.
+
+    Args:
+        result_id: Result ID from a saved access run.
+        offset: Number of daily rows to skip, 0 or more.
+        limit: Number of daily rows to return, 1 through 366.
+
+    Returns:
+        Daily rows with observed and gap areas and cell IDs, plus
+        evidence flags stating modeled access only.
+    """
+    return _access_daily(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
+    """Fetch the saved grid map by result ID as GeoJSON.
+
+    Returns grid cells as a GeoJSON feature collection, each cell marked
+    observed or gap for the saved window with its access count, mean
+    access minutes, and mean revisit hours. Filter with all, observed, or
+    gaps. Modeled access does not confirm an acquisition.
+
+    Args:
+        result_id: Result ID from a saved access run.
+        include: Which cells to return: all, observed, or gaps.
+
+    Returns:
+        GeoJSON feature collection with per-cell status and evidence flags.
+    """
+    return _access_cells(result_id, include)
+
+
+@mcp.tool
+def get_access_revisit(result_id: str) -> Dict[str, Any]:
+    """Fetch saved revisit numbers by result ID.
+
+    Returns mean, median, and max revisit hours, mean access minutes,
+    and the longest unobserved gap with their definitions, without
+    re-running the analysis. Modeled access does not confirm an
+    acquisition.
+
+    Args:
+        result_id: Result ID from a saved access run.
+
+    Returns:
+        Revisit metrics with definitions and evidence flags.
+    """
+    return _access_revisit(result_id)
 
 
 def main() -> None:

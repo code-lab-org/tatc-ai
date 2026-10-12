@@ -1,11 +1,14 @@
-"""CelesTrak API client for fetching TLE data."""
+"""CelesTrak API client for fetching GP (OMM) element data."""
 
+import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import requests
 
-from .validation import validate_norad_id, validate_tle_format
+from .search_utils import normalize_name as _normalize_name
+from .search_utils import score_match as _score_search_result
+from .validation import validate_norad_id, validate_omm_records
 
 SATCAT_URL = "https://celestrak.org/satcat/records.php"
 GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
@@ -32,11 +35,6 @@ _COMMON_NAME_ALIASES = {
 }
 
 
-def _normalize_name(value: str) -> str:
-    """Normalize a name for case-insensitive matching."""
-    return " ".join(re.sub(r"[^A-Za-z0-9]+", " ", value.upper()).split())
-
-
 def _parse_json_response(response: requests.Response) -> Any:
     """Parse a JSON response that may be empty."""
     if not response.text or not response.text.strip():
@@ -52,7 +50,7 @@ def _format_satcat_record(sat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     name = sat.get("OBJECT_NAME") or sat.get("NAME", "Unknown")
 
     # SATCAT includes historical objects. A populated decay date means the
-    # object no longer has current GP/TLE data, so returning it would break the
+    # object no longer has current GP data, so returning it would break the
     # documented search-then-resolve tool workflow.
     if not norad_id or str(sat.get("DECAY_DATE") or "").strip():
         return None
@@ -165,37 +163,10 @@ def _decayed_match_hint(identifier: str) -> Optional[str]:
         return None
     return (
         f"Satellite identifier '{identifier}' matches catalog objects that have "
-        f"all decayed and no longer have TLE data: {'; '.join(decayed)}. "
+        f"all decayed and no longer have GP data: {'; '.join(decayed)}. "
         f"The active object you want may be cataloged under a different name; "
         f"use search_satellites with alternate spellings or provide a NORAD ID."
     )
-
-
-def _score_search_result(query: str, candidate_name: str) -> int:
-    """Score a search candidate for deterministic ranking."""
-    normalized_query = _normalize_name(query)
-    normalized_candidate = _normalize_name(candidate_name)
-    if not normalized_query or not normalized_candidate:
-        return 0
-
-    query_tokens = normalized_query.split()
-    candidate_tokens = normalized_candidate.split()
-    score = 0
-
-    if normalized_candidate == normalized_query:
-        score += 100
-    if normalized_candidate.startswith(normalized_query):
-        score += 40
-    if normalized_query in normalized_candidate:
-        score += 20
-    if all(token in candidate_tokens for token in query_tokens):
-        score += 15
-    if any(token == normalized_query for token in candidate_tokens):
-        score += 10
-
-    # Prefer tighter matches when the score would otherwise tie.
-    score -= abs(len(candidate_tokens) - len(query_tokens))
-    return score
 
 
 def _rank_search_results(
@@ -207,30 +178,6 @@ def _rank_search_results(
         key=lambda item: (_score_search_result(query, item["name"]), -item["norad_id"]),
         reverse=True,
     )
-
-
-def _fetch_gp_metadata(norad_id: int) -> Optional[Dict[str, Any]]:
-    """Fetch current GP metadata for a NORAD ID."""
-    response = requests.get(
-        GP_URL,
-        params={"CATNR": validate_norad_id(norad_id), "FORMAT": "json"},
-        timeout=15,
-    )
-    response.raise_for_status()
-
-    data = _parse_json_response(response)
-    if isinstance(data, list) and data:
-        item = data[0]
-        if isinstance(item, dict):
-            try:
-                return {
-                    "norad_id": int(item.get("NORAD_CAT_ID", norad_id)),
-                    "name": str(item.get("OBJECT_NAME") or "").strip(),
-                    "object_id": str(item.get("OBJECT_ID") or "").strip(),
-                }
-            except (ValueError, TypeError):
-                return None
-    return None
 
 
 def _resolve_alias(identifier: str) -> Optional[int]:
@@ -293,109 +240,84 @@ def get_norad_id(satellite_identifier: str) -> Optional[int]:
     return None
 
 
-def fetch_tle(norad_id: int) -> Tuple[str, str]:
-    """Fetch (line1, line2) TLE strings from CelesTrak for a NORAD ID."""
-    # Validate NORAD ID
+def fetch_omm(norad_id: int) -> List[Dict[str, Any]]:
+    """Fetch OMM (GP) element records from CelesTrak for a NORAD ID.
+
+    OMM JSON carries six- and nine-digit catalog numbers that the legacy
+    TLE format cannot represent, and TAT-C consumes it directly.
+    """
     norad_id = validate_norad_id(norad_id)
 
-    # CelesTrak defaults GP queries to CSV, so request the legacy three-line
-    # TLE representation explicitly. The parser below also accepts 2LE data.
     try:
         response = requests.get(
             GP_URL,
-            params={"CATNR": norad_id, "FORMAT": "TLE"},
+            params={"CATNR": norad_id, "FORMAT": "json"},
             allow_redirects=True,
             timeout=10,
         )
         response.raise_for_status()
 
-        # Check if response is empty or indicates no data
         response_text = response.text.strip()
         if not response_text:
             raise ValueError(
-                f"No TLE data returned from CelesTrak for NORAD ID {norad_id}"
+                f"No GP data returned from CelesTrak for NORAD ID {norad_id}"
             )
 
-        # Check for common error messages from CelesTrak
         if "No GP data found" in response_text or "not found" in response_text.lower():
             raise ValueError(
-                f"TLE data not available for NORAD ID {norad_id}. "
+                f"GP data not available for NORAD ID {norad_id}. "
                 f"The satellite may have decayed, been decommissioned, or the ID may be incorrect. "
                 f"Deep-space objects without Earth-orbit GP data (e.g. JWST at Sun-Earth L2) "
-                f"also have no TLE. "
+                f"also have no OMM records. "
                 f"Response: {response_text[:200]}"
             )
 
-        lines = response_text.split("\n")
-
-        # Filter out empty lines
-        lines = [line.strip() for line in lines if line.strip()]
-
-        if len(lines) < 2:
+        try:
+            data = json.loads(response_text)
+        except ValueError as exc:
             raise ValueError(
-                f"Invalid TLE format: expected at least 2 lines, got {len(lines)}. "
+                f"Invalid OMM JSON from CelesTrak for NORAD ID {norad_id}: {exc}. "
                 f"Response: {response_text[:200]}"
-            )
+            ) from exc
 
-        # TLE format: first line is satellite name, second and third are TLE lines
-        # Sometimes the name line is included, sometimes not
-        if len(lines) >= 3:
-            # Has name line, TLE lines are 2nd and 3rd
-            line1 = lines[1]
-            line2 = lines[2]
-        else:
-            # Just TLE lines
-            line1 = lines[0]
-            line2 = lines[1]
-
-        # Validate TLE format
-        line1, line2 = validate_tle_format(line1, line2)
-
-        return line1, line2
+        return validate_omm_records(data)
 
     except requests.Timeout:
         raise requests.RequestException(
-            f"Timeout while fetching TLE from CelesTrak for NORAD ID {norad_id}"
+            f"Timeout while fetching GP data from CelesTrak for NORAD ID {norad_id}"
         )
     except requests.HTTPError as e:
         status = e.response.status_code if e.response is not None else "unknown"
         hint = (
             " The ID may be incorrect, or the object may have no Earth-orbit GP data "
-            "(e.g. deep-space missions like JWST at Sun-Earth L2 have no TLE)."
+            "(e.g. deep-space missions like JWST at Sun-Earth L2 have no OMM records)."
             if status == 404
             else ""
         )
         raise requests.RequestException(
-            f"HTTP error {status} while fetching TLE from CelesTrak: {e}.{hint}"
+            f"HTTP error {status} while fetching GP data from CelesTrak: {e}.{hint}"
         ) from e
     except requests.RequestException as e:
         raise requests.RequestException(
-            f"Failed to fetch TLE from CelesTrak: {e}"
+            f"Failed to fetch GP data from CelesTrak: {e}"
         ) from e
     except ValueError:
-        # Re-raise validation errors
         raise
 
 
 def get_satellite_info(satellite_identifier: str) -> Dict:
-    """Get norad_id, name, and both TLE lines for a satellite name or NORAD ID."""
+    """Get norad_id, name, and current OMM element records for a satellite."""
     norad_id = get_norad_id(satellite_identifier)
     if norad_id is None:
         raise ValueError(
             f"Could not resolve satellite identifier '{satellite_identifier}' to NORAD ID"
         )
 
-    line1, line2 = fetch_tle(norad_id)
-    try:
-        metadata = _fetch_gp_metadata(norad_id)
-    except (requests.RequestException, ValueError):
-        # Metadata is a nicety; TLE success is what matters.
-        metadata = None
+    omm = fetch_omm(norad_id)
+    name = str(omm[0].get("OBJECT_NAME") or "").strip()
 
-    if metadata and metadata.get("name"):
-        name = metadata["name"]
-    else:
-        # Fall back to the ranked search result name if GP metadata is unavailable.
+    if not name:
+        # Fall back to the ranked search result name if OMM lacks a name.
         resolved = None
         if not str(satellite_identifier).strip().isdigit():
             try:
@@ -407,6 +329,5 @@ def get_satellite_info(satellite_identifier: str) -> Dict:
     return {
         "norad_id": norad_id,
         "name": name,
-        "tle_line1": line1,
-        "tle_line2": line2,
+        "omm": omm,
     }

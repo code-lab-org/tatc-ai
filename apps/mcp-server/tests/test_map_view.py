@@ -7,14 +7,16 @@ type as an inline iframe; the HTML itself is never sent to the model.
 import asyncio
 import io
 import json
+import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest import mock
 
 import cartopy.crs as ccrs
 import pytest
 from fastmcp import Client
 from PIL import Image
+from shapely.geometry import Polygon, mapping
 
 from src import map_view
 from src import server as srv
@@ -51,25 +53,12 @@ def _data(html):
     return json.loads(match.group(1).replace("<\\/", "</"))
 
 
-def test_unwrap_longitudes_keeps_antimeridian_crossing_continuous():
-    assert map_view.unwrap_longitudes([170.0, 179.0, -179.0, -170.0]) == [
-        170.0, 179.0, 181.0, 190.0]
-
-
-def test_unwrap_longitudes_westward_crossing():
-    assert map_view.unwrap_longitudes([-179.0, 179.0]) == [-179.0, -181.0]
-
-
-def test_unwrap_longitudes_leaves_normal_track_alone():
-    assert map_view.unwrap_longitudes([-10.0, 0.0, 15.5]) == [-10.0, 0.0, 15.5]
-
-
-def test_html_embeds_points_with_unwrapped_longitudes():
+def test_html_embeds_points_in_canonical_longitudes():
     html = map_view.build_ground_track_map_html(
         "ISS (ZARYA)", "25544",
         [_msg(10.0, 179.0, minute=0), _msg(11.0, -179.0, minute=1)], FAKE_PNG)
     points = _data(html)["points"]
-    assert [p["lon"] for p in points] == [179.0, 181.0]
+    assert [p["lon"] for p in points] == [179.0, -179.0]
     assert points[0]["time"] == "2026-01-01T00:00:00Z"
     assert points[0]["alt_km"] == 420.0
     assert "maplibre" in html.lower()
@@ -90,15 +79,15 @@ def test_html_escapes_script_breaking_names():
     assert "</script><script>alert(1)" not in html
 
 
-def test_footprints_follow_their_unwrapped_point():
+def test_footprints_stay_in_canonical_coordinates():
+    footprint = _ring(-179.0, 0.0)
     html = map_view.build_ground_track_map_html(
         "ISS", "25544",
         [_msg(0.0, 179.0, footprint=_ring(179.0, 0.0)),
-         _msg(0.0, -179.0, minute=1, footprint=_ring(-179.0, 0.0))], FAKE_PNG)
+         _msg(0.0, -179.0, minute=1, footprint=footprint)], FAKE_PNG)
     points = _data(html)["points"]
-    ring = points[1]["footprint"]["geometry"]["coordinates"][0]
-    # Point 2 moved from -179 to 181, so its footprint moves with it.
-    assert [lon for lon, _ in ring] == [180.0, 182.0, 181.0, 180.0]
+    assert points[1]["lon"] == -179.0
+    assert points[1]["footprint"] == footprint
 
 
 def test_points_without_footprint_have_none():
@@ -120,24 +109,205 @@ def test_html_preserves_dateline_multipolygon_footprints():
         [_msg(0, 179), _msg(0, -179, minute=1, footprint=footprint)], FAKE_PNG,
     )
     point = _data(html)["points"][1]
-    assert point["lon"] == 181
+    assert point["lon"] == -179
     assert point["footprint"] == footprint
 
 
-def test_html_preserves_polar_cap_closure():
-    for pole in (-90, 90):
-        edge = pole * 0.98
-        footprint = {
-            "type": "Feature", "properties": {},
-            "geometry": {"type": "Polygon", "coordinates": [[
-                [-180, pole], [-180, edge], [0, edge], [180, edge],
-                [180, pole], [-180, pole],
-            ]]},
-        }
-        html = map_view.build_ground_track_map_html(
-            "Polar", "1", [_msg(pole, 0, footprint=footprint)], FAKE_PNG,
-        )
-        assert _data(html)["points"][0]["footprint"] == footprint
+def _cap(pole, edge):
+    """A footprint covering a pole, as TAT-C returns it: ring along +-180."""
+    return {
+        "type": "Feature", "properties": {},
+        "geometry": {"type": "Polygon", "coordinates": [[
+            [-180, pole], [-180, edge], [0, edge], [180, edge],
+            [180, pole], [-180, pole],
+        ]]},
+    }
+
+
+def test_clip_footprint_leaves_footprint_inside_the_band_alone():
+    footprint = _ring(10.0, 84.0)
+    assert map_view.clip_footprint(footprint) is footprint
+    assert map_view.clip_footprint(None) is None
+
+
+def test_clip_footprint_cuts_at_the_mercator_limit():
+    # A circle like the NOAA 20 one at lat -80.8 reaching -85.3.
+    circle = Polygon(
+        [(-70 + 4.5 * math.cos(a / 10), -80.8 + 4.5 * math.sin(a / 10))
+         for a in range(63)])
+    footprint = {"type": "Feature", "properties": {}, "geometry": mapping(circle)}
+    clipped = map_view.clip_footprint(footprint)
+    ring = clipped["geometry"]["coordinates"][0]
+    assert clipped["geometry"]["type"] == "Polygon"
+    assert min(lat for _, lat in ring) == -map_view.MAX_LATITUDE
+    assert max(lat for _, lat in ring) == pytest.approx(-76.3, abs=0.01)
+
+
+@pytest.mark.parametrize("pole", [-90, 90])
+def test_clip_footprint_turns_polar_cap_into_band(pole):
+    clipped = map_view.clip_footprint(_cap(pole, pole * 0.9))  # edge at 81
+    lats = [lat for ring in clipped["geometry"]["coordinates"] for _, lat in ring]
+    assert max(abs(lat) for lat in lats) == map_view.MAX_LATITUDE
+    assert min(abs(lat) for lat in lats) == 81
+    assert Polygon(clipped["geometry"]["coordinates"][0]).is_valid
+
+
+@pytest.mark.parametrize("pole", [-90, 90])
+def test_clip_footprint_drops_footprint_wholly_beyond_the_limit(pole):
+    assert map_view.clip_footprint(_cap(pole, pole * 0.98)) is None
+
+
+def test_clip_footprint_keeps_both_pieces_of_a_clipped_dateline_footprint():
+    pieces = [
+        [[[179, 80], [180, 80], [180, 88], [179, 88], [179, 80]]],
+        [[[-180, 80], [-179, 80], [-179, 88], [-180, 88], [-180, 80]]],
+    ]
+    footprint = {"type": "Feature", "properties": {},
+                 "geometry": {"type": "MultiPolygon", "coordinates": pieces}}
+    clipped = map_view.clip_footprint(footprint)["geometry"]
+    assert clipped["type"] == "MultiPolygon" and len(clipped["coordinates"]) == 2
+    assert all(lat <= map_view.MAX_LATITUDE
+               for polygon in clipped["coordinates"] for _, lat in polygon[0])
+
+
+def test_embedded_footprints_are_clipped():
+    html = map_view.build_ground_track_map_html(
+        "Polar", "1", [_msg(-80.8, 0, footprint=_cap(-90, -81))], FAKE_PNG)
+    ring = _data(html)["points"][0]["footprint"]["geometry"]["coordinates"][0]
+    assert min(lat for _, lat in ring) == -map_view.MAX_LATITUDE
+
+
+def _angle_deg(a, b):
+    """Great-circle angle between two [lon, lat] vertices."""
+    va, vb = map_view._unit_vector(*a), map_view._unit_vector(*b)
+    return math.degrees(math.acos(min(1.0, sum(x * y for x, y in zip(va, vb)))))
+
+
+def _orbit_msgs(count, step_minutes=1, alt=420000.0):
+    """An inclined, eastward track that circles the Earth every 90 minutes."""
+    start = datetime(2026, 1, 1)
+    msgs = []
+    for i in range(count):
+        m = _msg(51.6 * math.sin(2 * math.pi * i * step_minutes / 90),
+                 ((-100 + 4 * i * step_minutes + 180) % 360) - 180, alt)
+        m["time"] = (start + timedelta(minutes=i * step_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        msgs.append(m)
+    return msgs
+
+
+def test_great_circle_path_keeps_samples_and_limits_segment_length():
+    path = map_view.great_circle_path(0.0, 0.0, 30.0, 10.0)
+    assert path[0] == (0.0, 0.0) and path[-1] == (30.0, 10.0)
+    assert len(path) > 30
+    assert all(_angle_deg(a, b) <= 1.0001 for a, b in zip(path, path[1:]))
+
+
+def test_great_circle_path_follows_the_great_circle_not_the_straight_line():
+    # Along 60N a great circle between two points bulges poleward of the
+    # parallel, where a Mercator straight line would stay on it.
+    path = map_view.great_circle_path(0.0, 60.0, 60.0, 60.0)
+    assert max(lat for _, lat in path) > 63
+
+
+@pytest.mark.parametrize(("lon0", "lon1"), [(170.0, -170.0), (-170.0, 170.0)])
+def test_great_circle_path_is_continuous_across_the_antimeridian(lon0, lon1):
+    lons = [lon for lon, _ in map_view.great_circle_path(lon0, 0.0, lon1, 0.0)]
+    assert all(abs(b - a) <= 1.0001 for a, b in zip(lons, lons[1:]))
+    assert abs(lons[-1] - lons[0]) == 20.0
+
+
+def test_great_circle_path_handles_repeated_sample():
+    assert map_view.great_circle_path(5.0, 6.0, 5.0, 6.0) == [(5.0, 6.0), (5.0, 6.0)]
+
+
+def test_split_at_antimeridian_leaves_other_paths_whole():
+    assert map_view.split_at_antimeridian([(-10.0, 0.0), (0.0, 5.0)]) == [
+        [[-10.0, 0.0], [0.0, 5.0]]]
+
+
+@pytest.mark.parametrize(("path", "seam"), [
+    ([(179.0, 0.0), (181.0, 10.0)], 180.0),
+    ([(-179.0, 0.0), (-181.0, 10.0)], -180.0),
+])
+def test_split_at_antimeridian_ends_and_starts_pieces_at_the_seam(path, seam):
+    west, east = map_view.split_at_antimeridian(path)
+    assert west[-1] == [seam, 5.0]
+    assert east[0] == [-seam, 5.0]
+    assert west[0] == [path[0][0], 0.0]
+    assert east[-1] == [path[1][0] - math.copysign(360, path[1][0]), 10.0]
+
+
+def _vertices(pieces):
+    return [v for piece in pieces for v in piece]
+
+
+def test_track_intervals_stay_within_the_world_over_many_orbits():
+    msgs = _orbit_msgs(300)  # 3.3 laps
+    lons = [m["position_lla"]["lon_deg"] for m in msgs]
+    lats = [m["position_lla"]["lat_deg"] for m in msgs]
+    intervals = map_view.track_intervals(lons, lats)
+
+    assert len(intervals) == 299
+    assert all(-180.0001 <= lon <= 180.0001
+               for pieces in intervals for lon, _ in _vertices(pieces))
+    # Each interval runs from its sample to the next one.
+    for i, pieces in enumerate(intervals):
+        assert _vertices(pieces)[0] == [lons[i], pytest.approx(lats[i], abs=1e-4)]
+        assert _vertices(pieces)[-1] == [lons[i + 1], pytest.approx(lats[i + 1], abs=1e-4)]
+    # Every dateline crossing splits an interval, with no gap in latitude.
+    split = [pieces for pieces in intervals if len(pieces) == 2]
+    assert len(split) == 3
+    for west, east in split:
+        assert abs(west[-1][0]) == 180.0 and east[0][0] == -west[-1][0]
+        assert west[-1][1] == east[0][1]
+
+
+def test_html_embeds_track_intervals_but_points_stay_samples():
+    html = map_view.build_ground_track_map_html(
+        "AQUA", "27424", [_msg(0, 0), _msg(0, 30, minute=5)], FAKE_PNG)
+    data = _data(html)
+    assert len(data["points"]) == 2
+    assert len(data["track"]) == 1  # one interval between the two samples
+    track = _vertices(data["track"][0])
+    assert len(track) > 30
+    assert track[0] == [0, 0] and track[-1] == [30, 0]
+
+
+def test_current_orbit_half_window_is_half_a_kepler_period_in_samples():
+    # 420 km altitude: period 92.9 minutes, so 46.4 minutes each way.
+    msgs = _orbit_msgs(300)
+    times = [m["time"] for m in msgs]
+    assert map_view.current_orbit_half_window(times, [420000.0] * 300) == 47
+    # Higher orbits are slower, so the window grows with altitude.
+    assert map_view.current_orbit_half_window(times, [800000.0] * 300) == 51
+
+
+def test_current_orbit_half_window_covers_a_track_shorter_than_one_orbit():
+    times = [m["time"] for m in _orbit_msgs(91)]  # 90 minutes < 92.9
+    assert map_view.current_orbit_half_window(times, [420000.0] * 91) == 91
+    assert map_view.current_orbit_half_window(times[:1], [420000.0]) == 1
+
+
+def test_page_filters_the_current_orbit_on_static_sources():
+    html = map_view.build_ground_track_map_html(
+        "ISS", "25544", _orbit_msgs(300), FAKE_PNG)
+    assert _data(html)["half_window"] == 47
+    assert 'map.setFilter("orbit"' in html and 'map.setFilter("points"' in html
+
+
+def test_page_has_follow_toggle_and_footprints_on_by_default():
+    html = map_view.build_ground_track_map_html(
+        "ISS", "25544", [_msg(0.0, 0.0)], FAKE_PNG)
+    assert '<button id="follow" aria-pressed="false">Follow</button>' in html
+    assert 'id="center"' not in html
+    assert re.search(r'<input id="footprint" type="checkbox" checked>', html)
+
+
+def test_page_uses_librechat_dark_surface():
+    html = map_view.build_ground_track_map_html(
+        "ISS", "25544", [_msg(0.0, 0.0)], FAKE_PNG)
+    assert "color-scheme: dark" in html
+    assert "--bg: #212121" in html and "--text: #ececec" in html
 
 
 @pytest.mark.parametrize(
@@ -189,13 +359,21 @@ def test_static_map_renders_png_and_plots_track(
         assert artist.get_label() == label
 
 
+def test_static_map_uses_dark_background():
+    png = render_static_map_png("ISS (NORAD 25544)", [_msg(10, 20), _msg(11, 21, minute=1)])
+    with Image.open(io.BytesIO(png)) as image:
+        assert image.convert("RGB").getpixel((2, 2)) == (0x21, 0x21, 0x21)
+
+
+FOOTPRINT = Polygon([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)])
 TRACK = [
-    (datetime(2026, 1, 1, 0, 0, 0), 12.3456789, 179.5, 420240.527),
-    (datetime(2026, 1, 1, 0, 1, 0), 15.4022222, -179.5, 419999.999),
+    (datetime(2026, 1, 1, 0, 0, 0), 12.3456789, 179.5, 420240.527, FOOTPRINT),
+    (datetime(2026, 1, 1, 0, 1, 0), 15.4022222, -179.5, 419999.999, FOOTPRINT),
 ]
 
 
-def _call_map_tool(**kwargs):
+def _run_map_tool(**kwargs):
+    """Return the tool result and the mocked TAT-C track call."""
     async def run():
         async with Client(srv.mcp) as client:
             return await client.call_tool(
@@ -209,16 +387,18 @@ def _call_map_tool(**kwargs):
     with mock.patch.object(
             srv.celestrak_client, "get_satellite_info",
             return_value={"norad_id": 25544, "name": "ISS (ZARYA)",
-                          "tle_line1": "l1", "tle_line2": "l2"}), \
-        mock.patch.object(srv, "create_satellite_from_tle", return_value=object()), \
-        mock.patch.object(srv, "compute_ground_track", return_value=list(TRACK)), \
-        mock.patch.object(srv, "calculate_footprint_from_position",
-                          return_value=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]):
-        return asyncio.run(run())
+                          "omm": [{"OBJECT_NAME": "ISS (ZARYA)", "NORAD_CAT_ID": 25544}]}), \
+        mock.patch.object(srv, "create_orbit_from_omm", return_value=object()), \
+        mock.patch.object(srv, "compute_ground_track", return_value=list(TRACK)) as compute:
+        return asyncio.run(run()), compute
+
+
+def _call_map_tool(**kwargs):
+    return _run_map_tool(**kwargs)[0]
 
 
 def test_map_tool_returns_summary_and_ui_resource():
-    result = _call_map_tool()
+    result, compute = _run_map_tool()
     assert not result.is_error
     kinds = [c.type for c in result.content]
     assert kinds == ["text", "resource"]
@@ -232,9 +412,22 @@ def test_map_tool_returns_summary_and_ui_resource():
     assert resource.mimeType == "text/html"
     assert "data:image/png;base64," in resource.text
     points = _data(resource.text)["points"]
-    assert [p["lon"] for p in points] == [179.5, 180.5]
-    # Footprints default on: they only go into the HTML, never to the model.
+    assert [p["lon"] for p in points] == [179.5, -179.5]
+    # Footprints are always computed: they only go into the HTML, never to the model.
+    assert compute.call_args.kwargs["include_footprint"] is True
     assert all(p["footprint"] is not None for p in points)
+
+
+def test_map_tool_has_no_include_footprint_parameter():
+    async def schema():
+        async with Client(srv.mcp) as client:
+            tools = {tool.name: tool for tool in await client.list_tools()}
+        return tools["ground_track_map"].inputSchema
+
+    properties = asyncio.run(schema())["properties"]
+    assert "include_footprint" not in properties
+    assert set(properties) == {
+        "satellite_identifier", "start_time", "duration", "step_interval"}
 
 
 def test_map_tool_summary_omits_point_list():

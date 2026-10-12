@@ -1,14 +1,11 @@
 """Format TAT-C outputs to match server telemetry format specification."""
 
 import logging
-import math
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
-from shapely import unary_union
-from shapely.affinity import translate
-from shapely.geometry import Polygon, box
-from shapely.geometry.polygon import orient
+from shapely import orient_polygons
+from shapely.geometry import mapping
 
 from .validation import validate_altitude as _validate_altitude
 from .validation import validate_coordinates
@@ -47,99 +44,32 @@ def format_position_lla(
     }
 
 
-def _split_footprint_at_dateline(coordinates: List[List[float]]) -> Optional[Dict[str, Any]]:
-    """Represent a small spherical footprint in the GeoJSON longitude domain.
+def format_footprint_geojson(footprint: Any) -> Optional[Dict[str, Any]]:
+    """Format a TAT-C footprint as a GeoJSON Feature, or None if empty.
 
-    Unwrap short edges before planar clipping. A ring winding around a pole
-    must close through that pole, not through the interior of its small circle.
-    Cut at +/-180 as recommended by RFC 7946 section 3.1.9.
+    TAT-C returns a Polygon, or a MultiPolygon when the footprint crosses
+    the antimeridian. Coordinates are [lon, lat] rounded to 4 decimals
+    (~11 m) to keep tool results compact; the zero elevation is dropped.
+    Exterior rings run counterclockwise and holes clockwise, as RFC 7946
+    section 3.1.6 recommends; TAT-C returns them the other way round.
     """
-    unwrapped = [list(coordinates[0])]
-    for lon, lat in coordinates[1:]:
-        previous_lon = unwrapped[-1][0]
-        delta = (lon - previous_lon + 180) % 360 - 180
-        unwrapped.append([previous_lon + delta, lat])
-
-    if abs(unwrapped[-1][0] - unwrapped[0][0]) > 180:
-        pole = 90.0 if sum(lat for _, lat in coordinates[:-1]) > 0 else -90.0
-        unwrapped.extend([[unwrapped[-1][0], pole], [unwrapped[0][0], pole]])
-
-    polygon = Polygon(unwrapped)
-    if not polygon.is_valid or polygon.area == 0:
+    if footprint is None or getattr(footprint, "is_empty", True):
         return None
-    first_strip = math.floor((polygon.bounds[0] + 180) / 360)
-    last_strip = math.floor((polygon.bounds[2] + 180) / 360)
-    pieces = []
-    for strip in range(first_strip, last_strip + 1):
-        offset = 360 * strip
-        clipped = polygon.intersection(box(-180 + offset, -90, 180 + offset, 90))
-        if clipped.area > 0:
-            pieces.append(translate(clipped, xoff=-offset))
-
-    # Rejoin the artificial cut at the ring's starting longitude for polar
-    # caps. Dateline pieces stay separate at opposite ends of the map.
-    # Use the output precision for overlay, so floating-point translation
-    # cannot leave a microscopic gap that turns into a shared edge on rounding.
-    merged = unary_union(pieces, grid_size=0.0001)
-    polygons = [merged] if isinstance(merged, Polygon) else list(merged.geoms)
-    rings = []
-    for part in polygons:
-        if not isinstance(part, Polygon) or part.area == 0:
-            continue
-        part = orient(part, sign=1.0)
-        rings.append([
-            [[round(lon, 4), round(lat, 4)] for lon, lat in ring.coords]
-            for ring in [part.exterior, *part.interiors]
-        ])
-    if not rings:
-        return None
-    if len(rings) == 1:
-        return {"type": "Polygon", "coordinates": rings[0]}
-    return {"type": "MultiPolygon", "coordinates": rings}
-
-
-def format_footprint_geojson(
-    coordinates: List[List[float]],
-) -> Optional[Dict[str, Any]]:
-    """
-    Format a footprint as a GeoJSON Polygon or MultiPolygon feature.
-    """
-    if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 3:
+    geometry = mapping(orient_polygons(footprint))
+    if geometry["type"] not in ("Polygon", "MultiPolygon"):
         return None
 
-    # Validate and normalize coordinates
-    validated_coords = []
-    for coord in coordinates:
-        if not isinstance(coord, (list, tuple)) or len(coord) < 2:
-            continue
-        lon, lat = coord[0], coord[1]
-        try:
-            lat, lon = validate_coordinates(lat, lon)
-            validated_coords.append([lon, lat])
-        except (ValueError, TypeError):
-            continue
+    def ring(coords):
+        return [[round(float(c[0]), 4), round(float(c[1]), 4)] for c in coords]
 
-    if len(validated_coords) < 3:
-        return None
-
-    # Ensure polygon is closed (first point == last point)
-    if validated_coords[0] != validated_coords[-1]:
-        validated_coords.append(validated_coords[0])
-
-    # Round to 4 decimals (~11 m) to keep tool results compact.
-    rounded = [[round(lon, 4), round(lat, 4)] for lon, lat in validated_coords]
-
-    geometry = {"type": "Polygon", "coordinates": [rounded]}
-    if any(abs(a[0] - b[0]) > 180 for a, b in zip(validated_coords, validated_coords[1:])):
-        geometry = _split_footprint_at_dateline(validated_coords)
-        if geometry is None:
-            return None
-
-    # Create a GeoJSON Feature with Polygon or MultiPolygon geometry.
+    if geometry["type"] == "Polygon":
+        coordinates = [ring(r) for r in geometry["coordinates"]]
+    else:
+        coordinates = [[ring(r) for r in poly] for poly in geometry["coordinates"]]
     # Per server telemetry format: coordinates in [lon, lat] (WGS84), properties must be {}
     return {
         "type": "Feature",
-        "geometry": geometry,
+        "geometry": {"type": geometry["type"], "coordinates": coordinates},
         "properties": {},
     }
 
@@ -171,7 +101,7 @@ def format_telemetry_message(
     satellite_id: str,
     time: datetime,
     position_lla: Tuple[float, float, float],
-    footprint_coords: Optional[List[List[float]]] = None,
+    footprint: Optional[Any] = None,
     trajectory_batches: Optional[List[Tuple[datetime, float, float, float]]] = None,
     lookpoint_lla: Optional[Tuple[float, float, float]] = None,
     state_flags: Optional[List[str]] = None,
@@ -195,8 +125,8 @@ def format_telemetry_message(
         message["lookpoint_lla"] = format_position_lla(look_lat, look_lon, look_alt)
 
     # Add optional footprint_geojson
-    if footprint_coords is not None:
-        footprint_geojson = format_footprint_geojson(footprint_coords)
+    if footprint is not None:
+        footprint_geojson = format_footprint_geojson(footprint)
         if footprint_geojson is not None:
             message["footprint_geojson"] = footprint_geojson
 
@@ -213,25 +143,20 @@ def format_telemetry_message(
 
 def format_ground_track_response(
     satellite_id: str,
-    ground_track: List[Tuple[datetime, float, float, float]],
-    footprints: Optional[List[Optional[List[List[float]]]]] = None,
+    ground_track: List[Tuple[datetime, float, float, float, Optional[Any]]],
 ) -> List[Dict[str, Any]]:
-    """Format a ground track as an array of telemetry messages."""
+    """Format (time, lat, lon, alt, footprint) samples as telemetry messages."""
     messages = []
-
-    for i, (time, lat_deg, lon_deg, alt_m) in enumerate(ground_track):
-        footprint_coords = None
-        if footprints is not None and i < len(footprints):
-            footprint_coords = footprints[i]
-
+    for time, lat_deg, lon_deg, alt_m, footprint in ground_track:
         try:
-            message = format_telemetry_message(
-                satellite_id=satellite_id,
-                time=time,
-                position_lla=(lat_deg, lon_deg, alt_m),
-                footprint_coords=footprint_coords,
+            messages.append(
+                format_telemetry_message(
+                    satellite_id=satellite_id,
+                    time=time,
+                    position_lla=(lat_deg, lon_deg, alt_m),
+                    footprint=footprint,
+                )
             )
-            messages.append(message)
         except ValueError as e:
             logger.warning("Skipping invalid telemetry point at %s: %s", time, e)
             continue
