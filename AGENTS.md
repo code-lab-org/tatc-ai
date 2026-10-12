@@ -12,6 +12,16 @@ Read `README.md` before changing the stack or its deployment setup.
 - `docker-compose.dev.yml` and `docker-compose.deploy.yml` define the development and deployment stacks.
 - `config/` contains Dex and EC2 deployment scripts. `docs/` contains research notebooks.
 
+## TAT-C first
+
+This server is a model-facing interface to TAT-C, not a reimplementation of it.
+
+- Before writing orbit, access, coverage, revisit, swath, illumination, or grid math, check the installed `tatc` package (`tatc.analysis`, `tatc.generation`, `tatc.utils`, `tatc.schemas`) and call it when it covers the need.
+- Do not add fallback formulas for when TAT-C is missing. It is a hard dependency.
+- Our code may stage inputs, validate them, store results, and reshape TAT-C output into what the tools return. When it must compute something TAT-C lacks, such as per-UTC-day area rows, say so in a docstring.
+- Keep tools general: no satellite, instrument, or region defaults in tool code. Viewing geometry comes from the researcher or the OSCAR resolver with a source.
+- When changing tool names, arguments, descriptions, or server instructions, run `python -m eval.run_eval` from `apps/mcp-server` and compare it with the last run using `--compare`. It needs the ASU key in `apps/librechat/.env`, sends prompts and tool schemas to the ASU proxy, and takes about half an hour. Unit tests do not show whether models can still use the tools.
+
 ## Development and checks
 
 - Match the Python minor version in `apps/mcp-server/Dockerfile` for local server work and checks.
