@@ -13,17 +13,53 @@ on:
   workflow_dispatch:
 
 # Serialize deploys so two SSH sessions never race `docker compose up -d`
-# against each other. A push to main that touches apps/mcp-server/** fires
-# both triggers above (once immediately, once again after the image finishes
-# building) - queueing rather than cancelling means the second run still
-# lands on the freshly-pushed image even if the first one raced ahead of it.
+# against each other. A push to main that changes the MCP server image inputs
+# (see the `changes` job) skips its own push-triggered deploy and deploys once
+# the image build finishes; queueing rather than cancelling still keeps any
+# overlapping runs from racing.
 concurrency:
   group: deploy-ec2
   cancel-in-progress: false
 
 jobs:
+  # On pushes, detect whether the MCP server image will be rebuilt. If so, the
+  # deploy waits for the workflow_run trigger so new config never runs against
+  # the old image. Keep the paths in sync with build-mcp-server.yml.
+  changes:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-26.04
+    outputs:
+      image: ${{ steps.diff.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check MCP server image inputs
+        id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # A new branch (all-zero BEFORE) or force push (BEFORE no longer in
+          # history) cannot be diffed. Deploy now in that case: the worst
+          # outcome is a brief old-image window, whereas waiting could mean
+          # no deploy at all if no build is triggered.
+          image=false
+          if git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            git diff --quiet "$BEFORE" "$SHA" -- apps/mcp-server .github/workflows/build-mcp-server.yml || image=true
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
   deploy:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: changes
+    # Pushes that rebuild the image are deployed by the workflow_run trigger
+    # once the build succeeds; manual runs always deploy.
+    if: >-
+      ${{ !cancelled() && (
+        (github.event_name == 'push' && needs.changes.outputs.image == 'false') ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-26.04
     steps:
       - name: Set up deploy key
