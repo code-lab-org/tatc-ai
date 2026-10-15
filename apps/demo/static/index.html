@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TAT-C role demo</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0f1115; --panel:#171a21; --ink:#e7e9ee;
+          --muted:#9aa3b2; --line:#272b36; --accent:#5b8cff; --bad:#ff6b6b; --ok:#38c172; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:760px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:18px; margin:0 0 2px; } .sub { color:var(--muted); font-size:13px; margin-bottom:18px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  input { width:100%; padding:10px; border-radius:8px; border:1px solid var(--line); background:#0d0f14; color:var(--ink); }
+  button { padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:#20242e; color:var(--ink); cursor:pointer; font-size:14px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .pill { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .hidden { display:none; }
+  .msg { white-space:pre-wrap; padding:10px 12px; border-radius:8px; border:1px solid var(--line); margin-top:8px; }
+  .msg.err { border-color:var(--bad); color:var(--bad); }
+  .steps { color:var(--muted); font-size:12px; margin-top:6px; }
+  .caps { margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>TAT-C — natural-language mission analysis</h1>
+  <div class="sub">Role-based demo. Log in as a seeded user: <code>codelab_&lt;role&gt;_&lt;id&gt;@lab.com</code> / <code>&lt;role&gt;_&lt;id&gt;</code></div>
+
+  <div id="loginPanel" class="panel">
+    <label>Email</label><input id="email" value="codelab_user_1@lab.com" />
+    <label>Password</label><input id="password" type="password" value="user_1" />
+    <div class="row" style="margin-top:12px;">
+      <button class="primary" onclick="login()">Log in</button>
+      <span id="loginMsg" class="pill"></span>
+    </div>
+  </div>
+
+  <div id="appPanel" class="panel hidden">
+    <div class="row">
+      <span class="pill" id="whoami"></span>
+      <button onclick="logout()" style="margin-left:auto;">Log out</button>
+    </div>
+    <div class="caps row" id="caps"></div>
+
+    <label style="margin-top:14px;">Ask a question</label>
+    <input id="question" value="What is the mean revisit period over Tempe Arizona for the VIIRS instrument onboard NOAA 20?" />
+    <div class="row" style="margin-top:10px;">
+      <button class="primary" id="askBtn" onclick="ask()">Ask</button>
+    </div>
+    <div id="answer"></div>
+
+    <label style="margin-top:16px;">Role actions (gated server-side)</label>
+    <div class="row">
+      <button data-cap="author" onclick="act('author')">Author tool</button>
+      <button data-cap="run_eval" onclick="act('run_eval')">Run eval</button>
+      <button data-cap="promote" onclick="act('promote')">Promote</button>
+      <button data-cap="manage_users" onclick="listUsers()">Manage users</button>
+    </div>
+    <div id="actMsg"></div>
+  </div>
+</div>
+
+<script>
+let TOKEN = null, CAPS = [];
+const h = () => ({ "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN });
+function show(id, text, err) {
+  const el = document.getElementById(id);
+  el.innerHTML = '<div class="msg ' + (err ? 'err' : '') + '">' + text + '</div>';
+}
+async function login() {
+  const r = await fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ email: email.value, password: password.value }) });
+  const d = await r.json();
+  if (!r.ok) { document.getElementById("loginMsg").textContent = d.detail || "login failed"; return; }
+  TOKEN = d.token; CAPS = d.capabilities;
+  document.getElementById("loginPanel").classList.add("hidden");
+  document.getElementById("appPanel").classList.remove("hidden");
+  document.getElementById("whoami").textContent = d.email + "  ·  role: " + d.role;
+  document.getElementById("caps").innerHTML = d.capabilities.map(c => '<span class="pill">'+c+'</span>').join(" ");
+  document.querySelectorAll("[data-cap]").forEach(b => b.disabled = !CAPS.includes(b.dataset.cap));
+}
+function logout() { TOKEN=null; location.reload(); }
+async function ask() {
+  document.getElementById("askBtn").disabled = true;
+  show("answer", "Working…");
+  const r = await fetch("/ask", { method:"POST", headers:h(), body: JSON.stringify({ question: question.value }) });
+  const d = await r.json();
+  document.getElementById("askBtn").disabled = false;
+  if (!r.ok) { show("answer", d.detail || "error", true); return; }
+  let s = (d.steps||[]).map(x => "→ " + x.tool).join("  ");
+  document.getElementById("answer").innerHTML =
+    '<div class="msg">' + (d.answer || "(no answer)") + '</div>' +
+    (s ? '<div class="steps">tools called: ' + s + ' · turns: ' + d.turns + '</div>' : '');
+}
+async function act(cap) {
+  const r = await fetch("/" + cap, { method:"POST", headers:h() });
+  const d = await r.json();
+  show("actMsg", r.ok ? d.message : (d.detail || "forbidden"), !r.ok);
+}
+async function listUsers() {
+  const r = await fetch("/users", { headers:h() });
+  const d = await r.json();
+  show("actMsg", r.ok ? d.users.join("\n") : (d.detail || "forbidden"), !r.ok);
+}
+</script>
+</body>
+</html>

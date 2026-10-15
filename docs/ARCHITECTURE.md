@@ -14,7 +14,8 @@ is also enabled in LibreChat's chat UI via its native Google endpoint
 The target the packages build toward: a user states a request in natural
 language and gets the desired output — text, tables, and eventually charts —
 with memory, model choice, and token spend handled by the pipeline, not the
-user.
+user. The agent reaches `tatc` by calling pre-built tools (`src/tools/`) —
+selecting a tool and filling its parameters. It does not generate code.
 
 ## Pipeline
 
@@ -47,7 +48,8 @@ response to LibreChat
 | File | In | Out | Depends on |
 | --- | --- | --- | --- |
 | `server.py` | MCP tool calls (`echo`, `run_agent_task`); OIDC env vars | Tool results; uvicorn on :8000 | fastmcp, `agent` (lazy, call-time) |
-| `agent.py` | `task: str`, optional injected `LLMClient` / retrieval `Store` | Rendered response text; one usage record per run | all five packages |
+| `agent.py` | `task: str`, optional injected `LLMClient` / retrieval `Store` / `Role` | Rendered response text; one usage record per run | all packages |
+| `orchestrator.py` | `task`, a `ToolClient`, a toolset, optional `Role`, `max_steps` | `AgentRun` (answer, steps, turns, truncated); one usage record per step | models, roles, tokens, tools (lazy) |
 | `models/base.py` | — | `LLMResponse` dataclass, `LLMClient` protocol | stdlib only |
 | `models/gemini.py` | Env: `GEMINI_API_KEY` (required), `GEMINI_MODEL` (default `gemini-2.5-flash-lite`); prompt, system | `LLMResponse` (text, tokens, latency) | google-genai (lazy import) |
 | `models/router.py` | — | `default_client()` → `GeminiClient` | `base`, `gemini` |
@@ -58,6 +60,9 @@ response to LibreChat
 | `tokens/usage.py` | `LLMResponse` + task label + optional extra dict; env `USAGE_LOG_PATH` | one JSONL line per LLM call | `models.base` |
 | `tokens/budget.py` | env `TASK_TOKEN_BUDGET` (0 = unlimited); charged per response | `exceeded` flag, recorded into usage entries | `models.base` |
 | `rendering/render.py` | model output text | markdown table when the text is a JSON array of flat objects; passthrough otherwise | stdlib only |
+| `roles/role.py`, `roles/registry.py` | role name | `Role` (model, tools, budget, prompt); `get`, `ROLES` | stdlib only |
+| `tools/tatc_tools.py` | plain params (TLE, target, window, constellation, spacing) | revisit hr / ground-track WKT / coverage rows | tatc |
+| `tools/registry.py` | — | tool `schemas()` for function-calling; `call(name, **args)` | `tatc_tools` |
 
 ## Design decisions
 
@@ -92,6 +97,11 @@ response to LibreChat
    bi-temporal methods have something to beat; `NullCompactor` (conversation)
    does no compaction, so any compaction policy has a baseline to beat.
 
+8. **The agent calls tools, it does not write code.** `tatc` operations are
+   wrapped as coarse, schema'd tools in `tools/`; the model selects a tool
+   and fills its parameters. Deterministic, no code sandbox, and
+   correctness reduces to tool + parameter choice — measurable on the eval.
+
 ## Research extension points
 
 | Research thread | Package | First experiment shape |
@@ -104,7 +114,11 @@ response to LibreChat
 
 ## Non-goals for the base
 
-No multi-turn loop (the `conversation/` package is scaffolding until one
-exists), no tool use inside the agent, no persistent memory backend, no real
-router — each arrives with the paper methodology that motivates it, so the
-baseline stays a clean control.
+The model-driven tool-selection loop is built — `orchestrator.py` runs a
+bounded multi-call loop with in-code role tool-gating, verified with a fake
+client; the Gemini function-calling binding (`GeminiClient.converse`) still
+needs verification against the live API. No multi-turn conversational loop yet
+(the `conversation/` package is scaffolding until one exists), no persistent
+memory backend, no real router — each arrives with the methodology that
+motivates it. The agent calls the fixed `tatc` tools; it never generates
+code.

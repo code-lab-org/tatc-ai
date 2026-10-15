@@ -1,9 +1,10 @@
 from typing import Optional
 
 from .conversation import assemble_context
-from .models import LLMClient, default_client
+from .models import LLMClient, client_for
 from .rendering import render
 from .retrieval import Store
+from .roles import Role, get as get_role
 from .tokens import TokenBudget, usage
 
 SYSTEM_PROMPT = (
@@ -19,12 +20,18 @@ def run_task(
     task: str,
     client: Optional[LLMClient] = None,
     store: Optional[Store] = None,
+    role: Optional[Role] = None,
 ) -> str:
-    client = client or default_client()
+    role = role or get_role()
+    client = client or client_for(role.model)
+    budget = TokenBudget(role.token_budget) if role.token_budget else _BUDGET
+    system = role.system_prompt or SYSTEM_PROMPT
     examples = store.search(task) if store else []
     prompt = assemble_context(task, examples=examples)
-    response = client.generate(prompt, system=SYSTEM_PROMPT)
-    _BUDGET.charge(response)
-    extra = {"budget_exceeded": _BUDGET.exceeded} if _BUDGET.limit else None
+    response = client.generate(prompt, system=system)
+    budget.charge(response)
+    extra = {"role": role.name}
+    if budget.limit:
+        extra["budget_exceeded"] = budget.exceeded
     usage.record("run_agent_task", response, extra=extra)
     return render(response.text)
