@@ -208,16 +208,23 @@ def _lookup_result(points, max_span, kind, value, window, instrument):
             except json.JSONDecodeError:
                 return False
             candidates = payload.get("geometry_candidates", []) if isinstance(payload, dict) else []
+
+            def candidate_matches(candidate: Any) -> bool:
+                if (
+                    not isinstance(candidate, dict)
+                    or candidate.get("kind") != kind
+                    or not _sourced(value, [str(candidate.get("value", ""))])
+                ):
+                    return False
+                candidate_text = candidate.get("source_text")
+                if not isinstance(candidate_text, str):
+                    return False
+                field_label = candidate.get("source_field")
+                excerpt = source_text.removeprefix(f"{field_label}: ")
+                return bool(excerpt) and excerpt in candidate_text
+
             return isinstance(candidates, list) and any(
-                isinstance(candidate, dict)
-                and candidate.get("kind") == kind
-                and _sourced(value, [str(candidate.get("value", ""))])
-                and source_text
-                in (
-                    candidate.get("source_text"),
-                    f"{candidate.get('source_field')}: {candidate.get('source_text')}",
-                )
-                for candidate in candidates
+                candidate_matches(candidate) for candidate in candidates
             )
 
         finish_index = next(

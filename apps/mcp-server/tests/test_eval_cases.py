@@ -214,3 +214,23 @@ def test_lookup_resolution_requires_width_from_a_relevant_source_call():
     assert checks["assessment"]
     assert not checks["looked_up_geometry_source"]
     assert not all(checks.values())
+
+
+def test_lookup_resolution_accepts_a_faithful_excerpt_of_the_candidate():
+    case = next(
+        case for case in build_cases(_clock()) if case.id == "resolver_lookup_supported"
+    )
+    trace, clock = _supported_lookup_trace()
+    trace.calls[0].text = (
+        '{"geometry_candidates":[{"kind":"swath_width_km","value":2230.0,'
+        '"source_field":"Scanning Technique","source_text":"Swath 2230 km. '
+        "Whiskbroom scanning: a strip of 19.7 km width along-track is cross-track "
+        'scanned every 2.956 s. The strip includes 16 parallel lines."}]}'
+    )
+    trace.calls[-1].parsed["geometry_assessment"]["source_text"] = (
+        "Scanning Technique: Swath 2230 km. Whiskbroom scanning: a strip of 19.7 km "
+        "width along-track is cross-track scanned every 2.956 s."
+    )
+
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
