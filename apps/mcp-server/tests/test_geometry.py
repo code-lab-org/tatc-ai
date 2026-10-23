@@ -1,152 +1,143 @@
-"""Geometry resolver tests: parsing, status, validation, conversion."""
+"""Numeric extraction and structured assessment validation."""
 
 import pytest
 from tatc.utils import field_of_regard_to_swath_width
 
 from src.geometry import (
+    GeometryAssessment,
     convert_swath_to_for,
     extract_geometry_candidates,
-    resolve_geometry_status,
+    numeric_certainty,
     validate_geometry_inputs,
 )
 
 
-def test_msi_style_swath_is_conclusive():
-    specs = {"Scanning Technique": "Pushbroom. Swath 290 km"}
-    candidates = extract_geometry_candidates(specs)
-    assert len(candidates) == 1
-    [candidate] = candidates
-    assert candidate["kind"] == "swath_width_km"
-    assert candidate["value"] == 290.0
-    assert candidate["confidence"] == "high"
-    assert candidate["usable_for_coverage"] is True
-    status, _, recommended = resolve_geometry_status(candidates)
-    assert status == "conclusive"
-    assert recommended["value"] == 290.0
-
-
-def test_modis_half_angle_is_derived_and_needs_review():
-    specs = {"Scanning Technique": "Cross-track scan, fixed \xb155-degree viewing angle"}
-    candidates = extract_geometry_candidates(specs)
-    derived = [c for c in candidates if c["kind"] == "field_of_regard_deg"]
-    assert derived and derived[0]["value"] == 110.0
-    assert derived[0]["derived"] is True
-    # A bare half angle must not silently become coverage geometry.
-    assert all(c["usable_for_coverage"] is False for c in candidates)
-    status, reason, recommended = resolve_geometry_status(candidates)
-    assert status == "needs_review"
-    assert recommended is None
-    assert "simple cone" in reason
-
-
-def test_steerable_swath_needs_review():
-    specs = {
-        "Scanning Technique": "Pushbroom; swath 25 km steerable within "
-        "a field of regard of 300 km"
+def _assessment(value=290, status="supported", **extra):
+    result = {
+        "status": status,
+        "source_text": f"Swath {value} km.",
+        "explanation": "The assistant selected this source value for the study.",
     }
-    candidates = extract_geometry_candidates(specs)
-    assert candidates
-    assert all(c["usable_for_coverage"] is False for c in candidates)
-    status, _, _ = resolve_geometry_status(candidates)
-    assert status == "needs_review"
+    result.update(extra)
+    if status == "approximate" and "warning" not in result:
+        result["warning"] = "The model fills the gaps between separate tracks."
+    return result
 
 
-def test_limb_sounder_needs_review():
-    specs = {"Scanning Technique": "Limb viewing with 63 km swath."}
-    candidates = extract_geometry_candidates(specs)
-    assert candidates and candidates[0]["kind"] == "swath_width_km"
-    assert candidates[0]["needs_review"] is True
-    assert candidates[0]["usable_for_coverage"] is False
-    status, _, _ = resolve_geometry_status(candidates)
-    assert status == "needs_review"
-
-
-def test_conical_scanner_swath_is_usable_but_side_looking_radar_is_not():
-    conical = extract_geometry_candidates(
-        {"Scanning Technique": "Conical: 55\xb0 zenith angle; swath: 1450 km"}
-    )
-    assert resolve_geometry_status(conical)[0] == "conclusive"
-    side = extract_geometry_candidates(
-        {"Scanning Technique": "Side-looking, 15-45\xb0 off-nadir, 250 km swath"}
-    )
-    assert side and side[0]["usable_for_coverage"] is False
-    assert resolve_geometry_status(side)[0] == "needs_review"
-
-
-def test_fov_reports_need_review_not_silent_use():
-    specs = {"Swath": "FOV: 114 degree (cross track)."}
-    candidates = extract_geometry_candidates(specs)
-    assert candidates and candidates[0]["kind"] == "field_of_view_deg"
-    assert candidates[0]["usable_for_coverage"] is False
-    status, _, _ = resolve_geometry_status(candidates)
-    assert status == "needs_review"
-
-
-def test_conflicting_swaths_are_ambiguous():
-    specs = {
-        "Scanning Technique": "Pushbroom. Swath 290 km",
-        "Coverage / Cycle": "Wide mode swath 890 km",
+def test_numeric_extraction_keeps_provenance_without_classifying_compatibility():
+    sources = {
+        "Swath": "Swath 290 km. Off-nadir pointing is used.",
+        "Coverage": "Overall swath width 290 km.",
     }
-    candidates = extract_geometry_candidates(specs)
-    usable = [c for c in candidates if c["usable_for_coverage"]]
-    assert len(usable) == 2
-    status, reason, recommended = resolve_geometry_status(candidates)
-    assert status == "ambiguous"
-    assert recommended is None
-    assert "different values" in reason
+    candidates = extract_geometry_candidates(sources)
+
+    assert [(item["kind"], item["value"]) for item in candidates] == [
+        ("swath_width_km", 290.0),
+        ("swath_width_km", 290.0),
+    ]
+    assert [item["source_field"] for item in candidates] == ["Swath", "Coverage"]
+    assert candidates[0]["source_text"] == sources["Swath"]
+    assert numeric_certainty(candidates) == "high"
+    assert all("status" not in item for item in candidates)
 
 
-def test_repeated_same_swath_stays_conclusive():
-    specs = {
-        "Scanning Technique": "Pushbroom. Swath 290 km",
-        "Coverage / Cycle": "Swath 290 km total",
-    }
-    status, _, recommended = resolve_geometry_status(
-        extract_geometry_candidates(specs)
+def test_numeric_extraction_marks_conflicting_numbers_ambiguous():
+    candidates = extract_geometry_candidates(
+        {"Narrow mode": "Swath 25 km.", "Wide mode": "Swath 100 km."}
     )
-    assert status == "conclusive"
-    assert recommended["value"] == 290.0
+    assert numeric_certainty(candidates) == "ambiguous"
 
 
-def test_empty_specs_is_unknown():
-    for specs in (None, {}, {"Resolution": "10 m"}):
-        status, reason, recommended = resolve_geometry_status(
-            extract_geometry_candidates(specs)
-        )
-        assert status == "unknown"
-        assert recommended is None
-        assert "Provide swath_width_km" in reason
-    assert extract_geometry_candidates("swath 290 km") == []  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    "source",
+    [
+        "Swath -290 km.",
+        "Swath +290 km.",
+        "Swath 25-290 km.",
+        "Swath 25 to 290 km.",
+    ],
+)
+def test_numeric_extraction_does_not_turn_signed_or_ranged_widths_into_scalars(source):
+    assert extract_geometry_candidates({"Scanning": source}) == []
 
 
-def test_validate_requires_reference_and_exactly_one_geometry():
-    with pytest.raises(ValueError, match="geometry_reference is required"):
-        validate_geometry_inputs(50.0, None, "")
-    with pytest.raises(ValueError, match="exactly one"):
-        validate_geometry_inputs(50.0, 290.0, "https://example.com/msi")
-    with pytest.raises(ValueError, match="Missing geometry"):
-        validate_geometry_inputs(None, None, "https://example.com/msi")
+def test_assessment_status_and_selected_mode_are_preserved():
+    value = validate_geometry_inputs(
+        None,
+        100,
+        "OSCAR source",
+        _assessment(
+            100,
+            "supported",
+            source_text="Wide mode: swath 100 km.",
+            mode="wide",
+        ),
+    )
+    assert value[:3] == (None, 100.0, "OSCAR source")
+    assert value[3].status == "supported"
+    assert value[3].mode == "wide"
+
+
+def test_validator_checks_numeric_token_but_does_not_parse_compatibility_prose():
+    assessment = _assessment(
+        290,
+        source_text="Swath 290 km. Off-nadir pointing may be used.",
+        explanation="The assistant determined that this source supports the model.",
+    )
+    _, _, _, validated = validate_geometry_inputs(
+        None, 290, "source", assessment
+    )
+    assert validated.status == "supported"
+    assert validated.source_text == assessment["source_text"]
+
+
+def test_source_number_matches_when_unit_has_no_space():
+    assessment = _assessment(290, source_text="The documented swath is 290km.")
+    _, swath, _, _ = validate_geometry_inputs(None, 290, "source", assessment)
+    assert swath == 290.0
+
+
+@pytest.mark.parametrize(
+    "assessment, message",
+    [
+        (None, "Invalid geometry_assessment"),
+        (_assessment(290, "needs_clarification"), "requires clarification"),
+        (_assessment(290, "approximate", warning="  "), "non-empty"),
+        (_assessment(290, "supported", warning="approximation"), "cannot include"),
+        (_assessment(290, source_text="Swath 291 km."), "selected numeric value"),
+        (_assessment(290, source_text="Swath 290 km.", extra="invalid"), "extra"),
+        (_assessment(290, explanation="  "), "non-empty"),
+    ],
+)
+def test_validator_rejects_invalid_assessment(assessment, message):
+    with pytest.raises(ValueError, match=message):
+        validate_geometry_inputs(None, 290, "source", assessment)
 
 
 @pytest.mark.parametrize("bad", [0, -5, 361, float("nan"), float("inf"), True, "wide"])
-def test_validate_rejects_bad_for(bad):
+def test_validator_rejects_bad_field_of_regard(bad):
     with pytest.raises(ValueError, match="field_of_regard_deg"):
-        validate_geometry_inputs(bad, None, "https://example.com/x")
+        validate_geometry_inputs(bad, None, "source", _assessment(50))
 
 
 @pytest.mark.parametrize("bad", [0, -10, float("nan"), float("inf"), True, "wide", 25000])
-def test_validate_rejects_bad_swath(bad):
+def test_validator_rejects_bad_swath(bad):
     with pytest.raises(ValueError, match="swath_width_km"):
-        validate_geometry_inputs(None, bad, "https://example.com/x")
+        validate_geometry_inputs(None, bad, "source", _assessment(290))
 
 
-def test_validate_accepts_either_shape():
-    assert validate_geometry_inputs(110.0, None, "https://example.com/modis") == (
-        110.0, None, "https://example.com/modis",
-    )
-    assert validate_geometry_inputs(None, 290.0, "https://example.com/msi") == (
-        None, 290.0, "https://example.com/msi",
-    )
+def test_validator_requires_citation_and_exactly_one_geometry():
+    with pytest.raises(ValueError, match="geometry_reference is required"):
+        validate_geometry_inputs(50, None, "", _assessment(50))
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_geometry_inputs(50, 290, "source", _assessment(50))
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_geometry_inputs(None, None, "source", _assessment())
+
+
+def test_geometry_assessment_schema_rejects_unknown_fields():
+    with pytest.raises(ValueError, match="extra"):
+        GeometryAssessment.model_validate(_assessment(290, surprise="x"))
 
 
 def test_swath_round_trips_through_for():

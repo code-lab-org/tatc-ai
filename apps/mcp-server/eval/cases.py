@@ -6,6 +6,7 @@ saved summary), not at what the model claims. Prompts use dates relative
 to the eval's pinned "now" so a replayed cache keeps working.
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -117,26 +118,36 @@ def _geometry(summary: Dict[str, Any], kind: str, value: float) -> bool:
     return False
 
 
-def _base_checks(summary, seen, points, max_span, window_ok, kind, value):
+def _base_checks(summary, seen, points, max_span, window_ok, kind, value, status):
     if summary is None:
-        return {"completed": False, "window": False, "region": False, "geometry": False, "sourced": False}
+        return {
+            "completed": False,
+            "window": False,
+            "region": False,
+            "geometry": False,
+            "sourced": False,
+            "assessment": False,
+        }
     start, duration = _window(summary)
     geometry = summary["geometry_model"]
+    assessment = summary.get("geometry_assessment", {})
     return {
         "completed": True,
         "window": window_ok(start, duration),
         "region": _contains(summary, points, max_span),
         "geometry": _geometry(summary, kind, value),
         "sourced": _sourced(geometry["geometry_input_value"], seen),
+        "assessment": assessment.get("status") == status
+        and _sourced(geometry["geometry_input_value"], [assessment.get("source_text", "")]),
     }
 
 
-def _given(points, max_span, kind, value, window):
+def _given(points, max_span, kind, value, window, status="supported"):
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         summary, seen = successful_finish(trace)
         return _base_checks(
             summary, seen, points, max_span,
-            lambda start, duration: window(clock, start, duration), kind, value,
+            lambda start, duration: window(clock, start, duration), kind, value, status,
         )
 
     return checks
@@ -156,14 +167,111 @@ def _around_now(low_hours: float, high_hours: float):
     return ok
 
 
-def _asks_instead(trace: Trace, clock: Clock) -> Dict[str, bool]:
-    """The resolver says needs_review: no run, and the reply raises geometry."""
-    summary, _ = successful_finish(trace)
-    text = trace.final.lower()
-    words = ("swath", "field of regard", "angle", "geometry", "conical")
-    # Text that only imitates tool calls is not an answer to the researcher.
-    raised = any(word in text for word in words) and "_mcp_tatc(" not in text
-    return {"did_not_run": summary is None, "raised_geometry": raised}
+def _needs_clarification(source_terms: Tuple[str, ...]):
+    """Require a relevant source lookup and a question before any run."""
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        summary, _ = successful_finish(trace)
+        source_lookup = any(
+            not call.error
+            and call.name
+            in {"get_satellite_instruments", "get_instrument_info", "resolve_instrument_geometry"}
+            and any(term in str(call.args).lower() for term in source_terms)
+            for call in trace.calls
+        )
+        text = trace.final.lower()
+        asked_about_geometry = "?" in trace.final and any(
+            word in text for word in ("swath", "coverage", "geometry", "mode", "angle")
+        )
+        return {
+            "did_not_run": summary is None,
+            "looked_up_relevant_source": source_lookup,
+            "asked_about_geometry": asked_about_geometry,
+        }
+
+    return checks
+
+
+def _lookup_result(points, max_span, kind, value, window, instrument):
+    """Require the selected number and its evidence to come from a lookup."""
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        result = _given(points, max_span, kind, value, window)(trace, clock)
+        summary, _ = successful_finish(trace)
+        assessment = summary.get("geometry_assessment", {}) if summary else {}
+        source_text = assessment.get("source_text", "")
+
+        def source_matches(call: Call) -> bool:
+            try:
+                payload = json.loads(call.text)
+            except json.JSONDecodeError:
+                return False
+            candidates = payload.get("geometry_candidates", []) if isinstance(payload, dict) else []
+
+            def candidate_matches(candidate: Any) -> bool:
+                if (
+                    not isinstance(candidate, dict)
+                    or candidate.get("kind") != kind
+                    or not _sourced(value, [str(candidate.get("value", ""))])
+                ):
+                    return False
+                candidate_text = candidate.get("source_text")
+                if not isinstance(candidate_text, str):
+                    return False
+                field_label = candidate.get("source_field")
+                excerpt = source_text.removeprefix(f"{field_label}: ")
+                return bool(excerpt) and excerpt in candidate_text
+
+            return isinstance(candidates, list) and any(
+                candidate_matches(candidate) for candidate in candidates
+            )
+
+        finish_index = next(
+            (
+                index
+                for index, call in enumerate(trace.calls)
+                if call.name in FINISH_TOOLS
+                and not call.error
+                and call.parsed
+                and call.parsed.get("result_id")
+            ),
+            len(trace.calls),
+        )
+        looked_up = any(
+            call.name == "resolve_instrument_geometry"
+            and not call.error
+            and instrument in str(call.args).lower()
+            and source_matches(call)
+            for call in trace.calls[:finish_index]
+        )
+        result["looked_up_geometry_source"] = looked_up
+        return result
+
+    return checks
+
+
+def _approximate_result(points, max_span, kind, value, window):
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        result = _given(points, max_span, kind, value, window, status="approximate")(
+            trace, clock
+        )
+        summary, _ = successful_finish(trace)
+        assessment = summary.get("geometry_assessment", {}) if summary else {}
+        final = trace.final.lower()
+        filled_envelope = "fill" in final and "envelope" in final
+        approximation = any(
+            cue in final for cue in ("approximat", "simplif")
+        ) or filled_envelope
+        limitation = any(cue in final for cue in ("gap", "track"))
+        result.update(
+            has_warning=isinstance(assessment.get("warning"), str)
+            and bool(assessment["warning"].strip()),
+            reported_warning=approximation and limitation,
+        )
+        return result
+
+    return checks
 
 
 def _gap_cells(trace: Trace, clock: Clock) -> Dict[str, bool]:
@@ -181,7 +289,17 @@ def _gap_cells(trace: Trace, clock: Clock) -> Dict[str, bool]:
 
 def build_cases(clock: Clock) -> List[Case]:
     d0 = clock.fmt(clock.d0)
-    modis = "Use a field of regard of 110 degrees, from the NASA MODIS design page."
+    modis = (
+        "Study source excerpt: 'A full field of regard of 110 degrees represents "
+        "a continuous nadir-centered swath with no gaps or separate pointing "
+        "needed.' This is synthetic fixture text for the study, not an official "
+        "instrument-source claim."
+    )
+    laser_tracks = (
+        "Study source excerpt: 'Six separated laser tracks with gaps have a "
+        "documented overall swath span of 6.6 km.' This is synthetic fixture "
+        "text for the study, not an official instrument-source claim."
+    )
     return [
         Case(
             "short_given", ("short", "geometry_given"),
@@ -200,24 +318,38 @@ def build_cases(clock: Clock) -> List[Case]:
             _given([PHOENIX], 5.0, "field_of_regard_deg", 110.0, _exact(4.5)),
         ),
         Case(
-            "short_resolve", ("short", "geometry_resolved"),
-            "How often can the imager on Sentinel-2A see Tempe, Arizona over the next 2 days?",
-            _given([TEMPE], 5.0, "swath_width_km", 290.0, _around_now(36, 60)),
-        ),
-        Case(
-            "long_resolve", ("long", "geometry_resolved"),
-            "How much of Colorado can Landsat 9's OLI imager cover over the next 30 days, and how long are the gaps?",
-            _given([DENVER, GRAND_JUNCTION], 10.0, "swath_width_km", 185.0, _around_now(28 * 24, 32 * 24)),
-        ),
-        Case(
-            "needs_review", ("geometry_unclear",),
+            "needs_clarification", ("geometry_unclear",),
             "How often can the radar on Sentinel-1A see Phoenix, Arizona over the next 2 days?",
-            _asks_instead,
+            _needs_clarification(("sentinel-1a", "c-sar", "sar")),
+        ),
+        Case(
+            "resolver_lookup_supported", ("short", "geometry_lookup"),
+            f"Look up MODIS with the geometry resolver and use its returned swath width "
+            f"to estimate Terra access over Phoenix for 24 hours starting {d0}. For this "
+            "synthetic study assumption, treat that selected width as continuous, "
+            "nadir-centered coverage with no gaps or separate pointing needed. The width "
+            "must come from the resolver result, not memory or this prompt.",
+            _lookup_result(
+                [PHOENIX], 5.0, "swath_width_km", 2230.0, _exact(1), "modis"
+            ),
         ),
         Case(
             "fetch_gaps", ("short", "geometry_given", "fetch"),
             f"Estimate Landsat 9 access over Colorado for 24 hours starting {d0}, using its "
-            "185 km swath from the USGS Landsat 9 page. Which parts of the state were never observed?",
+            "185 km swath. For this synthetic study assumption, the researcher-supplied "
+            "geometry evidence describes a continuous nadir-centered swath with no gaps "
+            "or separate pointing needed. This is an evaluation assumption, not a claim "
+            "about official Landsat documentation. "
+            "Which parts of the state were never observed?",
             _gap_cells,
+        ),
+        Case(
+            "separated_tracks_approximation",
+            ("short", "geometry_approximate"),
+            f"Estimate Terra access over Phoenix, Arizona for 24 hours starting {d0}, "
+            f"using this study source excerpt: {laser_tracks} The model will use a "
+            "filled envelope for the overall span. Include that limitation in your "
+            "final summary.",
+            _approximate_result([PHOENIX], 5.0, "swath_width_km", 6.6, _exact(1)),
         ),
     ]

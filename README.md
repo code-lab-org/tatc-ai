@@ -61,17 +61,16 @@ several separated by commas, plus an explicit UTC window of up to 366
 days, and returns a draft ID with each orbit's mean altitude.
 `set_access_region` sets four separate numeric bounds on the draft.
 `finish_access_run` takes grid size, exactly one of `field_of_regard_deg`
-or `swath_width_km`, a required `geometry_reference` source, and an
-optional `daylight_only` flag for optical imagers, then returns a result ID
-with a compact summary. Windows of 3 days or less allow 144 cells; longer
-windows allow 36 cells and 72 cells times satellites, and take minutes.
+or `swath_width_km`, a citation in `geometry_reference`, and a required
+`geometry_assessment` with source text and an explanation. Approximations
+require a warning, which stays with saved results. An optional `daylight_only`
+flag filters optical imagers.
 
-`resolve_instrument_geometry` parses an instrument's OSCAR spec text into
-numeric candidates with provenance and a status of conclusive, ambiguous,
-needs_review, or unknown. When it is not conclusive, the model asks the
-researcher for a number with a source instead of guessing.
-`convert_swath_to_field_of_regard` turns a swath width at an altitude into
-an angle with the same TAT-C math the run uses.
+`resolve_instrument_geometry` returns instrument context and extracted numeric
+candidates for the assistant to assess before running coverage.
+`convert_swath_to_field_of_regard` converts a swath width at an altitude with
+the same TAT-C math used by a run. Windows of 3 days or less allow 144 cells;
+longer windows allow 36 cells and 72 cells times satellites, and take minutes.
 
 `get_access_daily` pages through daily observed and gap areas,
 `get_access_cells` returns the grid as GeoJSON with per-cell access counts

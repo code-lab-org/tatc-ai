@@ -17,9 +17,10 @@ from .generic_coverage import begin_access_run as _begin_run
 from .generic_coverage import finish_access_run as _finish_run
 from .generic_coverage import set_access_region as _set_region
 from .geometry import (
+    GeometryAssessment,
     convert_swath_to_for,
     extract_geometry_candidates,
-    resolve_geometry_status,
+    numeric_certainty,
 )
 from .map_view import build_ground_track_map_html
 from .schema_formatter import format_ground_track_response
@@ -75,11 +76,29 @@ SERVER_INSTRUCTIONS = (
     "on a satellite. "
     "Use the instrument info tool for an instrument's measurement specs and "
     "carrying satellites; its spec values are source text, not parsed numbers. "
-    "Use the geometry resolver tool to turn those spec words into numeric "
-    "candidates. When its status is not conclusive, ask the researcher for a "
-    "swath or angle with a source instead of guessing. "
+    "The geometry resolver returns source context and numeric candidates; it "
+    "does not assess compatibility. Read the complete instrument context, identify "
+    "the source value and mode for this study, and assess whether the coverage "
+    "model represents that geometry. Mark geometry supported only when the "
+    "source evidence establishes continuous nadir-centered coverage without "
+    "gaps or separate pointing. For separated tracks with a documented overall "
+    "span, use that span only as an approximate filled envelope and warn that "
+    "gaps count as accessible in the model. Do not present it as continuous "
+    "coverage. For any known mismatch, provide status approximate and a specific "
+    "warning about what the model simplifies. Approximate runs automatically "
+    "without confirmation, and the warning remains with summaries and fetched "
+    "views. Before any run, ask the researcher to resolve an applicable mode or "
+    "value left unclear by the source, insufficient evidence, or conflicting "
+    "source facts. Never choose a typical, widest, or best-case option for the "
+    "researcher. Keep source_text faithful to returned evidence; never add a "
+    "selected value or mode to make it appear sourced. Supply a "
+    "geometry_assessment with relevant source_text and an "
+    "explanation to the finish tool. Its checks validate the structure and "
+    "numeric value, not the scientific interpretation or source authenticity. "
+    "A citation alone is not evidence. Do not fetch arbitrary reference URLs. "
     "For coverage, call the begin tool, then the region tool, then the finish "
-    "tool, then the fetch tools by result ID for daily rows, the cell map, or "
+    "tool, then the fetch tools by result ID for daily rows, coverage cells "
+    "as GeoJSON, or "
     "revisit numbers. The begin tool takes several satellites separated by "
     "commas to model a constellation. Set daylight_only on the finish tool for "
     "optical imagers. "
@@ -496,47 +515,45 @@ def get_instrument_info(instrument_identifier: str) -> Dict[str, Any]:
 
 @mcp.tool
 def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
-    """Turn OSCAR spec words into numeric geometry candidates with provenance.
+    """Extract numeric candidates with provenance for assistant assessment.
 
     Resolves an instrument by acronym, name, or OSCAR slug, then parses
-    its spec table for swath widths, fields of regard, fields of view,
-    and steering angles. Each candidate cites its spec field and text
-    with a confidence and a usable flag. The status is conclusive,
-    ambiguous, needs_review, or unknown. A non-conclusive status means
-    ask the researcher for a number with a source instead of guessing.
+    numeric values from its specs and instrument descriptions. This tool
+    does not assess compatibility; read all returned context and provide a
+    geometry_assessment when finishing a run.
 
     Args:
         instrument_identifier: Instrument acronym, name, or OSCAR slug.
 
     Returns:
-        Instrument identity, oscar_url, source-text specs, geometry
-        candidates with provenance, status, reason, and recommended
-        candidate when conclusive. Spec values stay source text.
+        Complete source context, numeric candidates with provenance, and
+        numeric certainty. No compatibility status is inferred.
     """
     record = oscar_client.get_instrument(instrument_identifier)
     specs = record.get("specs") if isinstance(record, dict) else None
-    candidates = extract_geometry_candidates(
-        specs if isinstance(specs, dict) else None
-    )
-    status, reason, recommended = resolve_geometry_status(candidates)
+    candidate_sources = dict(specs) if isinstance(specs, dict) else {}
+    for key, label in (
+        ("api_description", "API description"),
+        ("page_description", "Instrument page description"),
+        ("description", "Instrument description"),
+    ):
+        description = record.get(key)
+        if key == "description" and any(
+            description == record.get(source_key)
+            for source_key in ("api_description", "page_description")
+        ):
+            continue
+        if isinstance(description, str) and description.strip():
+            candidate_sources[label] = description
+    candidates = extract_geometry_candidates(candidate_sources)
     return {
-        "slug": record.get("slug"),
-        "acronym": record.get("acronym"),
-        "name": record.get("name"),
-        "type": record.get("type"),
-        "oscar_url": record.get("oscar_url"),
-        "specs": specs,
+        "source_context": record,
         "geometry_candidates": candidates,
-        "geometry_status": status,
-        "geometry_reason": reason,
-        "recommended_candidate": recommended,
+        "numeric_certainty": numeric_certainty(candidates),
         "next_step": (
-            "Confirm this swath or angle with the researcher, then run coverage "
-            "with it and the oscar_url as geometry_reference."
-            if status == "conclusive"
-            else "Do not run coverage yet. Tell the researcher why the OSCAR "
-            "specs do not give one usable number, quote the spec text, and ask "
-            "them for a swath width or field of regard with a source."
+            "Read the complete source_context, choose the value and mode for "
+            "this study, and provide geometry_assessment to the finish tool. "
+            "Ask the researcher first if the evidence is unclear or conflicting."
         ),
     }
 
@@ -636,21 +653,23 @@ def finish_access_run(
     geometry_reference: Optional[str] = None,
     instrument_name: Optional[str] = None,
     daylight_only: bool = False,
+    *,
+    geometry_assessment: GeometryAssessment,
 ) -> Dict[str, Any]:
     """Run a staged access analysis and save it under a result ID.
 
     Takes a draft ID with its region already set, plus grid size, exactly
-    one of field of regard or swath width, and a source string saying where
-    the geometry came from. Never invent the angle or swath: use the
-    geometry resolver result or a researcher-supplied number with its
-    source. For a constellation draft the same geometry applies to every
-    satellite. Set daylight_only for optical imagers so night passes do
-    not count. Works for any staged window up to 366 days. Windows of 3
-    days or less allow up to 144 cells; longer windows allow up to 36
-    cells, 72 cells times satellites, and take minutes. A swath is
-    converted at each satellite's orbit altitude with TAT-C math. Returns a compact summary with a result ID; daily rows and
-    cells stay saved for the fetch tools. Modeled access does not confirm
-    an acquisition.
+    one of field of regard or swath width, a citation, and a structured
+    geometry_assessment. The assistant supplies its interpretation of the
+    complete source context. The server checks that the source_text includes
+    the selected number, but does not verify the interpretation. Understood
+    approximations run automatically and return their warning. Unclear or
+    conflicting evidence must be clarified first. Do not fetch the reference
+    URL. For a constellation, the same geometry applies to every satellite.
+    Set daylight_only
+    for optical imagers so night passes do not count. Works for any staged
+    window up to 366 days. A swath is converted at each satellite's orbit
+    altitude with TAT-C math. Modeled access does not confirm an acquisition.
 
     Args:
         draft_id: Draft ID from the begin tool.
@@ -662,6 +681,8 @@ def finish_access_run(
         instrument_name: Label for the modeled scan. Defaults to modeled scan.
         daylight_only: Keep only accesses with the sun up at the cell
             center, for optical imagers. Defaults to false.
+        geometry_assessment: Status, relevant source_text, explanation,
+            optional warning (required for approximate), and selected mode.
 
     Returns:
         Result ID, compact summary counts, metrics, geometry provenance,
@@ -676,6 +697,7 @@ def finish_access_run(
         geometry_reference=geometry_reference,
         instrument_name=instrument_name,
         daylight_only=daylight_only,
+        geometry_assessment=geometry_assessment,
     )
 
 
@@ -692,8 +714,8 @@ def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[s
         limit: Number of daily rows to return, 1 through 366.
 
     Returns:
-        Daily rows with observed and gap areas and cell IDs, plus
-        evidence flags stating modeled access only.
+        Daily rows with observed and gap areas and cell IDs, plus the
+        geometry status and warning, interpretation, and access evidence.
     """
     return _access_daily(result_id, offset, limit)
 
@@ -704,15 +726,16 @@ def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
 
     Returns grid cells as a GeoJSON feature collection, each cell marked
     observed or gap for the saved window with its access count, mean
-    access minutes, and mean revisit hours. Filter with all, observed, or
-    gaps. Modeled access does not confirm an acquisition.
+    access minutes, and mean revisit hours. The collection metadata and
+    feature properties retain geometry status and warning. Filter
+    with all, observed, or gaps. Modeled access does not confirm an acquisition.
 
     Args:
         result_id: Result ID from a saved access run.
         include: Which cells to return: all, observed, or gaps.
 
     Returns:
-        GeoJSON feature collection with per-cell status and evidence flags.
+        GeoJSON collection with per-cell status, geometry metadata, and access evidence.
     """
     return _access_cells(result_id, include)
 
@@ -730,7 +753,8 @@ def get_access_revisit(result_id: str) -> Dict[str, Any]:
         result_id: Result ID from a saved access run.
 
     Returns:
-        Revisit metrics with definitions and evidence flags.
+        Revisit metrics with definitions, geometry status and warning,
+        interpretation, and access evidence.
     """
     return _access_revisit(result_id)
 
