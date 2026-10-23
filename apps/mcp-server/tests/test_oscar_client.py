@@ -18,7 +18,7 @@ Instruments (3)
 """
 
 INSTRUMENT_HTML = """
-<html><body><table>
+<html><head><meta name="description" content="Advanced Baseline Imager | Purpose: Multi-spectral VIS/IR imaging" /></head><body><table>
 <tr><td class="highlight">Acronym</td><td>ABI</td></tr>
 <tr><td class="highlight">Resolution</td><td>0.5&nbsp;km <b>IFOV</b></td></tr>
 <tr><td class="highlight">Coverage / Cycle</td><td>Full disk every 15 min</td></tr>
@@ -272,6 +272,7 @@ def test_get_instrument_merges_api_and_page_specs(monkeypatch):
     assert out["slug"] == "abi"
     assert out["agency"] == "NOAA"
     assert out["classification"][0] == "Earth observation instrument"
+    assert out["description"] == "Advanced Baseline Imager | Purpose: Multi-spectral VIS/IR imaging"
     assert out["variables"] == [{"name": "Snow cover"}]
     [satellite] = out["satellites"]
     assert satellite["slug"] == "goes_16"
@@ -285,6 +286,32 @@ def test_get_instrument_merges_api_and_page_specs(monkeypatch):
         f"{oscar_client.BASE_URL}/instruments/abi",
         "https://space.oscar.wmo.int/instruments/view/abi",
     ]
+
+
+def test_get_instrument_preserves_api_and_page_descriptions(monkeypatch):
+    api_description = "The instrument uses off-nadir pointing for some observations."
+    detail = {
+        "instrument": [
+            dict(INSTRUMENT_DETAIL["instrument"][0], description=api_description)
+        ]
+    }
+
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        if url == oscar_client.SEARCH_URL:
+            return FakeResponse(text=SEARCH_HTML)
+        if url == f"{oscar_client.BASE_URL}/instruments/abi":
+            return FakeResponse(json_data=detail)
+        if url == "https://space.oscar.wmo.int/instruments/view/abi":
+            return FakeResponse(text=INSTRUMENT_HTML)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+    out = oscar_client.get_instrument("ABI")
+    assert out["api_description"] == api_description
+    assert out["page_description"] == (
+        "Advanced Baseline Imager | Purpose: Multi-spectral VIS/IR imaging"
+    )
+    assert out["description"] == api_description
 
 
 def test_get_instrument_falls_back_to_page_satellites(monkeypatch):

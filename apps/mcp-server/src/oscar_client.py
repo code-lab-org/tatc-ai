@@ -34,6 +34,10 @@ _SPEC_ROW = re.compile(
     r'<td[^>]*class="highlight"[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>',
     re.DOTALL,
 )
+_META_DESCRIPTION = re.compile(
+    r'<meta\b[^>]*name=["\']description["\'][^>]*content=["\'](.*?)["\'][^>]*>',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _get(url: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
@@ -223,6 +227,7 @@ def _instrument_summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "name": record.get("fullname"),
         "agency": record.get("providing-agency"),
         "type": record.get("instrumenttype"),
+        "description": record.get("description") or record.get("instrument_description"),
         "oscar_url": INSTRUMENT_URL.format(slug=slug) if slug else None,
     }
 
@@ -291,6 +296,14 @@ def _parse_instrument_specs(page: str) -> Dict[str, str]:
     return specs
 
 
+def _parse_instrument_description(page: str) -> Optional[str]:
+    """Read the instrument page description metadata when it is present."""
+    match = _META_DESCRIPTION.search(page)
+    if not match:
+        return None
+    return _clean_text(match.group(1)) or None
+
+
 def _instrument_satellite_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     satellite = entry.get("satellites")
     satellite = satellite if isinstance(satellite, dict) else {}
@@ -335,10 +348,15 @@ def get_instrument(instrument_identifier: str) -> Dict[str, Any]:
         _instrument_satellite_entry(entry) for entry in api_entries
     ]
     result["satellites_source"] = "api" if api_entries else None
+    api_description = result.get("description")
+    result["api_description"] = api_description
+    result["page_description"] = None
 
     try:
         response = _get(INSTRUMENT_URL.format(slug=slug))
         response.raise_for_status()
+        result["page_description"] = _parse_instrument_description(response.text)
+        result["description"] = api_description or result["page_description"]
         result["specs"] = _parse_instrument_specs(response.text) or None
         # The API omits instrument-satellites for some records; the page links do not.
         if not result["satellites"]:
@@ -358,6 +376,7 @@ def get_instrument(instrument_identifier: str) -> Dict[str, Any]:
                 ]
                 result["satellites_source"] = "oscar_page"
     except (requests.RequestException, ValueError) as exc:
+        result["description"] = api_description
         result["specs"] = None
         result["specs_error"] = str(exc)
 

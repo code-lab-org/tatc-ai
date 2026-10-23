@@ -61,15 +61,31 @@ several separated by commas, plus an explicit UTC window of up to 366
 days, and returns a draft ID with each orbit's mean altitude.
 `set_access_region` sets four separate numeric bounds on the draft.
 `finish_access_run` takes grid size, exactly one of `field_of_regard_deg`
-or `swath_width_km`, a required `geometry_reference` source, and an
-optional `daylight_only` flag for optical imagers, then returns a result ID
-with a compact summary. Windows of 3 days or less allow 144 cells; longer
+or `swath_width_km`, a citation in `geometry_reference`, and the relevant
+source text in `geometry_source_description`. It can also take
+`geometry_mode` when the source names multiple modes. A citation or claimed
+support status alone does not establish compatibility, and the server does not
+fetch arbitrary reference URLs. Understood approximations run automatically;
+their warnings stay in the result summary, daily and revisit fetch responses,
+and coverage GeoJSON metadata. Unclear meanings, missing evidence, conflicts,
+or unselected modes require clarification. An optional `daylight_only` flag
+filters optical imagers. Windows of 3 days or less allow 144 cells; longer
 windows allow 36 cells and 72 cells times satellites, and take minutes.
 
-`resolve_instrument_geometry` parses an instrument's OSCAR spec text into
-numeric candidates with provenance and a status of conclusive, ambiguous,
-needs_review, or unknown. When it is not conclusive, the model asks the
-researcher for a number with a source instead of guessing.
+`resolve_instrument_geometry` parses an instrument's OSCAR context and spec
+text into numeric candidates with provenance. Numeric certainty is separate
+from compatibility, which is classified as supported, approximate, or
+needs_clarification. Supported geometry needs positive evidence of continuous
+nadir-centered coverage without gaps or separate pointing. Known
+approximations include a persistent warning and can run without a separate
+confirmation step. Ask the researcher when the number's meaning is unclear,
+source evidence conflicts, or a mode is not selected.
+
+Assessment recognizes explicit wording in the supplied source description.
+It does not authenticate that text against its citation or interpret every
+prose formulation. A supported classification describes compatibility under
+the supplied evidence, rather than independent verification of the instrument.
+
 `convert_swath_to_field_of_regard` turns a swath width at an altitude into
 an angle with the same TAT-C math the run uses.
 

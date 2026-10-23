@@ -75,6 +75,8 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument search tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("satellite-instruments tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("instrument info tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("without a separate confirmation step", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("citation alone does not establish compatibility", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
@@ -341,14 +343,20 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument_identifier", tool.inputSchema["required"])
         description = " ".join(tool.description.lower().split())
         self.assertIn("provenance", description)
-        self.assertIn("instead of guessing", description)
+        self.assertIn("numeric certainty is separate", description)
         record = {
             "slug": "msi",
             "acronym": "MSI",
             "name": "Multi-Spectral Instrument",
             "type": "High resolution optical imagers",
             "oscar_url": "https://space.oscar.wmo.int/instruments/view/msi",
-            "specs": {"Scanning Technique": "Pushbroom. Swath 290 km"},
+            "description": "Continuous nadir-centered ground coverage without gaps.",
+            "specs": {
+                "Scanning Technique": (
+                    "Continuous nadir-centered swath 290 km with no gaps and no "
+                    "separate pointing needed."
+                )
+            },
         }
         with mock.patch.object(
             self.server.oscar_client, "get_instrument", return_value=record
@@ -358,9 +366,11 @@ class ServerTests(unittest.TestCase):
             )
         self.assertFalse(result.is_error)
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "conclusive")
+        self.assertEqual(payload["geometry_status"], "supported")
+        self.assertEqual(payload["numeric_certainty"], "high")
         self.assertEqual(payload["recommended_candidate"]["value"], 290.0)
-        self.assertIn("Confirm this swath", payload["next_step"])
+        self.assertIn("geometry_source_description", payload["next_step"])
+        self.assertEqual(payload["description"], record["description"])
 
     def test_resolve_geometry_unknown_when_no_numbers(self):
         record = {
@@ -378,8 +388,90 @@ class ServerTests(unittest.TestCase):
                 "resolve_instrument_geometry", {"instrument_identifier": "X"}
             )
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "unknown")
+        self.assertEqual(payload["geometry_status"], "needs_clarification")
         self.assertIsNone(payload["recommended_candidate"])
+
+    def test_resolve_geometry_uses_warning_from_another_spec_field(self):
+        record = {
+            "slug": "x",
+            "acronym": "X",
+            "name": "X imager",
+            "type": "Optical imager",
+            "description": "Pushbroom optical imager.",
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/x",
+            "specs": {
+                "Swath": "Continuous swath 290 km",
+                "Pointing": "Instrument uses off-nadir pointing.",
+            },
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["geometry_status"], "approximate")
+        self.assertIn("off-nadir", payload["geometry_warnings"][0])
+        self.assertIn("nadir-centered", payload["geometry_warnings"][0])
+        source_context = payload["geometry_assessment"]["evidence"]["source_context"]
+        self.assertIn(record["name"], source_context)
+        self.assertIn(record["type"], source_context)
+        self.assertIn(record["description"], source_context)
+
+    def test_resolve_geometry_uses_api_warning_and_keeps_page_description(self):
+        record = {
+            "slug": "x",
+            "acronym": "X",
+            "name": "X imager",
+            "type": "Optical imager",
+            "api_description": "The instrument uses off-nadir pointing.",
+            "description": "The instrument uses off-nadir pointing.",
+            "page_description": "An Earth-observation instrument.",
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/x",
+            "specs": {"Swath": "Swath 290 km."},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["geometry_status"], "approximate")
+        self.assertEqual(payload["api_description"], record["api_description"])
+        self.assertEqual(payload["page_description"], record["page_description"])
+        context = payload["geometry_assessment"]["evidence"]["source_context"]
+        self.assertIn(record["api_description"], context)
+        self.assertIn(record["page_description"], context)
+
+    def test_resolve_geometry_extracts_track_span_from_description(self):
+        description = (
+            "Four separated laser tracks with gaps span an overall swath width "
+            "of 7.0 km."
+        )
+        record = {
+            "slug": "x",
+            "acronym": "X",
+            "name": "Sensor 7",
+            "type": "Three-channel imager",
+            "description": description,
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/x",
+            "specs": {"Resolution": "10 m"},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["geometry_status"], "approximate")
+        self.assertEqual(payload["recommended_candidate"]["value"], 7.0)
+        self.assertEqual(
+            payload["recommended_candidate"]["source_field"],
+            "Instrument description",
+        )
 
     def test_convert_swath_schema_and_math(self):
         tool = next(
@@ -467,6 +559,11 @@ class ServerTests(unittest.TestCase):
         self.assertIn("no longer than 366 days", result.content[0].text)
 
     def test_finish_access_forwards_draft_and_geometry(self):
+        tool = next(tool for tool in self.list_tools() if tool.name == "finish_access_run")
+        properties = tool.inputSchema["properties"]
+        self.assertIn("geometry_source_description", tool.inputSchema["required"])
+        self.assertIn("geometry_source_description", properties)
+        self.assertIn("geometry_mode", properties)
         expected = {"result_id": "abc123", "summary_counts": {}}
         with mock.patch.object(
             self.server, "_finish_run", return_value=expected
@@ -479,6 +576,11 @@ class ServerTests(unittest.TestCase):
                     "grid_columns": 2,
                     "field_of_regard_deg": 50.0,
                     "geometry_reference": "https://example.com/iss",
+                    "geometry_source_description": (
+                        "Full field of regard 50 degrees represents a continuous "
+                        "nadir-centered swath with no gaps and no separate pointing needed."
+                    ),
+                    "geometry_mode": "wide",
                 },
             )
         self.assertFalse(result.is_error)
@@ -492,6 +594,11 @@ class ServerTests(unittest.TestCase):
             geometry_reference="https://example.com/iss",
             instrument_name=None,
             daylight_only=False,
+            geometry_source_description=(
+                "Full field of regard 50 degrees represents a continuous "
+                "nadir-centered swath with no gaps and no separate pointing needed."
+            ),
+            geometry_mode="wide",
         )
 
     def test_finish_access_rejects_unknown_draft(self):
@@ -501,6 +608,10 @@ class ServerTests(unittest.TestCase):
                 "draft_id": "draft_nope",
                 "field_of_regard_deg": 50.0,
                 "geometry_reference": "https://example.com/iss",
+                "geometry_source_description": (
+                    "Full field of regard 50 degrees represents a continuous "
+                    "nadir-centered swath with no gaps and no separate pointing needed."
+                ),
             },
         )
         self.assertTrue(result.is_error)

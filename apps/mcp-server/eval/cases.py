@@ -157,7 +157,7 @@ def _around_now(low_hours: float, high_hours: float):
 
 
 def _asks_instead(trace: Trace, clock: Clock) -> Dict[str, bool]:
-    """The resolver says needs_review: no run, and the reply raises geometry."""
+    """Unclear geometry needs clarification before a coverage run."""
     summary, _ = successful_finish(trace)
     text = trace.final.lower()
     words = ("swath", "field of regard", "angle", "geometry", "conical")
@@ -181,7 +181,13 @@ def _gap_cells(trace: Trace, clock: Clock) -> Dict[str, bool]:
 
 def build_cases(clock: Clock) -> List[Case]:
     d0 = clock.fmt(clock.d0)
-    modis = "Use a field of regard of 110 degrees, from the NASA MODIS design page."
+    modis = (
+        "For this synthetic study assumption, use a full field of regard of 110 "
+        "degrees. The researcher-supplied geometry evidence says this represents "
+        "a continuous nadir-centered swath with no gaps or separate pointing "
+        "needed. This is an evaluation assumption, not a claim about official "
+        "MODIS documentation."
+    )
     return [
         Case(
             "short_given", ("short", "geometry_given"),
@@ -200,24 +206,28 @@ def build_cases(clock: Clock) -> List[Case]:
             _given([PHOENIX], 5.0, "field_of_regard_deg", 110.0, _exact(4.5)),
         ),
         Case(
-            "short_resolve", ("short", "geometry_resolved"),
+            "resolver_needs_description", ("geometry_unclear",),
             "How often can the imager on Sentinel-2A see Tempe, Arizona over the next 2 days?",
-            _given([TEMPE], 5.0, "swath_width_km", 290.0, _around_now(36, 60)),
+            _asks_instead,
         ),
         Case(
-            "long_resolve", ("long", "geometry_resolved"),
+            "resolver_needs_support_evidence", ("geometry_unclear",),
             "How much of Colorado can Landsat 9's OLI imager cover over the next 30 days, and how long are the gaps?",
-            _given([DENVER, GRAND_JUNCTION], 10.0, "swath_width_km", 185.0, _around_now(28 * 24, 32 * 24)),
+            _asks_instead,
         ),
         Case(
-            "needs_review", ("geometry_unclear",),
+            "needs_clarification", ("geometry_unclear",),
             "How often can the radar on Sentinel-1A see Phoenix, Arizona over the next 2 days?",
             _asks_instead,
         ),
         Case(
             "fetch_gaps", ("short", "geometry_given", "fetch"),
             f"Estimate Landsat 9 access over Colorado for 24 hours starting {d0}, using its "
-            "185 km swath from the USGS Landsat 9 page. Which parts of the state were never observed?",
+            "185 km swath. For this synthetic study assumption, the researcher-supplied "
+            "geometry evidence describes a continuous nadir-centered swath with no gaps "
+            "or separate pointing needed. This is an evaluation assumption, not a claim "
+            "about official Landsat documentation. "
+            "Which parts of the state were never observed?",
             _gap_cells,
         ),
     ]
