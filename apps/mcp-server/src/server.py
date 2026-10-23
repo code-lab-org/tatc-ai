@@ -77,7 +77,7 @@ SERVER_INSTRUCTIONS = (
     "Use the instrument info tool for an instrument's measurement specs and "
     "carrying satellites; its spec values are source text, not parsed numbers. "
     "The geometry resolver returns source context and numeric candidates; it "
-    "does not assess compatibility. Read the complete instrument context, select "
+    "does not assess compatibility. Read the complete instrument context, identify "
     "the source value and mode for this study, and assess whether the coverage "
     "model represents that geometry. Mark geometry supported only when the "
     "source evidence establishes continuous nadir-centered coverage without "
@@ -87,8 +87,12 @@ SERVER_INSTRUCTIONS = (
     "coverage. For any known mismatch, provide status approximate and a specific "
     "warning about what the model simplifies. Approximate runs automatically "
     "without confirmation, and the warning remains with summaries and fetched "
-    "views. If the source is unclear or conflicting, ask the researcher and do "
-    "not run. Supply a geometry_assessment with relevant source_text and an "
+    "views. Before any run, ask the researcher to resolve an applicable mode or "
+    "value left unclear by the source, insufficient evidence, or conflicting "
+    "source facts. Never choose a typical, widest, or best-case option for the "
+    "researcher. Keep source_text faithful to returned evidence; never add a "
+    "selected value or mode to make it appear sourced. Supply a "
+    "geometry_assessment with relevant source_text and an "
     "explanation to the finish tool. Its checks validate the structure and "
     "numeric value, not the scientific interpretation or source authenticity. "
     "A citation alone is not evidence. Do not fetch arbitrary reference URLs. "
@@ -534,6 +538,11 @@ def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
         ("description", "Instrument description"),
     ):
         description = record.get(key)
+        if key == "description" and any(
+            description == record.get(source_key)
+            for source_key in ("api_description", "page_description")
+        ):
+            continue
         if isinstance(description, str) and description.strip():
             candidate_sources[label] = description
     candidates = extract_geometry_candidates(candidate_sources)

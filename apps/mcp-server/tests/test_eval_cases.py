@@ -54,6 +54,13 @@ def test_approximation_eval_requires_a_warning_in_the_final_reply():
     checks = case.checks(complete, clock)
     assert all(checks.values()), checks
 
+    specific_reply, clock = _approximation_trace(
+        "The model used a filled 6.6 km swath envelope over six separated tracks "
+        "with gaps, which overstates actual coverage."
+    )
+    checks = case.checks(specific_reply, clock)
+    assert all(checks.values()), checks
+
     missing_warning, clock = _approximation_trace("The access estimate is complete.")
     checks = case.checks(missing_warning, clock)
     assert checks["completed"]
@@ -66,6 +73,19 @@ def test_approximation_eval_requires_a_warning_in_the_final_reply():
     checks = case.checks(misleading, clock)
     assert checks["has_warning"]
     assert not checks["reported_warning"]
+
+    fabricated, clock = _approximation_trace(
+        "The model used a filled 6.6 km swath envelope over tracks with gaps."
+    )
+    fabricated.prompt = "The source mentions separated tracks, but gives no span."
+    fabricated.calls[0].parsed["geometry_assessment"]["source_text"] = (
+        "Six separated tracks have gaps."
+    )
+    checks = case.checks(fabricated, clock)
+    assert checks["reported_warning"]
+    assert not checks["sourced"]
+    assert not checks["assessment"]
+    assert not all(checks.values())
 
 
 def test_clarification_eval_requires_source_lookup_and_no_completed_run():
@@ -155,7 +175,8 @@ def _supported_lookup_trace(include_lookup=True):
                 {"instrument_identifier": "MODIS"},
                 False,
                 '{"geometry_candidates":[{"kind":"swath_width_km",'
-                '"value":2230.0,"source_text":"Scanning Technique: Swath 2230 km."}]}',
+                '"value":2230.0,"source_field":"Scanning Technique",'
+                '"source_text":"Swath 2230 km."}]}',
             )
         )
     calls.append(Call("finish_access_run", {}, False, "{}", parsed=summary))
@@ -181,5 +202,15 @@ def test_lookup_resolution_requires_width_from_a_relevant_source_call():
     no_lookup, clock = _supported_lookup_trace(include_lookup=False)
     checks = case.checks(no_lookup, clock)
     assert checks["completed"]
+    assert not checks["looked_up_geometry_source"]
+    assert not all(checks.values())
+
+    fabricated, clock = _supported_lookup_trace()
+    fabricated.calls[-1].parsed["geometry_assessment"]["source_text"] = (
+        "Scanning Technique: Swath 2230 km; continuous nadir support."
+    )
+    checks = case.checks(fabricated, clock)
+    assert checks["sourced"]
+    assert checks["assessment"]
     assert not checks["looked_up_geometry_source"]
     assert not all(checks.values())

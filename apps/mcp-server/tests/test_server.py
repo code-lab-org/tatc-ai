@@ -495,6 +495,57 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(payload["source_context"]["page_description"], record["page_description"])
         self.assertEqual(payload["geometry_candidates"][0]["value"], 290.0)
 
+    def test_resolve_geometry_keeps_distinct_descriptions_without_alias_duplicates(self):
+        api_description = "Swath 290 km from the instrument API."
+        page_description = "Swath 300 km from the instrument page."
+        record = {
+            "slug": "x",
+            "acronym": "X",
+            "name": "X imager",
+            "type": "Optical imager",
+            "api_description": api_description,
+            "page_description": page_description,
+            "description": api_description,
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/x",
+            "specs": {},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        self.assertFalse(result.is_error)
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["source_context"], record)
+        self.assertEqual(
+            [
+                (candidate["value"], candidate["source_field"])
+                for candidate in payload["geometry_candidates"]
+            ],
+            [(290.0, "API description"), (300.0, "Instrument page description")],
+        )
+
+        independent = dict(record, description="Swath 310 km from a distinct source.")
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=independent
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(
+            [
+                (candidate["value"], candidate["source_field"])
+                for candidate in payload["geometry_candidates"]
+            ],
+            [
+                (290.0, "API description"),
+                (300.0, "Instrument page description"),
+                (310.0, "Instrument description"),
+            ],
+        )
+
     def test_resolve_geometry_extracts_track_span_from_description(self):
         description = (
             "Four separated laser tracks with gaps span an overall swath width "

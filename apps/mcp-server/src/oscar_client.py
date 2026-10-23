@@ -8,6 +8,7 @@ request), then fetch details for the resolved record (one API request).
 import re
 import time
 from html import unescape
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -34,10 +35,20 @@ _SPEC_ROW = re.compile(
     r'<td[^>]*class="highlight"[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>',
     re.DOTALL,
 )
-_META_DESCRIPTION = re.compile(
-    r'<meta\b[^>]*name=["\']description["\'][^>]*content=["\'](.*?)["\'][^>]*>',
-    re.IGNORECASE | re.DOTALL,
-)
+
+class _InstrumentMetaParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.description: Optional[str] = None
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        attributes = dict(attrs)
+        if (
+            tag.lower() == "meta"
+            and (attributes.get("name") or "").lower() == "description"
+            and self.description is None
+        ):
+            self.description = attributes.get("content")
 
 
 def _get(url: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
@@ -298,10 +309,11 @@ def _parse_instrument_specs(page: str) -> Dict[str, str]:
 
 def _parse_instrument_description(page: str) -> Optional[str]:
     """Read the instrument page description metadata when it is present."""
-    match = _META_DESCRIPTION.search(page)
-    if not match:
+    parser = _InstrumentMetaParser()
+    parser.feed(page)
+    if parser.description is None:
         return None
-    return _clean_text(match.group(1)) or None
+    return _clean_text(parser.description) or None
 
 
 def _instrument_satellite_entry(entry: Dict[str, Any]) -> Dict[str, Any]:

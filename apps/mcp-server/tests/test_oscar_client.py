@@ -314,6 +314,39 @@ def test_get_instrument_preserves_api_and_page_descriptions(monkeypatch):
     assert out["description"] == api_description
 
 
+@pytest.mark.parametrize(
+    ("meta", "expected"),
+    [
+        (
+            '''<meta name="description" content="Instrument's six separated tracks span 6.6 km &amp; have gaps.">''',
+            "Instrument's six separated tracks span 6.6 km & have gaps.",
+        ),
+        (
+            "<meta content='Sensor&#39;s swath spans 12 km &amp; has gaps.' name='description'>",
+            "Sensor's swath spans 12 km & has gaps.",
+        ),
+    ],
+)
+def test_get_instrument_parses_description_attributes_and_entities(
+    monkeypatch, meta, expected
+):
+    page = f"<html><head>{meta}</head></html>"
+
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        if url == oscar_client.SEARCH_URL:
+            return FakeResponse(text=SEARCH_HTML)
+        if url == f"{oscar_client.BASE_URL}/instruments/abi":
+            return FakeResponse(json_data=INSTRUMENT_DETAIL)
+        if url == "https://space.oscar.wmo.int/instruments/view/abi":
+            return FakeResponse(text=page)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(oscar_client.requests, "get", fake_get)
+    result = oscar_client.get_instrument("ABI")
+    assert result["page_description"] == expected
+    assert result["description"] == expected
+
+
 def test_get_instrument_falls_back_to_page_satellites(monkeypatch):
     def fake_get(url, params=None, timeout=None, **kwargs):
         if url == oscar_client.SEARCH_URL:

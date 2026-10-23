@@ -6,6 +6,7 @@ saved summary), not at what the model claims. Prompts use dates relative
 to the eval's pinned "now" so a replayed cache keeps working.
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -200,6 +201,25 @@ def _lookup_result(points, max_span, kind, value, window, instrument):
         summary, _ = successful_finish(trace)
         assessment = summary.get("geometry_assessment", {}) if summary else {}
         source_text = assessment.get("source_text", "")
+
+        def source_matches(call: Call) -> bool:
+            try:
+                payload = json.loads(call.text)
+            except json.JSONDecodeError:
+                return False
+            candidates = payload.get("geometry_candidates", []) if isinstance(payload, dict) else []
+            return isinstance(candidates, list) and any(
+                isinstance(candidate, dict)
+                and candidate.get("kind") == kind
+                and _sourced(value, [str(candidate.get("value", ""))])
+                and source_text
+                in (
+                    candidate.get("source_text"),
+                    f"{candidate.get('source_field')}: {candidate.get('source_text')}",
+                )
+                for candidate in candidates
+            )
+
         finish_index = next(
             (
                 index
@@ -215,9 +235,7 @@ def _lookup_result(points, max_span, kind, value, window, instrument):
             call.name == "resolve_instrument_geometry"
             and not call.error
             and instrument in str(call.args).lower()
-            and _sourced(value, [call.text])
-            and source_text
-            and source_text in call.text
+            and source_matches(call)
             for call in trace.calls[:finish_index]
         )
         result["looked_up_geometry_source"] = looked_up
@@ -234,9 +252,10 @@ def _approximate_result(points, max_span, kind, value, window):
         summary, _ = successful_finish(trace)
         assessment = summary.get("geometry_assessment", {}) if summary else {}
         final = trace.final.lower()
+        filled_envelope = "fill" in final and "envelope" in final
         approximation = any(
-            cue in final for cue in ("approximat", "simplif", "filled envelope")
-        )
+            cue in final for cue in ("approximat", "simplif")
+        ) or filled_envelope
         limitation = any(cue in final for cue in ("gap", "track"))
         result.update(
             has_warning=isinstance(assessment.get("warning"), str)
