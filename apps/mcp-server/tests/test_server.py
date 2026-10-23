@@ -75,8 +75,8 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument search tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("satellite-instruments tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("instrument info tool", self.server.SERVER_INSTRUCTIONS)
-        self.assertIn("without a separate confirmation step", self.server.SERVER_INSTRUCTIONS)
-        self.assertIn("citation alone does not establish compatibility", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("complete instrument context", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("without confirmation", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
@@ -336,14 +336,14 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(result.is_error)
         self.assertIn("junk", result.content[0].text)
 
-    def test_resolve_geometry_schema_and_status(self):
+    def test_resolve_geometry_returns_numeric_candidates_and_source_context(self):
         tool = next(
             tool for tool in self.list_tools() if tool.name == "resolve_instrument_geometry"
         )
         self.assertIn("instrument_identifier", tool.inputSchema["required"])
         description = " ".join(tool.description.lower().split())
         self.assertIn("provenance", description)
-        self.assertIn("numeric certainty is separate", description)
+        self.assertIn("does not assess compatibility", description)
         record = {
             "slug": "msi",
             "acronym": "MSI",
@@ -366,11 +366,46 @@ class ServerTests(unittest.TestCase):
             )
         self.assertFalse(result.is_error)
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "supported")
         self.assertEqual(payload["numeric_certainty"], "high")
-        self.assertEqual(payload["recommended_candidate"]["value"], 290.0)
-        self.assertIn("geometry_source_description", payload["next_step"])
-        self.assertEqual(payload["description"], record["description"])
+        self.assertEqual(payload["geometry_candidates"][0]["value"], 290.0)
+        self.assertEqual(payload["source_context"]["description"], record["description"])
+        self.assertNotIn("geometry_status", payload)
+        self.assertNotIn("recommended_candidate", payload)
+        self.assertIn("geometry_assessment", payload["next_step"])
+
+    def test_geometry_resolution_leaves_compatibility_to_the_assistant(self):
+        finish_tool = next(
+            tool for tool in self.list_tools() if tool.name == "finish_access_run"
+        )
+        finish_properties = finish_tool.inputSchema["properties"]
+        self.assertIn("geometry_assessment", finish_tool.inputSchema["required"])
+        self.assertIn("geometry_assessment", finish_properties)
+        self.assertNotIn("geometry_source_description", finish_properties)
+        self.assertNotIn("geometry_mode", finish_properties)
+
+        record = {
+            "slug": "x",
+            "acronym": "X",
+            "name": "X imager",
+            "type": "Optical imager",
+            "description": "Instrument record description.",
+            "oscar_url": "https://space.oscar.wmo.int/instruments/view/x",
+            "specs": {"Swath": "Swath 290 km."},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        self.assertFalse(result.is_error)
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["numeric_certainty"], "high")
+        self.assertEqual(payload["geometry_candidates"][0]["value"], 290.0)
+        self.assertEqual(payload["source_context"]["specs"], record["specs"])
+        self.assertNotIn("geometry_status", payload)
+        self.assertNotIn("recommended_candidate", payload)
+        self.assertIn("geometry_assessment", payload["next_step"])
 
     def test_resolve_geometry_unknown_when_no_numbers(self):
         record = {
@@ -388,8 +423,30 @@ class ServerTests(unittest.TestCase):
                 "resolve_instrument_geometry", {"instrument_identifier": "X"}
             )
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "needs_clarification")
-        self.assertIsNone(payload["recommended_candidate"])
+        self.assertEqual(payload["numeric_certainty"], "none")
+        self.assertEqual(payload["geometry_candidates"], [])
+        self.assertNotIn("geometry_status", payload)
+
+    def test_resolver_does_not_extract_geometry_from_metadata_or_urls(self):
+        record = {
+            "slug": "sensor_290",
+            "name": "Sensor 290",
+            "type": "Imager with 110 degree field of view",
+            "oscar_url": "https://example.com/instruments/swath_900km",
+            "classification": ["swath width 500 km"],
+            "variables": [{"name": "Coverage 700 km"}],
+            "specs": {"Resolution": "10 m"},
+        }
+        with mock.patch.object(
+            self.server.oscar_client, "get_instrument", return_value=record
+        ):
+            result = self.call_tool(
+                "resolve_instrument_geometry", {"instrument_identifier": "X"}
+            )
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["geometry_candidates"], [])
+        self.assertEqual(payload["numeric_certainty"], "none")
+        self.assertEqual(payload["source_context"], record)
 
     def test_resolve_geometry_uses_warning_from_another_spec_field(self):
         record = {
@@ -411,13 +468,9 @@ class ServerTests(unittest.TestCase):
                 "resolve_instrument_geometry", {"instrument_identifier": "X"}
             )
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "approximate")
-        self.assertIn("off-nadir", payload["geometry_warnings"][0])
-        self.assertIn("nadir-centered", payload["geometry_warnings"][0])
-        source_context = payload["geometry_assessment"]["evidence"]["source_context"]
-        self.assertIn(record["name"], source_context)
-        self.assertIn(record["type"], source_context)
-        self.assertIn(record["description"], source_context)
+        self.assertNotIn("geometry_status", payload)
+        self.assertEqual(payload["geometry_candidates"][0]["value"], 290.0)
+        self.assertEqual(payload["source_context"]["specs"], record["specs"])
 
     def test_resolve_geometry_uses_api_warning_and_keeps_page_description(self):
         record = {
@@ -438,12 +491,9 @@ class ServerTests(unittest.TestCase):
                 "resolve_instrument_geometry", {"instrument_identifier": "X"}
             )
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "approximate")
-        self.assertEqual(payload["api_description"], record["api_description"])
-        self.assertEqual(payload["page_description"], record["page_description"])
-        context = payload["geometry_assessment"]["evidence"]["source_context"]
-        self.assertIn(record["api_description"], context)
-        self.assertIn(record["page_description"], context)
+        self.assertEqual(payload["source_context"]["api_description"], record["api_description"])
+        self.assertEqual(payload["source_context"]["page_description"], record["page_description"])
+        self.assertEqual(payload["geometry_candidates"][0]["value"], 290.0)
 
     def test_resolve_geometry_extracts_track_span_from_description(self):
         description = (
@@ -466,10 +516,10 @@ class ServerTests(unittest.TestCase):
                 "resolve_instrument_geometry", {"instrument_identifier": "X"}
             )
         payload = json.loads(result.content[0].text)
-        self.assertEqual(payload["geometry_status"], "approximate")
-        self.assertEqual(payload["recommended_candidate"]["value"], 7.0)
+        self.assertEqual(payload["numeric_certainty"], "high")
+        self.assertEqual(payload["geometry_candidates"][0]["value"], 7.0)
         self.assertEqual(
-            payload["recommended_candidate"]["source_field"],
+            payload["geometry_candidates"][0]["source_field"],
             "Instrument description",
         )
 
@@ -561,9 +611,32 @@ class ServerTests(unittest.TestCase):
     def test_finish_access_forwards_draft_and_geometry(self):
         tool = next(tool for tool in self.list_tools() if tool.name == "finish_access_run")
         properties = tool.inputSchema["properties"]
-        self.assertIn("geometry_source_description", tool.inputSchema["required"])
-        self.assertIn("geometry_source_description", properties)
-        self.assertIn("geometry_mode", properties)
+        self.assertIn("geometry_assessment", tool.inputSchema["required"])
+        self.assertIn("geometry_assessment", properties)
+        self.assertNotIn("geometry_source_description", properties)
+        self.assertNotIn("geometry_mode", properties)
+        assessment_schema = properties["geometry_assessment"]
+        if "$ref" in assessment_schema:
+            definitions = tool.inputSchema.get("$defs", tool.inputSchema.get("definitions", {}))
+            assessment_schema = definitions[assessment_schema["$ref"].split("/")[-1]]
+        self.assertEqual(assessment_schema["type"], "object")
+        self.assertEqual(
+            set(assessment_schema["properties"]),
+            {"status", "source_text", "explanation", "warning", "mode"},
+        )
+        self.assertEqual(
+            set(assessment_schema["required"]), {"status", "source_text", "explanation"}
+        )
+        self.assertEqual(
+            set(assessment_schema["properties"]["status"]["enum"]),
+            {"supported", "approximate", "needs_clarification"},
+        )
+        assessment = {
+            "status": "supported",
+            "source_text": "Wide mode: full field of regard 50 degrees.",
+            "explanation": "The selected wide mode is represented by this angle.",
+            "mode": "wide",
+        }
         expected = {"result_id": "abc123", "summary_counts": {}}
         with mock.patch.object(
             self.server, "_finish_run", return_value=expected
@@ -576,11 +649,7 @@ class ServerTests(unittest.TestCase):
                     "grid_columns": 2,
                     "field_of_regard_deg": 50.0,
                     "geometry_reference": "https://example.com/iss",
-                    "geometry_source_description": (
-                        "Full field of regard 50 degrees represents a continuous "
-                        "nadir-centered swath with no gaps and no separate pointing needed."
-                    ),
-                    "geometry_mode": "wide",
+                    "geometry_assessment": assessment,
                 },
             )
         self.assertFalse(result.is_error)
@@ -594,11 +663,7 @@ class ServerTests(unittest.TestCase):
             geometry_reference="https://example.com/iss",
             instrument_name=None,
             daylight_only=False,
-            geometry_source_description=(
-                "Full field of regard 50 degrees represents a continuous "
-                "nadir-centered swath with no gaps and no separate pointing needed."
-            ),
-            geometry_mode="wide",
+            geometry_assessment=mock.ANY,
         )
 
     def test_finish_access_rejects_unknown_draft(self):
@@ -608,10 +673,11 @@ class ServerTests(unittest.TestCase):
                 "draft_id": "draft_nope",
                 "field_of_regard_deg": 50.0,
                 "geometry_reference": "https://example.com/iss",
-                "geometry_source_description": (
-                    "Full field of regard 50 degrees represents a continuous "
-                    "nadir-centered swath with no gaps and no separate pointing needed."
-                ),
+                "geometry_assessment": {
+                    "status": "supported",
+                    "source_text": "Field of regard 50 degrees.",
+                    "explanation": "The selected geometry is supported for this study.",
+                },
             },
         )
         self.assertTrue(result.is_error)

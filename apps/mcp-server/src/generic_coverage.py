@@ -47,7 +47,11 @@ from .coverage_core import (
     _validate_window_against_omm,
     field_of_regard_to_swath_width,
 )
-from .geometry import assess_manual_geometry, convert_swath_to_for
+from .geometry import (
+    GeometryAssessment,
+    convert_swath_to_for,
+    validate_geometry_inputs,
+)
 from .result_store import get_draft as _get_draft
 from .result_store import get_result as _get_saved
 from .result_store import paginate as _paginate
@@ -81,7 +85,10 @@ ILLUMINATION_DAYLIGHT = (
 BASE_LIMITS = [
     "Modeled orbital access is not confirmation of an actual instrument acquisition.",
     "Cloud conditions are not modeled.",
-    "See geometry_assessment and geometry_warnings for the evidence and any model simplification used for the selected geometry.",
+    (
+        "The geometry assessment is the assistant's interpretation of supplied "
+        "source text, not independent source verification."
+    ),
     "Grid-cell center sampling is not pixel-resolution mapping; an observed cell does not mean every point in that cell or part of the ROI was scanned.",
     "The within-14-day window relative to the latest OMM epoch is our chosen request guardrail, not a guarantee of prediction accuracy.",
     "A daily gap_area_km2 of 0 means every grid-cell center had at least one modeled access that UTC day, not continuous observation.",
@@ -124,23 +131,21 @@ def _check_run_inputs(
     field_of_regard_deg: Optional[Any],
     swath_width_km: Optional[Any],
     geometry_reference: Optional[str],
-    geometry_source_description: Optional[str],
-    geometry_mode: Optional[str],
+    geometry_assessment: Any,
     daylight_only: Any,
-) -> Tuple[Optional[float], Optional[float], str, Dict[str, Any]]:
-    """Validate run options and assess geometry against its source evidence."""
+) -> Tuple[Optional[float], Optional[float], str, GeometryAssessment]:
+    """Validate numeric inputs and the assistant's structured assessment."""
     if instrument_name is not None and (
         not isinstance(instrument_name, str) or not instrument_name.strip()
     ):
         raise ValueError("instrument_name must be a non-empty string when given")
     if not isinstance(daylight_only, bool):
         raise ValueError("daylight_only must be true or false")
-    return assess_manual_geometry(
+    return validate_geometry_inputs(
         field_of_regard_deg,
         swath_width_km,
         geometry_reference,
-        geometry_source_description,
-        geometry_mode,
+        geometry_assessment,
     )
 
 
@@ -245,7 +250,6 @@ def _geometry_model(
     for_value: Optional[float],
     swath_value: Optional[float],
     reference: str,
-    assessment: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], List[float]]:
     """Resolve each satellite's field of regard and describe the source."""
     if swath_value is not None:
@@ -281,12 +285,6 @@ def _geometry_model(
             "geometry_input_kind": input_kind,
             "geometry_input_value": input_value,
             "geometry_reference": reference,
-            "geometry_source_description": assessment["source_description"],
-            "geometry_mode": assessment["geometry_mode"],
-            "geometry_status": assessment["geometry_status"],
-            "numeric_certainty": assessment["numeric_certainty"],
-            "geometry_assessment": assessment,
-            "geometry_warnings": assessment["warnings"],
             "conversion_note": note,
             "per_satellite": per_satellite,
         },
@@ -321,8 +319,7 @@ def _run_stage(
     geometry_reference: Optional[str],
     instrument_name: Optional[str],
     daylight_only: Any = False,
-    geometry_source_description: Optional[str] = None,
-    geometry_mode: Optional[str] = None,
+    geometry_assessment: Any = None,
     *,
     max_workers: int = 1,
 ) -> Dict[str, Any]:
@@ -337,8 +334,7 @@ def _run_stage(
         field_of_regard_deg,
         swath_width_km,
         geometry_reference,
-        geometry_source_description,
-        geometry_mode,
+        geometry_assessment,
         daylight_only,
     )
     start = _parse_utc(stage["window_start_utc"], "window_start_utc")
@@ -348,9 +344,7 @@ def _run_stage(
     cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
     _check_grid_size(cells, len(stage["satellites"]), long_window)
 
-    geometry, resolved = _geometry_model(
-        stage, for_value, swath_value, reference, geometry_assessment
-    )
+    geometry, resolved = _geometry_model(stage, for_value, swath_value, reference)
     label = instrument_name.strip() if instrument_name else "modeled scan"
     specs = tuple(
         (s["omm_records"], s["satellite"], label, field_of_regard)
@@ -380,7 +374,6 @@ def _run_stage(
         + [ILLUMINATION_DAYLIGHT if daylight_only else ILLUMINATION_UNFILTERED]
         + BASE_LIMITS[2:]
         + (YEAR_LIMITS if long_window else [])
-        + geometry_assessment["warnings"]
     )
     interpretation = (
         "Observed and gap areas assign each whole geodesic grid cell based "
@@ -389,10 +382,7 @@ def _run_stage(
         + ". This does not establish coverage of every point in an observed "
         "cell or every part of the ROI; never claim the whole ROI was "
         "scanned. Modeled access does not confirm an actual instrument "
-        "acquisition. Geometry is classified as "
-        + geometry_assessment["geometry_status"]
-        + ": "
-        + geometry_assessment["interpretation"]
+        "acquisition. See geometry_assessment for the selected geometry and caveat."
     )
     return {
         "satellite": stage["satellite"],
@@ -407,8 +397,7 @@ def _run_stage(
         "interpretation": interpretation,
         "total_roi_area_km2": round(sum(cell["area_km2"] for cell in cells), 3),
         "geometry_model": geometry,
-        "geometry_assessment": geometry_assessment,
-        "geometry_warnings": geometry_assessment["warnings"],
+        "geometry_assessment": geometry_assessment.model_dump(exclude_none=True),
         "omm_freshness_limit_days": MAX_OMM_AGE.days,
         "method": {
             "observation_source": (
@@ -420,7 +409,6 @@ def _run_stage(
             "limits": limits,
         },
         "evidence": _evidence(daylight_only),
-        "geometry_interpretation": geometry_assessment["interpretation"],
         "metrics": summary["metrics"],
         "daily": summary["daily"],
         "grid_cells": _geojson_cells(cells, summary["per_cell"]),
@@ -443,7 +431,6 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "grid_shape": full["grid_shape"],
         "geometry_model": full["geometry_model"],
         "geometry_assessment": full["geometry_assessment"],
-        "geometry_warnings": full["geometry_warnings"],
         "interpretation": full["interpretation"],
         "summary_counts": {
             "total_days": len(days),
@@ -460,7 +447,7 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
             "Daily rows, grid cells with per-cell revisit, and revisit "
             "numbers are saved under result_id. Use the daily, cells, and "
             "revisit fetch tools with that ID instead of re-running the analysis. "
-            "Preserve geometry_warnings and geometry_assessment with any quoted result."
+            "Preserve geometry_assessment.warning with any quoted result."
         ),
     }
 
@@ -489,8 +476,8 @@ def begin_access_run(
             "Call the region tool with this draft_id and four separate "
             "numeric bounds, then the finish tool with grid size, exactly "
             "one of field_of_regard_deg or swath_width_km, the geometry_reference "
-            "citation, and geometry_source_description copied from the relevant "
-            "source text. Include a mode when the source has distinct operating modes."
+            "citation, and a geometry_assessment with status, source_text, "
+            "explanation, and a warning for approximate geometry."
         ),
     }
 
@@ -511,9 +498,8 @@ def set_access_region(
         "next_step": (
             "Call the finish tool with this draft_id, grid rows and "
             "columns, exactly one of field_of_regard_deg or swath_width_km, "
-            "the geometry_reference citation, and geometry_source_description "
-            "copied from the relevant source text. Include a mode when the source "
-            "has distinct operating modes."
+            "the geometry_reference citation, and a geometry_assessment with "
+            "status, source_text, explanation, and a warning for approximate geometry."
         ),
     }
 
@@ -527,9 +513,8 @@ def finish_access_run(
     geometry_reference: Optional[str] = None,
     instrument_name: Optional[str] = None,
     daylight_only: Any = False,
-    geometry_source_description: Optional[str] = None,
-    geometry_mode: Optional[str] = None,
     *,
+    geometry_assessment: Optional[Any] = None,
     _max_workers: int = MAX_YEAR_WORKERS,
 ) -> Dict[str, Any]:
     """Run a draft of any length and return a result ID with a summary.
@@ -554,8 +539,7 @@ def finish_access_run(
         geometry_reference,
         instrument_name,
         daylight_only,
-        geometry_source_description,
-        geometry_mode,
+        geometry_assessment,
         max_workers=_max_workers,
     )
     return _compact_summary(full, _save_result(full))
@@ -568,8 +552,10 @@ def _fetch_header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "daylight_only": payload["daylight_only"],
         "window_start_utc": payload["window_start_utc"],
         "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
-        "geometry_assessment": payload["geometry_assessment"],
-        "geometry_warnings": payload["geometry_warnings"],
+        "geometry_reference": payload["geometry_model"]["geometry_reference"],
+        "geometry_mode": payload["geometry_assessment"].get("mode"),
+        "geometry_status": payload["geometry_assessment"]["status"],
+        "geometry_warning": payload["geometry_assessment"].get("warning"),
         "interpretation": payload["interpretation"],
     }
 
@@ -578,9 +564,6 @@ def _fetch_footer(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "evidence": payload["evidence"],
         "evidence_note": EVIDENCE_NOTE,
-        "geometry_assessment": payload["geometry_assessment"],
-        "geometry_warnings": payload["geometry_warnings"],
-        "geometry_interpretation": payload["geometry_interpretation"],
     }
 
 
@@ -631,8 +614,8 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
                     "access_count": cell["access_count"],
                     "mean_access_minutes": cell["mean_access_minutes"],
                     "mean_revisit_hours": cell["mean_revisit_hours"],
-                    "geometry_status": payload["geometry_assessment"]["geometry_status"],
-                    "geometry_warnings": list(payload["geometry_warnings"]),
+                    "geometry_status": payload["geometry_assessment"]["status"],
+                    "geometry_warning": payload["geometry_assessment"].get("warning"),
                 },
                 "geometry": cell["geometry"],
             }
@@ -645,8 +628,10 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
         "geojson": {
             "type": "FeatureCollection",
             "metadata": {
-                "geometry_assessment": payload["geometry_assessment"],
-                "geometry_warnings": payload["geometry_warnings"],
+                "geometry_reference": payload["geometry_model"]["geometry_reference"],
+                "geometry_mode": payload["geometry_assessment"].get("mode"),
+                "geometry_status": payload["geometry_assessment"]["status"],
+                "geometry_warning": payload["geometry_assessment"].get("warning"),
                 "interpretation": payload["interpretation"],
                 "evidence": payload["evidence"],
             },

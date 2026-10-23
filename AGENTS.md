@@ -23,6 +23,10 @@ Read `README.md` before changing the stack or its deployment setup.
 - Keep credentials in private local environment files. Never commit API keys, OIDC secrets, or generated credentials.
 - When adding an environment setting, update the matching `.env.example` with a placeholder and safe setup instructions.
 
+## LLM and tool responsibilities
+
+Use the calling LLM to interpret user requests and instrument descriptions, and pass its assessment through structured tool inputs. Keep schemas, units, numeric ranges and calculations, source-evidence requirements, and permissions enforced in code. Check interpretation quality with behavioral evals and keep uncertainty and approximation warnings explicit.
+
 ## Changes and deployment
 
 - Make changes on a branch and use a pull request.

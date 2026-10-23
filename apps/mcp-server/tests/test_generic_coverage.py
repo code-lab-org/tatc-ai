@@ -115,6 +115,19 @@ def _source_description(kind, value):
     )
 
 
+def _assessment(kind, value, status="supported", warning=None, mode=None, source_text=None):
+    result = {
+        "status": status,
+        "source_text": source_text or _source_description(kind, value),
+        "explanation": "The selected source value is the geometry used for this study.",
+    }
+    if warning is not None:
+        result["warning"] = warning
+    if mode is not None:
+        result["mode"] = mode
+    return result
+
+
 def _staged(monkeypatch, end_iso="2026-09-18T04:30:00Z", bbox=(-2.0, -1.0, 2.0, 1.0)):
     _mock_sat(monkeypatch)
     draft = gc.begin_access_run("ISS", "2026-09-18T04:00:00Z", end_iso, now=NOW)
@@ -137,7 +150,9 @@ def test_for_path_reports_provenance_and_daily_accounting(monkeypatch):
             grid_columns=2,
             field_of_regard_deg=50.0,
             geometry_reference="https://example.com/iss-payload",
-            geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+            geometry_assessment=_assessment(
+                "field_of_regard_deg", 50.0, mode="wide"
+            ),
         )
     )
     assert result["satellite"] == "ISS (ZARYA)"
@@ -146,8 +161,8 @@ def test_for_path_reports_provenance_and_daily_accounting(monkeypatch):
     assert geometry["per_satellite"][0]["field_of_regard_deg"] == 50.0
     assert geometry["geometry_input_kind"] == "field_of_regard_deg"
     assert geometry["geometry_reference"] == "https://example.com/iss-payload"
-    assert geometry["geometry_status"] == "supported"
-    assert geometry["numeric_certainty"] == "high"
+    assert result["geometry_assessment"]["status"] == "supported"
+    assert result["geometry_assessment"]["mode"] == "wide"
     assert geometry["per_satellite"][0]["omm_mean_altitude_km"] > 300
     assert result["daily"][0]["observed_cell_ids"] == [0]
     assert result["daily"][0]["gap_cell_ids"] == [1]
@@ -165,7 +180,7 @@ def test_swath_path_converts_at_omm_altitude(monkeypatch):
             grid_columns=2,
             swath_width_km=300.0,
             geometry_reference="https://example.com/iss-swath",
-            geometry_source_description=_source_description("swath_width_km", 300.0),
+            geometry_assessment=_assessment("swath_width_km", 300.0),
         )
     )
     geometry = result["geometry_model"]
@@ -178,69 +193,83 @@ def test_swath_path_converts_at_omm_altitude(monkeypatch):
 
 def test_six_track_approximation_runs_and_persists_warnings(monkeypatch):
     _mock_collect(monkeypatch, present_ids=(0,))
-    description = "Six separated laser tracks with gaps span a 6.6 km swath."
+    description = "Wide mode: six separated laser tracks with gaps span 6.6 km."
     summary = gc.finish_access_run(
         _staged(monkeypatch),
         grid_rows=1,
         grid_columns=2,
         swath_width_km=6.6,
         geometry_reference="laser instrument source",
-        geometry_source_description=description,
+        geometry_assessment=_assessment(
+            "swath_width_km",
+            6.6,
+            "approximate",
+            warning="The modeled envelope fills gaps between the six tracks, so coverage may be overstated.",
+            mode="wide",
+            source_text=description,
+        ),
     )
     stored = _full(summary)
-    [warning] = summary["geometry_warnings"]
-    assert summary["geometry_assessment"]["geometry_status"] == "approximate"
-    assert summary["geometry_assessment"]["numeric_certainty"] == "high"
-    assert summary["geometry_assessment"]["source_reference"] == "laser instrument source"
-    assert summary["geometry_assessment"]["source_description"] == description
-    assert "gaps between tracks as accessible" in warning
-    assert "may overstate access" in warning
-    assert stored["geometry_model"]["geometry_status"] == "approximate"
+    warning = summary["geometry_assessment"]["warning"]
+    reference = summary["geometry_model"]["geometry_reference"]
+    mode = summary["geometry_assessment"].get("mode")
+    assert mode == "wide"
+    assert summary["geometry_assessment"]["status"] == "approximate"
+    assert summary["geometry_assessment"]["source_text"] == description
+    assert stored["geometry_assessment"] == summary["geometry_assessment"]
+    assert "gaps between the six tracks" in warning
+    assert "may be overstated" in warning
+    assert "geometry_assessment" not in stored["geometry_model"]
+    assert "geometry_status" not in stored["geometry_model"]
 
     daily = gc.get_access_daily(summary["result_id"])
     revisit = gc.get_access_revisit(summary["result_id"])
     cells = gc.get_access_cells(summary["result_id"])
-    assert daily["geometry_warnings"] == [warning]
-    assert daily["geometry_assessment"]["source_description"] == description
-    assert warning in daily["interpretation"]
-    assert revisit["geometry_warnings"] == [warning]
-    assert revisit["geometry_interpretation"] == summary["geometry_assessment"]["interpretation"]
-    assert cells["geojson"]["metadata"]["geometry_warnings"] == [warning]
-    assert cells["geojson"]["metadata"]["geometry_assessment"]["source_reference"] == (
-        "laser instrument source"
-    )
+    assert daily["geometry_status"] == "approximate"
+    assert daily["geometry_warning"] == warning
+    assert daily["geometry_reference"] == reference
+    assert daily["geometry_mode"] == mode
+    assert "geometry_assessment" in daily["interpretation"]
+    assert warning not in daily["interpretation"]
+    assert revisit["geometry_warning"] == warning
+    assert revisit["geometry_reference"] == reference
+    assert revisit["geometry_mode"] == mode
+    assert cells["geometry_reference"] == reference
+    assert cells["geometry_mode"] == mode
+    assert cells["geojson"]["metadata"]["geometry_reference"] == reference
+    assert cells["geojson"]["metadata"]["geometry_mode"] == mode
+    assert cells["geojson"]["metadata"]["geometry_warning"] == warning
+    assert "source_text" not in cells["geojson"]["metadata"]
+    assert "explanation" not in cells["geojson"]["metadata"]
     assert cells["geojson"]["features"][0]["properties"]["geometry_status"] == "approximate"
-    assert cells["geojson"]["features"][0]["properties"]["geometry_warnings"] == [warning]
+    assert cells["geojson"]["features"][0]["properties"]["geometry_warning"] == warning
 
 
 def test_manual_geometry_citation_cannot_bypass_source_assessment(monkeypatch):
     draft_id = _staged(monkeypatch)
-    with pytest.raises(ValueError, match="geometry_source_description is required"):
+    with pytest.raises(ValueError, match="Invalid geometry_assessment"):
         gc.finish_access_run(
             draft_id,
             field_of_regard_deg=50.0,
             geometry_reference="arbitrary citation",
         )
-    with pytest.raises(ValueError, match="does not match a candidate"):
+    with pytest.raises(ValueError, match="selected numeric value"):
         gc.finish_access_run(
             draft_id,
             field_of_regard_deg=50.0,
             geometry_reference="arbitrary citation",
-            geometry_source_description="I claim that 50 degrees is supported.",
-        )
-    with pytest.raises(ValueError, match="positive evidence"):
-        gc.finish_access_run(
-            draft_id,
-            field_of_regard_deg=50.0,
-            geometry_reference="arbitrary citation",
-            geometry_source_description="Full field of regard 50 degrees.",
+            geometry_assessment={
+                "status": "supported",
+                "source_text": "I claim that 51 degrees is supported.",
+                "explanation": "Claimed support.",
+            },
         )
 
 
 def test_missing_or_doubled_geometry_fails_with_guidance(monkeypatch):
     _mock_collect(monkeypatch)
     draft_id = _staged(monkeypatch)
-    with pytest.raises(ValueError, match="Missing geometry"):
+    with pytest.raises(ValueError, match="exactly one"):
         gc.finish_access_run(draft_id, geometry_reference="https://example.com/x")
     with pytest.raises(ValueError, match="exactly one"):
         gc.finish_access_run(
@@ -267,7 +296,7 @@ def _run_one(monkeypatch, present_ids=(0,)):
         grid_columns=2,
         field_of_regard_deg=50.0,
         geometry_reference="https://example.com/iss",
-        geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+        geometry_assessment=_assessment("field_of_regard_deg", 50.0),
     )
 
 
@@ -429,7 +458,7 @@ def test_finish_needs_region_first(monkeypatch):
             grid_columns=2,
             field_of_regard_deg=50.0,
             geometry_reference="https://example.com/x",
-            geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+            geometry_assessment=_assessment("field_of_regard_deg", 50.0),
         )
 
 
@@ -443,7 +472,7 @@ def test_finish_swath_path_and_errors(monkeypatch):
         grid_columns=2,
         swath_width_km=300.0,
         geometry_reference="https://example.com/iss-swath",
-        geometry_source_description=_source_description("swath_width_km", 300.0),
+        geometry_assessment=_assessment("swath_width_km", 300.0),
     )
     assert finished["geometry_model"]["geometry_input_kind"] == "swath_width_km"
     with pytest.raises(ValueError, match="Unknown draft_id"):
@@ -452,7 +481,7 @@ def test_finish_swath_path_and_errors(monkeypatch):
             field_of_regard_deg=50.0,
             geometry_reference="https://example.com/x",
         )
-    with pytest.raises(ValueError, match="Missing geometry"):
+    with pytest.raises(ValueError, match="exactly one"):
         gc.finish_access_run(
             draft["draft_id"], geometry_reference="https://example.com/x"
         )
@@ -501,7 +530,7 @@ def test_finish_saves_10day_result(monkeypatch):
         grid_columns=1,
         field_of_regard_deg=50.0,
         geometry_reference="https://example.com/iss",
-        geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+        geometry_assessment=_assessment("field_of_regard_deg", 50.0),
         _max_workers=1,
     )
     assert summary["result_id"]
@@ -536,7 +565,7 @@ def test_finish_picks_grid_limit_and_workers_from_window(monkeypatch):
         grid_columns=7,
         field_of_regard_deg=50.0,
         geometry_reference="https://example.com/x",
-        geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+        geometry_assessment=_assessment("field_of_regard_deg", 50.0),
         _max_workers=4,
     )
     assert short["summary_counts"]["grid_cell_count"] == 49
@@ -547,7 +576,7 @@ def test_finish_picks_grid_limit_and_workers_from_window(monkeypatch):
             grid_columns=7,
             field_of_regard_deg=50.0,
             geometry_reference="https://example.com/x",
-            geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+            geometry_assessment=_assessment("field_of_regard_deg", 50.0),
             _max_workers=1,
         )
 
@@ -561,7 +590,7 @@ def test_finish_real_execution_10day(monkeypatch):
         grid_columns=1,
         field_of_regard_deg=50.0,
         geometry_reference="https://example.com/iss",
-        geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+        geometry_assessment=_assessment("field_of_regard_deg", 50.0),
         _max_workers=1,
     )
     assert summary["summary_counts"]["total_days"] == 11
@@ -584,9 +613,9 @@ def _real_run(monkeypatch, satellites, days=1, **finish):
         grid_columns=1,
         field_of_regard_deg=110.0,
         geometry_reference="https://example.com/x",
-        geometry_source_description=finish.pop(
-            "geometry_source_description",
-            _source_description("field_of_regard_deg", 110.0),
+        geometry_assessment=finish.pop(
+            "geometry_assessment",
+            _assessment("field_of_regard_deg", 110.0),
         ),
         _max_workers=1,
         **finish,
@@ -628,7 +657,7 @@ def test_long_window_caps_cells_times_satellites(monkeypatch):
         gc.finish_access_run(
             draft["draft_id"], grid_rows=6, grid_columns=6,
             field_of_regard_deg=50.0, geometry_reference="https://example.com/x",
-            geometry_source_description=_source_description("field_of_regard_deg", 50.0),
+            geometry_assessment=_assessment("field_of_regard_deg", 50.0),
         )
 
 

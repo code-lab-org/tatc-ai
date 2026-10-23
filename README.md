@@ -61,33 +61,25 @@ several separated by commas, plus an explicit UTC window of up to 366
 days, and returns a draft ID with each orbit's mean altitude.
 `set_access_region` sets four separate numeric bounds on the draft.
 `finish_access_run` takes grid size, exactly one of `field_of_regard_deg`
-or `swath_width_km`, a citation in `geometry_reference`, and the relevant
-source text in `geometry_source_description`. It can also take
-`geometry_mode` when the source names multiple modes. A citation or claimed
-support status alone does not establish compatibility, and the server does not
-fetch arbitrary reference URLs. Understood approximations run automatically;
-their warnings stay in the result summary, daily and revisit fetch responses,
-and coverage GeoJSON metadata. Unclear meanings, missing evidence, conflicts,
-or unselected modes require clarification. An optional `daylight_only` flag
-filters optical imagers. Windows of 3 days or less allow 144 cells; longer
-windows allow 36 cells and 72 cells times satellites, and take minutes.
+or `swath_width_km`, a citation in `geometry_reference`, and a required
+`geometry_assessment` object with `status`, `source_text`, and `explanation`.
+Use `supported`, `approximate`, or `needs_clarification`; approximations also
+require a `warning`, and `mode` records a selected source mode when relevant.
+The assistant reads the complete instrument context and supplies this
+interpretation. The server checks the input shape, numeric range, and that the
+source text includes the selected number. It does not authenticate the citation
+or verify the scientific interpretation. Do not fetch arbitrary citation URLs.
+Approximation runs need no confirmation. The warning stays in the result
+summary, daily and revisit responses, and coverage GeoJSON. A clarification
+assessment cannot run. See the [geometry acceptance criteria in issue
+41](https://github.com/code-lab-org/tatc-ai/issues/41).
 
-`resolve_instrument_geometry` parses an instrument's OSCAR context and spec
-text into numeric candidates with provenance. Numeric certainty is separate
-from compatibility, which is classified as supported, approximate, or
-needs_clarification. Supported geometry needs positive evidence of continuous
-nadir-centered coverage without gaps or separate pointing. Known
-approximations include a persistent warning and can run without a separate
-confirmation step. Ask the researcher when the number's meaning is unclear,
-source evidence conflicts, or a mode is not selected.
-
-Assessment recognizes explicit wording in the supplied source description.
-It does not authenticate that text against its citation or interpret every
-prose formulation. A supported classification describes compatibility under
-the supplied evidence, rather than independent verification of the instrument.
-
-`convert_swath_to_field_of_regard` turns a swath width at an altitude into
-an angle with the same TAT-C math the run uses.
+`resolve_instrument_geometry` returns instrument context and extracted numeric
+candidates with source provenance. It does not choose a mode or classify
+compatibility. Use `convert_swath_to_field_of_regard` to convert a swath width
+at an altitude with the same TAT-C math used by a run. Windows of 3 days or
+less allow 144 cells; longer windows allow 36 cells and 72 cells times
+satellites, and take minutes.
 
 `get_access_daily` pages through daily observed and gap areas,
 `get_access_cells` returns the grid as GeoJSON with per-cell access counts
