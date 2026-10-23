@@ -62,24 +62,15 @@ days, and returns a draft ID with each orbit's mean altitude.
 `set_access_region` sets four separate numeric bounds on the draft.
 `finish_access_run` takes grid size, exactly one of `field_of_regard_deg`
 or `swath_width_km`, a citation in `geometry_reference`, and a required
-`geometry_assessment` object with `status`, `source_text`, and `explanation`.
-Use `supported`, `approximate`, or `needs_clarification`; approximations also
-require a `warning`, and `mode` records a selected source mode when relevant.
-The assistant reads the complete instrument context and supplies this
-interpretation. The server checks the input shape, numeric range, and that the
-source text includes the selected number. It does not authenticate the citation
-or verify the scientific interpretation. Do not fetch arbitrary citation URLs.
-Approximation runs need no confirmation. The warning stays in the result
-summary, daily and revisit responses, and coverage GeoJSON. A clarification
-assessment cannot run. See the [geometry acceptance criteria in issue
-41](https://github.com/code-lab-org/tatc-ai/issues/41).
+`geometry_assessment` with source text and an explanation. Approximations
+require a warning, which stays with saved results. An optional `daylight_only`
+flag filters optical imagers.
 
 `resolve_instrument_geometry` returns instrument context and extracted numeric
-candidates with source provenance. It does not choose a mode or classify
-compatibility. Use `convert_swath_to_field_of_regard` to convert a swath width
-at an altitude with the same TAT-C math used by a run. Windows of 3 days or
-less allow 144 cells; longer windows allow 36 cells and 72 cells times
-satellites, and take minutes.
+candidates for the assistant to assess before running coverage.
+`convert_swath_to_field_of_regard` converts a swath width at an altitude with
+the same TAT-C math used by a run. Windows of 3 days or less allow 144 cells;
+longer windows allow 36 cells and 72 cells times satellites, and take minutes.
 
 `get_access_daily` pages through daily observed and gap areas,
 `get_access_cells` returns the grid as GeoJSON with per-cell access counts
