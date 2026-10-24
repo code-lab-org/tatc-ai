@@ -12,10 +12,10 @@ from src.geometry import (
 )
 
 
-def _assessment(value=290, status="supported", **extra):
+def _assessment(value=290, status="supported", unit="km", **extra):
     result = {
         "status": status,
-        "source_text": f"Swath {value} km.",
+        "source_text": f"Swath {value} {unit}.",
         "explanation": "The assistant selected this source value for the study.",
     }
     result.update(extra)
@@ -98,6 +98,62 @@ def test_source_number_matches_when_unit_has_no_space():
 
 
 @pytest.mark.parametrize(
+    "field_of_regard_deg, swath_width_km, source_text",
+    [
+        (50, None, "Field of regard 50 km."),
+        (None, 290, "Swath 290 degrees."),
+        (50, None, "Field of regard 50"),
+        (None, 290, "Swath 290"),
+        (50, None, "Value 50; another angle is 51 degrees."),
+        (None, 290, "Value 290; another swath is 291 km."),
+    ],
+)
+def test_validator_requires_unit_associated_with_selected_value(
+    field_of_regard_deg, swath_width_km, source_text
+):
+    value = field_of_regard_deg or swath_width_km
+    assessment = _assessment(value, source_text=source_text)
+    with pytest.raises(ValueError, match="selected numeric value"):
+        validate_geometry_inputs(
+            field_of_regard_deg,
+            swath_width_km,
+            "source",
+            assessment,
+        )
+
+
+@pytest.mark.parametrize(
+    "field_of_regard_deg, swath_width_km, source_text",
+    [
+        (50, None, "Value 50 degrees."),
+        (50, None, "Value 50degree."),
+        (50, None, "Value 50 deg."),
+        (50, None, "Value 50deg."),
+        (50, None, "Value 50 °."),
+        (50, None, "Value 50°."),
+        (50, None, "Value 50 DEGREES."),
+        (None, 290, "Swath 290 km."),
+        (None, 290, "Swath 290km."),
+        (None, 290, "Swath 290 KM."),
+    ],
+)
+def test_validator_accepts_common_source_unit_spellings(
+    field_of_regard_deg, swath_width_km, source_text
+):
+    value = field_of_regard_deg or swath_width_km
+    unit = "degrees" if field_of_regard_deg is not None else "km"
+    assessment = _assessment(value, unit=unit, source_text=source_text)
+    result = validate_geometry_inputs(
+        field_of_regard_deg,
+        swath_width_km,
+        "source",
+        assessment,
+    )
+    assert result[0] == field_of_regard_deg
+    assert result[1] == swath_width_km
+
+
+@pytest.mark.parametrize(
     "assessment, message",
     [
         (None, "Invalid geometry_assessment"),
@@ -117,7 +173,9 @@ def test_validator_rejects_invalid_assessment(assessment, message):
 @pytest.mark.parametrize("bad", [0, -5, 361, float("nan"), float("inf"), True, "wide"])
 def test_validator_rejects_bad_field_of_regard(bad):
     with pytest.raises(ValueError, match="field_of_regard_deg"):
-        validate_geometry_inputs(bad, None, "source", _assessment(50))
+        validate_geometry_inputs(
+            bad, None, "source", _assessment(50, unit="degrees")
+        )
 
 
 @pytest.mark.parametrize("bad", [0, -10, float("nan"), float("inf"), True, "wide", 25000])
@@ -128,9 +186,13 @@ def test_validator_rejects_bad_swath(bad):
 
 def test_validator_requires_citation_and_exactly_one_geometry():
     with pytest.raises(ValueError, match="geometry_reference is required"):
-        validate_geometry_inputs(50, None, "", _assessment(50))
+        validate_geometry_inputs(
+            50, None, "", _assessment(50, unit="degrees")
+        )
     with pytest.raises(ValueError, match="exactly one"):
-        validate_geometry_inputs(50, 290, "source", _assessment(50))
+        validate_geometry_inputs(
+            50, 290, "source", _assessment(50, unit="degrees")
+        )
     with pytest.raises(ValueError, match="exactly one"):
         validate_geometry_inputs(None, None, "source", _assessment())
 

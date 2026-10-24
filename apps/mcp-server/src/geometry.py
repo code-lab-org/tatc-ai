@@ -60,6 +60,8 @@ class GeometryAssessment(BaseModel):
 _NUMBER = re.compile(r"(?<![\w.,])(?P<value>\d+(?:\.\d+)?)(?![\d.,])")
 _RANGE_BEFORE = re.compile(r"(?:[+\-−–—±]|\bto)\s*$", re.IGNORECASE)
 _RANGE_AFTER = re.compile(r"^\s*(?:[\-−–—]|\bto\b)\s*\d", re.IGNORECASE)
+_DEGREE_UNIT = re.compile(r"\s*(?:(?:degrees?|deg)\b|°)", re.IGNORECASE)
+_KM_UNIT = re.compile(r"\s*km\b", re.IGNORECASE)
 _SWATH = re.compile(
     r"\bswath(?:\s+width)?\b[^0-9]{0,35}(\d+(?:\.\d+)?)\s*km\b",
     re.IGNORECASE,
@@ -140,11 +142,16 @@ def numeric_certainty(candidates: List[Dict[str, Any]]) -> str:
     return "high" if len(values) == 1 else "ambiguous"
 
 
-def _source_contains_number(text: str, value: float) -> bool:
+def _source_contains_value_with_unit(
+    text: str, value: float, unit_pattern: re.Pattern[str]
+) -> bool:
     for match in _NUMBER.finditer(text):
-        if not _scalar_match_is_valid(text, match):
+        if (
+            not _scalar_match_is_valid(text, match)
+            or float(match.group("value")) != value
+        ):
             continue
-        if float(match.group("value")) == value:
+        if unit_pattern.match(text, match.end()):
             return True
     return False
 
@@ -170,9 +177,19 @@ def validate_geometry_inputs(
         )
 
     if field_of_regard_deg is not None:
-        name, raw, maximum = "field_of_regard_deg", field_of_regard_deg, 360.0
+        name, raw, maximum, unit_pattern = (
+            "field_of_regard_deg",
+            field_of_regard_deg,
+            360.0,
+            _DEGREE_UNIT,
+        )
     else:
-        name, raw, maximum = "swath_width_km", swath_width_km, 20000.0
+        name, raw, maximum, unit_pattern = (
+            "swath_width_km",
+            swath_width_km,
+            20000.0,
+            _KM_UNIT,
+        )
     if isinstance(raw, bool):
         raise ValueError(f"{name} must be a number")
     try:
@@ -194,9 +211,12 @@ def validate_geometry_inputs(
         raise ValueError(f"Invalid geometry_assessment: {exc}") from exc
     if assessment.status == "needs_clarification":
         raise ValueError("Geometry requires clarification and cannot be run")
-    if not _source_contains_number(assessment.source_text, value):
+    if not _source_contains_value_with_unit(
+        assessment.source_text, value, unit_pattern
+    ):
         raise ValueError(
-            "geometry_assessment.source_text must include the selected numeric value"
+            "geometry_assessment.source_text must include the selected numeric "
+            "value with its expected unit"
         )
     if field_of_regard_deg is not None:
         return value, None, reference, assessment
