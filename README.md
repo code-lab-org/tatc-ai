@@ -32,75 +32,18 @@ To build the image locally instead (e.g. to test before pushing):
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
 
-### Ground-track map
-
-`generate_ground_track` returns telemetry (UTC time, latitude, longitude,
-altitude in meters) and, with `include_footprint`, a TAT-C footprint per
-point: the ground area inside a 60 degree cone under the satellite, as a
-GeoJSON Polygon or a MultiPolygon split at the antimeridian.
-`ground_track_map` takes the satellite, start time, duration, and step
-interval, always includes footprints, and returns a short text summary plus
-an interactive globe page (MapLibre) with a static Cartopy picture, which
-LibreChat renders inline from a `ui://` resource. Both are drawn in
-LibreChat's dark theme. On the globe, the Footprint box is checked by
-default, Follow keeps the satellite centered while playing or scrubbing
-until you move the map by hand, the drawn track follows great circles between
-samples and is split at the antimeridian, the current orbit (one period around
-the satellite, from Kepler's law on the mean altitude) is bright with hoverable
-points while the rest of the track is faded, and footprints are cut at 85
-degrees latitude, the limit of the globe's map tiles.
-
-### Coverage estimates
-
-Coverage tools estimate when one satellite, or a constellation of up to
-six, could view a region. TAT-C does the modeling; OSCAR is used to find
-instruments and is never silently used as geometry.
-
-A run takes three calls. `begin_access_run` locks one satellite, or
-several separated by commas, plus an explicit UTC window of up to 366
-days, and returns a draft ID with each orbit's mean altitude.
-`set_access_region` sets four separate numeric bounds on the draft.
-`finish_access_run` takes grid size, exactly one of `field_of_regard_deg`
-or `swath_width_km`, a citation in `geometry_reference`, and a required
-`geometry_assessment` with source text and an explanation. Approximations
-require a warning, which stays with saved results. An optional `daylight_only`
-flag filters optical imagers.
-
-`resolve_instrument_geometry` returns instrument context and extracted numeric
-candidates for the assistant to assess before running coverage.
-`convert_swath_to_field_of_regard` converts a swath width at an altitude with
-the same TAT-C math used by a run. Windows of 3 days or less allow 144 cells;
-longer windows allow 36 cells and 72 cells times satellites, and take minutes.
-
-`get_access_daily` pages through daily observed and gap areas,
-`get_access_cells` returns the grid as GeoJSON with per-cell access counts
-and revisit, filtered to all, observed, or gaps, and `get_access_revisit`
-returns revisit numbers. Results and drafts expire after 24 hours. All
-coverage is modeled access only, not actual acquisitions or clouds.
+See the [tool guide](docs/tools.md) for ground-track maps and coverage estimates.
 
 ### Tool-calling eval
 
-`apps/mcp-server/eval` checks how well Voyager models drive these tools.
-It sends each model the server's real tools and instructions, runs their
-calls against the real server with recorded CelesTrak and OSCAR
-responses, and scores what the server computed:
+The eval checks how well Voyager models use the MCP tools:
 
 ```bash
 cd apps/mcp-server
 .venv/bin/python -m eval.run_eval --label mychange
-.venv/bin/python -m eval.run_eval --compare eval/results/*.jsonl
 ```
 
-By default it runs the models LibreChat offers; pass `--models` to try
-others. It reads the proxy key from `apps/librechat/.env`, sends prompts
-and tool schemas to the ASU proxy, and takes about half an hour.
-
-The conversations are not streamed, but LibreChat streams. So each run
-first sends every model one short streamed request and reports `stream:
-ok`, `missing role`, or `no tool call`. LibreChat drops tool calls from a
-stream whose first delta has no `role`. Models marked `disableStreaming` in
-`librechat.yaml` are noted rather than failed. `--stream-only`
-runs just this check.
+See the [evaluation guide](docs/evaluation.md) for API key setup, comparison runs, and streaming checks.
 
 ## Development stack
 
@@ -123,31 +66,17 @@ chmod 600 apps/librechat/.env
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-Ground-track requests are capped at 2,000 output points. For example, a
-1-day request at 1-minute intervals produces 1,441 points.
+### Configured models
 
-Local UI is branded as TATC AI (browser tab, welcome message, footer).
-TATC AI offers five ASU Voyager models: the top Voyager models on the
-Artificial Analysis Intelligence Index that passed the tool-calling eval.
-They are GLM-5.3, GLM-5.3-Flash, DeepSeek V4.1 Flash, MiMo-V2.6-Flash, and
-Qwen 3.8 27B. It also offers 50 ASU CreateAI models (Amazon Nova, Claude,
-Gemini, Gemma, Llama, and OpenAI), grouped separately in the model menu; the
-Voyager eval and model check cover only the Voyager models. New chats default
-to Qwen 3.8 27B with TATC satellite tools pinned.
+LibreChat is configured with these model labels:
 
-The Voyager proxy serves more models, and any of them can be added. Add its ID to
-the endpoint's model list and a `modelSpecs` entry in both
-`apps/librechat/librechat.yaml` and `apps/librechat/librechat.deploy.yaml.template`,
-then run the tool-calling eval with `--models` before offering it.
-
-```bash
-python3 apps/librechat/check_voyager_models.py
-```
-
-This lists offered models the proxy no longer serves, and proxy models
-that are not offered. A weekly workflow runs it and fails, which emails
-the repo owners, when an offered model disappears. It needs one repo
-secret: VOYAGER_API_KEY holding an ASU proxy key.
+- **ASU Voyager:** GLM-5.3, GLM-5.3-Flash, DeepSeek V4.1 Flash, MiMo-V2.6-Flash, Qwen 3.8 27B.
+- **ASU CreateAI:**
+  - Nova 2 Lite, Nova Lite, Nova Micro, Nova Pro.
+  - Claude Haiku 4.5, Claude Sonnet 4, Claude Sonnet 4.5, Claude Sonnet 5, Claude Opus 4.1, Claude Opus 4.5, Claude Opus 4.6, Claude Opus 4.7, Claude Opus 4.8, Claude Opus 5.
+  - Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, Gemini 3 Flash, Gemini 3.1 Flash-Lite, Gemini 3.1 Pro, Gemini 3.5 Flash, Gemini 3.7 Flash.
+  - Gemma 4 31B IT, Llama 4 Maverick 17B, Llama 4 Scout 17B, Muse Glimmer 30B.
+  - GPT-OSS 20B, GPT-OSS 120B, GPT-4o mini, GPT-4.1, GPT-4.1 mini, o3, GPT-5, GPT-5 mini, GPT-5 nano, GPT-5.1, GPT-5.1 Instant, GPT-5.1 Thinking, GPT-5.2, GPT-5.2 Pro, GPT-5.4 mini, GPT-5.4 nano, GPT-5.4 Thinking, GPT-5.4 Pro, GPT-5.5, GPT-5.5 Thinking, GPT-5.5 Pro, GPT-5.6 Luna, GPT-5.6 Sol, GPT-5.6 Terra, GPT-6 Astra.
 
 ## Deployment stack
 
@@ -200,13 +129,9 @@ same issuer URL without depending on outbound internet DNS.
 
 ## Auto-deploy
 
-`.github/workflows/deploy.yml` runs once per push to `main` (or by hand), as
-three jobs: `changes` checks whether the MCP server image inputs
-(`apps/mcp-server/**` or the workflow itself) changed, `build` rebuilds and
-pushes the image only if they did, and `deploy` redeploys the EC2 instance
-over SSH after a successful build, or right away when no build was needed. New
-config never runs against the old image, and a failed build deploys nothing.
-Manual runs and pushes that cannot be diffed (a force push) always rebuild.
+Every push to `main`, including documentation changes, deploys to EC2 and restarts LibreChat.
+When MCP server inputs change, the workflow builds and publishes the image before deploying.
+A failed build prevents deployment. Manual runs and pushes that cannot be diffed always rebuild.
 
 The deploy runs `config/deploy/deploy.sh` on the instance,
 which does `git merge --ff-only` then `docker compose -f
