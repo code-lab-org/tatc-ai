@@ -138,8 +138,9 @@ class Harness:
         return result.is_error, text
 
     def chat(self, model: str, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # A complete sourced configuration must fit in one tool-call response.
         body = json.dumps(
-            {"model": model, "messages": messages, "tools": self.tools, "max_tokens": 4096}
+            {"model": model, "messages": messages, "tools": self.tools, "max_tokens": 8192}
         ).encode()
         request = urllib.request.Request(
             self.base_url + "/chat/completions",
