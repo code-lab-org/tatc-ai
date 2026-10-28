@@ -60,6 +60,10 @@ class ServerTests(unittest.TestCase):
                 "begin_access_run",
                 "set_access_region",
                 "finish_access_run",
+                "prepare_conical_study",
+                "finish_conical_study",
+                "get_access_events",
+                "get_access_event_spacing",
                 "get_access_daily",
                 "get_access_cells",
                 "get_access_revisit",
@@ -78,6 +82,16 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument info tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("complete instrument context", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("without confirmation", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("conical preparation", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("conical finish", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("viewing-event fetch", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("event-spacing fetch", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("field-of-regard period", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("24 hours", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("prepare_conical_study", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("finish_conical_study", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("get_access_events", self.server.SERVER_INSTRUCTIONS)
+        self.assertNotIn("get_access_event_spacing", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("search_satellites", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("get_satellite_info", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("generate_ground_track", self.server.SERVER_INSTRUCTIONS)
@@ -667,6 +681,8 @@ class ServerTests(unittest.TestCase):
         self.assertIn("geometry_assessment", properties)
         self.assertNotIn("geometry_source_description", properties)
         self.assertNotIn("geometry_mode", properties)
+        self.assertNotIn("configuration", properties)
+        self.assertNotIn("accepted_setup_revision", properties)
         assessment_schema = properties["geometry_assessment"]
         if "$ref" in assessment_schema:
             definitions = tool.inputSchema.get("$defs", tool.inputSchema.get("definitions", {}))
@@ -718,6 +734,115 @@ class ServerTests(unittest.TestCase):
             geometry_assessment=mock.ANY,
         )
 
+    def test_prepare_conical_forwards_config_without_legacy_geometry(self):
+        tool = next(
+            tool
+            for tool in self.list_tools()
+            if tool.name == "prepare_conical_study"
+        )
+        required = set(tool.inputSchema["required"])
+        self.assertEqual(
+            required, {"draft_id", "grid_rows", "grid_columns", "configuration"}
+        )
+        properties = tool.inputSchema["properties"]
+        self.assertNotIn("field_of_regard_deg", properties)
+        self.assertNotIn("swath_width_km", properties)
+        configuration = properties["configuration"]
+        self.assertEqual(configuration["type"], "object")
+        self.assertIn("geometry", configuration["properties"])
+        self.assertIn("evidence", configuration["properties"])
+        self.assertIn("source_conflicts", configuration["properties"])
+        expected = {"status": "awaiting_acceptance", "setup_revision": "sha256:abc"}
+        configuration = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "data"
+                / "amsr2_conical_configuration.json"
+            ).read_text()
+        )
+        with mock.patch.object(
+            self.server, "_prepare_conical", return_value=expected
+        ) as prepare:
+            result = self.call_tool(
+                "prepare_conical_study",
+                {
+                    "draft_id": "draft_abc",
+                    "grid_rows": 2,
+                    "grid_columns": 2,
+                    "configuration": configuration,
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        prepare.assert_called_once_with("draft_abc", 2, 2, mock.ANY)
+
+    def test_finish_conical_requires_revision_and_acceptance_only(self):
+        tool = next(
+            tool for tool in self.list_tools() if tool.name == "finish_conical_study"
+        )
+        self.assertEqual(
+            set(tool.inputSchema["required"]),
+            {"draft_id", "accepted_setup_revision", "accept_setup"},
+        )
+        properties = tool.inputSchema["properties"]
+        for legacy in ("grid_rows", "grid_columns", "field_of_regard_deg", "swath_width_km"):
+            self.assertNotIn(legacy, properties)
+        expected = {"result_id": "abc123", "result_kind": "conical_study"}
+        with mock.patch.object(
+            self.server, "_finish_conical", return_value=expected
+        ) as finish:
+            result = self.call_tool(
+                "finish_conical_study",
+                {
+                    "draft_id": "draft_abc",
+                    "accepted_setup_revision": "sha256:abc",
+                    "accept_setup": True,
+                },
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        finish.assert_called_once_with("draft_abc", "sha256:abc", True)
+
+    def test_event_fetch_tools_forward_paging(self):
+        events_tool = next(
+            tool for tool in self.list_tools() if tool.name == "get_access_events"
+        )
+        self.assertEqual(
+            set(events_tool.inputSchema["required"]), {"result_id"}
+        )
+        self.assertEqual(
+            events_tool.inputSchema["properties"]["limit"].get("default"), 100
+        )
+        expected = {"result_id": "abc123", "events": []}
+        with mock.patch.object(
+            self.server, "_conical_events", return_value=expected
+        ) as fetch:
+            result = self.call_tool(
+                "get_access_events",
+                {"result_id": "abc123", "offset": 2, "limit": 5},
+            )
+        self.assertFalse(result.is_error)
+        self.assertEqual(json.loads(result.content[0].text), expected)
+        fetch.assert_called_once_with("abc123", 2, 5)
+
+        spacing_tool = next(
+            tool
+            for tool in self.list_tools()
+            if tool.name == "get_access_event_spacing"
+        )
+        self.assertEqual(
+            spacing_tool.inputSchema["properties"]["limit"].get("default"), 50
+        )
+        with mock.patch.object(
+            self.server, "_conical_event_spacing", return_value=expected
+        ) as fetch:
+            result = self.call_tool(
+                "get_access_event_spacing",
+                {"result_id": "abc123", "offset": 1, "limit": 3},
+            )
+        self.assertFalse(result.is_error)
+        fetch.assert_called_once_with("abc123", 1, 3)
+
     def test_finish_access_rejects_unknown_draft(self):
         result = self.call_tool(
             "finish_access_run",
@@ -761,7 +886,7 @@ class ServerTests(unittest.TestCase):
                 "get_access_cells", {"result_id": "abc123", "include": "gaps"}
             )
         self.assertFalse(result.is_error)
-        fetch.assert_called_once_with("abc123", "gaps")
+        fetch.assert_called_once_with("abc123", "gaps", 0, 144)
 
     def test_staged_access_returns_correct_cell_results(self):
         # GeographicLib areas and direct TAT-C accesses were derived without
@@ -858,6 +983,8 @@ class ServerTests(unittest.TestCase):
         revisit = json.loads(revisit_result.content[0].text)
 
         self.assertEqual(summary["satellite"], "ISS (ZARYA)")
+        self.assertEqual(summary["accounting_method"], "legacy_intervals_v1")
+        self.assertEqual(daily["accounting_method"], "legacy_intervals_v1")
         self.assertEqual(summary["window_start_utc"], start)
         self.assertEqual(summary["window_end_utc_exclusive"], end)
         self.assertEqual(

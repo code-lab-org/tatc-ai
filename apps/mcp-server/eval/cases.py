@@ -6,10 +6,12 @@ saved summary), not at what the model claims. Prompts use dates relative
 to the eval's pinned "now" so a replayed cache keeps working.
 """
 
+import copy
 import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 FINISH_TOOLS = {
@@ -18,6 +20,10 @@ FINISH_TOOLS = {
     "finish_year_access_run",
     "run_satellite_access",
 }
+CONICAL_CONFIG = json.loads(
+    (Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json").read_text()
+)
+CONICAL_CONFIG["configuration_id"] += "-eval"
 
 PHOENIX = (33.45, -112.07)
 TEMPE = (33.42, -111.94)
@@ -286,6 +292,190 @@ def _gap_cells(trace: Trace, clock: Clock) -> Dict[str, bool]:
     checks["reported_gaps"] = never is not None and str(never) in re.findall(r"\d+", trace.final)
     return checks
 
+def successful_conical_finish(trace: Trace):
+    """Last conical finish that returned a result, and its parsed summary."""
+    for call in reversed(trace.calls):
+        if (
+            call.name == "finish_conical_study"
+            and not call.error
+            and call.parsed
+            and call.parsed.get("result_id")
+        ):
+            return call
+    return None
+
+
+def _conical_reporting_is_limited(final: str) -> bool:
+    """Check explicit sampling limits and reject common contradictory claims.
+
+    These text checks are conservative heuristics, not a semantic assessment
+    of every possible explanation.
+    """
+    negation = r"\b(?:not|never|no|cannot|can't|doesn't|isn't|aren't|don't)\b"
+    continuous = r"\b(?:continuous|continuously|uninterrupted)\b"
+    sampling = re.search(
+        r"\bcell[- ]cent(?:er|re)s?\b|"
+        r"\b(?:event|visit|sample)\w*\b[^.!?\n]*\bcent(?:er|re)s?\b", final
+    )
+    continuous_limit = (
+        negation + r".{0,80}" + continuous + "|" + continuous
+        + r".{0,120}\b(?:unavailable|not available|not provided|not computed)\b"
+    )
+    for clause in re.split(r"[.!?;\n]|\b(?:but|however|yet|although|whereas)\b", final):
+        if re.search(continuous, clause) and not re.search(continuous_limit, clause):
+            return False
+        whole_cell = re.search(
+            r"\b(?:every|all) (?:point|pixel|location)s?\b.*\bcell\w*\b|"
+            r"\b(?:whole|entire|full) (?:grid[- ])?cells?\b", clause
+        )
+        if whole_cell and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause):
+            if not re.search(negation, clause):
+                return False
+    return bool(sampling and "envelope" in final and re.search(continuous_limit, final))
+
+
+def _conical_complete(expected_config_id: str):
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        finish = successful_conical_finish(trace)
+        if finish is None or not finish.parsed:
+            return {
+                "completed": False,
+                "prepared": False,
+                "accepted_revision": False,
+                "event_count": False,
+                "window": False,
+                "region": False,
+                "source_choice": False,
+                "provenance": False,
+                "fetched": False,
+                "reported": False,
+            }
+        summary = finish.parsed
+        result = {
+            "completed": summary.get("result_kind") == "conical_study",
+            "prepared": any(
+                call.name == "prepare_conical_study" and not call.error
+                for call in trace.calls
+            ),
+            "accepted_revision": bool(
+                isinstance(finish.args.get("accepted_setup_revision"), str)
+                and finish.args.get("accepted_setup_revision") == summary.get("setup_revision")
+                and finish.args.get("accept_setup") is True
+            ),
+            "event_count": summary.get("summary_counts", {}).get("event_count", 0) > 0,
+            "window": summary.get("window_start_utc")
+            == clock.d0.isoformat().replace("+00:00", "Z")
+            and summary.get("window_end_utc_exclusive")
+            == (clock.d0 + timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+            "region": _contains(summary, [(-60.0, 5.0)], 20.0),
+            "source_choice": any(
+                call.name == "prepare_conical_study"
+                and not call.error
+                and isinstance(call.parsed, dict)
+                and any(
+                    conflict.get("chosen_option_id") == "product-75deg"
+                    for conflict in call.parsed.get("source_conflicts", [])
+                    if isinstance(conflict, dict)
+                )
+                for call in trace.calls
+            ),
+            "provenance": (
+                summary.get("provenance", {}).get("setup_revision")
+                == summary.get("setup_revision")
+                and summary.get("configuration_id") == expected_config_id
+            ),
+            "fetched": any(
+                call.name in {"get_access_events", "get_access_daily", "get_access_cells"}
+                and not call.error
+                for call in trace.calls
+            ),
+        }
+        final = trace.final.lower()
+        event_count = summary.get("summary_counts", {}).get("event_count", 0)
+        result["reported"] = (
+            str(event_count) in re.findall(r"\d+", final)
+            and _conical_reporting_is_limited(final)
+        )
+        return result
+
+    return checks
+
+
+def _conical_rejected(cue_terms: Tuple[str, ...]):
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        finish = successful_conical_finish(trace)
+        text = trace.final.lower()
+        call_text = " ".join(call.text.lower() for call in trace.calls if call.error)
+        return {
+            "did_not_finish": finish is None and successful_finish(trace)[0] is None,
+            "explained": any(term in text or term in call_text for term in cue_terms),
+        }
+
+    return checks
+
+
+def _with_applicability_end(config: Dict[str, Any], end: datetime) -> Dict[str, Any]:
+    data = copy.deepcopy(config)
+    data["applicability"]["end_utc_exclusive"] = end.isoformat().replace("+00:00", "Z")
+    return data
+
+
+def _with_unresolved_sector(config: Dict[str, Any]) -> Dict[str, Any]:
+    data = copy.deepcopy(config)
+    for conflict in data["source_conflicts"]:
+        if conflict["conflict_id"] == "scan-sector-nominal-vs-product":
+            conflict["chosen_option_id"] = None
+            conflict["rationale"] = None
+    return data
+
+
+def _without_validation_evidence(config: Dict[str, Any]) -> Dict[str, Any]:
+    data = copy.deepcopy(config)
+    data["evidence"] = [
+        item for item in data["evidence"] if item["evidence_id"] != "tatc-amsr2-validation"
+    ]
+    data["source_revision"]["evidence_ids"] = [
+        item for item in data["source_revision"]["evidence_ids"]
+        if item != "tatc-amsr2-validation"
+    ]
+    return data
+
+
+
+def _conical_unresolved():
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        conical_finish = successful_conical_finish(trace)
+        legacy_finish = successful_finish(trace)[0] is not None
+        successful_prepare = any(
+            call.name == "prepare_conical_study" and not call.error
+            for call in trace.calls
+        )
+        final = trace.final.lower()
+        asked = "?" in trace.final and any(
+            term in final for term in ("sector", "nominal", "product")
+        )
+        silent_choice = any(
+            phrase in final
+            for phrase in (
+                "i choose",
+                "i chose",
+                "i picked",
+                "i selected",
+                "i'll use",
+                "i will use",
+            )
+        )
+        return {
+            "did_not_finish": conical_finish is None and not legacy_finish,
+            "no_invented_choice": not successful_prepare,
+            "asked_for_choice": asked,
+            "no_silent_choice": not silent_choice,
+        }
+
+    return checks
+
 
 def build_cases(clock: Clock) -> List[Case]:
     d0 = clock.fmt(clock.d0)
@@ -351,5 +541,56 @@ def build_cases(clock: Clock) -> List[Case]:
             "filled envelope for the overall span. Include that limitation in your "
             "final summary.",
             _approximate_result([PHOENIX], 5.0, "swath_width_km", 6.6, _exact(1)),
+        ),
+        Case(
+            "conical_amsr2_complete",
+            ("conical", "complete", "source_conflict", "approximate"),
+            f"Run a conical AMSR2 study for GCOM-W1 over the box west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. "
+            "Use this exact sourced configuration; do not add, round, or change "
+            "its angles, frame, dates, evidence, source choices, or approximations. "
+            "I have reviewed this configuration and its declared approximations and "
+            "source choices, and I accept them. Prepare the study, show the returned "
+            "consequential choices and warnings, and if the proposal matches this "
+            "configuration, run it with the returned setup revision and accept_setup=true "
+            "without asking me again. Then fetch and summarize the viewing events. "
+            "Explain that daily area is cell-center sampled and that field-of-regard "
+            "envelopes are not continuous viewing time. "
+            f"Configuration JSON: {json.dumps(CONICAL_CONFIG, separators=(',', ':'))}",
+            _conical_complete(CONICAL_CONFIG["configuration_id"]),
+        ),
+        Case(
+            "conical_applicability_rejected",
+            ("conical", "applicability", "reject"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, east=10, "
+            f"north=-55 with a 2x2 grid from {d0} for 2 hours. Use this exact "
+            "configuration, but its established applicability ends before the window. "
+            "Do not invent or extend dates; if the window is unsupported, stop before "
+            "calculation and tell me which part is uncovered. "
+            f"Configuration JSON: {json.dumps(_with_applicability_end(CONICAL_CONFIG, clock.d0 + timedelta(hours=1)), separators=(',', ':'))}",
+            _conical_rejected(("applicab", "outside", "not covered", "uncovered", "date")),
+        ),
+        Case(
+            "conical_unresolved_sector",
+            ("conical", "source_conflict", "mode_selection", "reject"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, east=10, "
+            f"north=-55 with a 2x2 grid from {d0} for 2 hours. I have not chosen "
+            "between the nominal performance scan sector and the wider product "
+            "sector, and this configuration has no recorded choice or rationale. "
+            "Do not guess or choose for me. Ask me which sector to use before any "
+            "calculation. "
+            f"Configuration JSON: {json.dumps(_with_unresolved_sector(CONICAL_CONFIG), separators=(',', ':'))}",
+            _conical_unresolved(),
+        ),
+        Case(
+            "conical_missing_evidence",
+            ("conical", "missing_evidence", "reject"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, east=10, "
+            f"north=-55 with a 2x2 grid from {d0} for 2 hours. I only have this "
+            "incomplete configuration; its measured cone and sector evidence is "
+            "missing. Do not invent evidence or substitute a nominal swath. If the "
+            "required evidence is missing, stop before calculation and ask me for it. "
+            f"Configuration JSON: {json.dumps(_without_validation_evidence(CONICAL_CONFIG), separators=(',', ':'))}",
+            _conical_rejected(("evidence", "source", "missing", "cannot")),
         ),
     ]

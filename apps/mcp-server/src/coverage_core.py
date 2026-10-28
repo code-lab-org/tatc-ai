@@ -28,9 +28,18 @@ MAX_FUTURE_OMM_AGE = timedelta(days=1)
 MAX_GRID_AXIS = 12
 MAX_GRID_CELLS = MAX_GRID_AXIS * MAX_GRID_AXIS
 MAX_YEAR_GRID_CELLS = 36
+MAX_YEAR_CELL_CONFIGURATIONS = 72
 MAX_YEAR_WORKERS = 4
 MAX_CELL_AXIS_SPAN_DEG = 10.0
 _WGS84_GEOD = Geod(ellps="WGS84")
+
+
+def _public_satellites(stage: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return staged satellite summaries without their OMM records."""
+    return [
+        {key: value for key, value in satellite.items() if key != "omm_records"}
+        for satellite in stage["satellites"]
+    ]
 
 
 def _parse_utc(value: str, name: str) -> datetime:

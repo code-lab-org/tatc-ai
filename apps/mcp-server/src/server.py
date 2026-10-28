@@ -10,6 +10,11 @@ from fastmcp.tools.tool import ToolResult
 from mcp.types import EmbeddedResource, TextContent, TextResourceContents
 
 from . import celestrak_client, oscar_client
+from .conical_config import ConicalConfiguration
+from .conical_study import finish_conical_study as _finish_conical
+from .conical_study import get_conical_event_spacing as _conical_event_spacing
+from .conical_study import get_conical_events as _conical_events
+from .conical_study import prepare_conical_study as _prepare_conical
 from .generic_coverage import get_access_cells as _access_cells
 from .generic_coverage import get_access_daily as _access_daily
 from .generic_coverage import get_access_revisit as _access_revisit
@@ -96,12 +101,53 @@ SERVER_INSTRUCTIONS = (
     "explanation to the finish tool. Its checks validate the structure and "
     "numeric value, not the scientific interpretation or source authenticity. "
     "A citation alone is not evidence. Do not fetch arbitrary reference URLs. "
+    "For a legacy run, a researcher-supplied synthetic study excerpt is valid "
+    "evidence for that study assumption. Do not mark a legacy run approximate "
+    "only because the excerpt is synthetic or because the real instrument is "
+    "more complex. Mark it approximate when the excerpt itself documents a gap, "
+    "separate pointing, or another mismatch with the continuous model, or when "
+    "the researcher's explicit assumption leaves that mismatch unresolved. "
+    "The conical source-conflict and approximation rules apply only to conical "
+    "preparation; they do not relabel a legacy geometry assessment. "
     "For coverage, call the begin tool, then the region tool, then the finish "
     "tool, then the fetch tools by result ID for daily rows, coverage cells "
     "as GeoJSON, or "
     "revisit numbers. The begin tool takes several satellites separated by "
     "commas to model a constellation. Set daylight_only on the finish tool for "
     "optical imagers. "
+    "For a conical scanner, use the separate conical preparation and finish "
+    "workflow instead of legacy field_of_regard_deg or swath_width_km. The "
+    "researcher or calling assistant must supply one complete sourced conical "
+    "configuration: identity, spacecraft and orbit-provider identity, mode, "
+    "channel, applicability interval, typed angles with units and frames, "
+    "evidence excerpts with locators, source revision, interpretation, source "
+    "conflicts and chosen rationale, reported geometry checks, approximation "
+    "status, and approximations. Never invent cone angles, sector widths, "
+    "dates, or evidence. A nominal swath or ground incidence angle does not "
+    "establish the cone/sector mapping. The conical preparation tool returns "
+    "the region, grid, window, consequential settings, conflicts, "
+    "approximations, warnings, and a setup revision, but runs no calculation. "
+    "Show those choices to the researcher and obtain their acceptance; only "
+    "then call the conical finish tool with that exact setup revision and "
+    "accept_setup=true. Never set accept_setup true without the researcher's "
+    "acceptance. If region, grid, window, orbit, configuration, source choice, "
+    "approximation, or software changed, prepare again for a new revision. The "
+    "finish tool rejects stale revisions and runs no calculation for them. The "
+    "established applicability interval must contain the full window; this "
+    "increment rejects uncovered dates and additional configurations. "
+    "Conical results preserve each valid TAT-C viewing epoch. The broader "
+    "field-of-regard period is envelope metadata only: never describe it as "
+    "continuous viewing, access duration, or uncovered duration. Daily area "
+    "counts a cell once per half-open UTC day when an event epoch falls in that "
+    "day. Cell-center sampling does not mean an entire cell was viewed. Event "
+    "spacing is null with fewer than two distinct events at a cell. Use the "
+    "viewing-event fetch tool for paged epochs, the event-spacing fetch tool "
+    "for paged per-cell spacing, and the usual daily, cell, and revisit fetches "
+    "for the other views. Every conical fetch returns the accepted setup "
+    "snapshot, provenance, warnings, and accounting definitions. Results and "
+    "drafts expire after 24 hours and can be lost earlier on restart or "
+    "capacity eviction. Study-specific settings are not promoted to a shared "
+    "registry. "
     "Coverage is modeled access at each grid-cell center only: never claim "
     "every point of the region was scanned or that an acquisition occurred. "
     "A daily gap_area_km2 of 0 means every cell center had access that UTC "
@@ -702,11 +748,130 @@ def finish_access_run(
 
 
 @mcp.tool
+def prepare_conical_study(
+    draft_id: str,
+    grid_rows: int,
+    grid_columns: int,
+    configuration: ConicalConfiguration,
+) -> Dict[str, Any]:
+    """Prepare one sourced conical-scanning study without calculating.
+
+    Use this separate path for a conical scanner. Supply one complete
+    configuration with explicit units and reference frames, source evidence,
+    source revision, source conflicts and a chosen rationale, reported
+    geometry checks, applicability dates, and approximations. The server
+    validates the structure and values but does not authenticate source text.
+    It returns the normalized proposal, region, grid, window, consequential
+    settings, warnings, and a setup revision. No TAT-C analysis runs yet.
+
+    The configuration describes one instrument on one spacecraft. Multi-
+    instrument and registry studies are not supported in this increment.
+    Cone angles, scan sector, velocity frame, nadir reference, and along-track
+    view are distinct from ground incidence and nominal swath width; do not
+    invent or silently convert them. Missing evidence, invalid units or
+    ranges, incompatible fields, unresolved source conflicts, failed checks,
+    unsupported model families, and windows outside the established
+    applicability interval are rejected before calculation.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Equal latitude partitions, 1 through 12.
+        grid_columns: Equal longitude partitions, 1 through 12.
+        configuration: One conical configuration with identity, spacecraft,
+            mode, channel, applicability, typed geometry, evidence, source
+            revision, interpretation, approximation status and approximations,
+            source conflicts with chosen options, and geometry checks.
+
+    Returns:
+        Proposal with setup_revision, region, grid, window, configuration
+        snapshot, consequential settings, conflicts, approximations, warnings,
+        limits, and the explicit acceptance requirement. No result ID yet.
+    """
+    return _prepare_conical(draft_id, grid_rows, grid_columns, configuration)
+
+
+@mcp.tool
+def finish_conical_study(
+    draft_id: str,
+    accepted_setup_revision: str,
+    accept_setup: bool,
+) -> Dict[str, Any]:
+    """Run only a fully accepted, current conical study proposal.
+
+    Call the conical preparation tool first, show its choices and warnings to
+    the researcher, and wait for their acceptance. Pass the proposal's exact
+    setup revision and accept_setup=true only after that acceptance. This tool
+    runs real TAT-C conical analysis at grid-cell centers and saves a result.
+    A stale revision, changed region or grid, changed orbit, changed
+    configuration, or missing acceptance fails before calculation. Do not add
+    legacy field_of_regard_deg or swath_width_km arguments; use the legacy
+    finish tool for those.
+
+    Args:
+        draft_id: Draft ID from the begin tool with a prepared proposal.
+        accepted_setup_revision: Exact setup_revision returned by the latest
+            conical preparation for this draft.
+        accept_setup: True only when the researcher has accepted this proposal.
+
+    Returns:
+        Compact result ID, provenance, summary counts, event-spacing metrics,
+        warnings, limits, and fetch guidance. Events and daily/cell rows are
+        saved for paged retrieval, not returned in full.
+    """
+    return _finish_conical(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def get_access_events(result_id: str, offset: int = 0, limit: int = 100) -> Dict[str, Any]:
+    """Fetch paged conical viewing events by result ID.
+
+    Returns each valid TAT-C viewing epoch with its cell, satellite,
+    instrument, configuration identity, and broader field-of-regard envelope.
+    The envelope is metadata only; it is not continuous viewing time. Offset
+    starts at 0 and limit is 1 through 366. Every page includes the accepted
+    setup snapshot, provenance, warnings, and accounting definitions.
+
+    Args:
+        result_id: Result ID from a saved conical study.
+        offset: Number of events to skip, 0 or more.
+        limit: Number of events to return, 1 through 366.
+
+    Returns:
+        Paged events plus provenance and accounting definitions.
+    """
+    return _conical_events(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_event_spacing(
+    result_id: str, offset: int = 0, limit: int = 50
+) -> Dict[str, Any]:
+    """Fetch paged per-cell event-spacing values for a conical result.
+
+    Spacing is the difference between consecutive distinct viewing epochs at
+    the same cell, in hours. Fewer than two distinct events gives null
+    spacing. Simultaneous duplicate events count once. Each page includes the
+    accepted setup snapshot, provenance, warnings, and definitions.
+
+    Args:
+        result_id: Result ID from a saved conical study.
+        offset: Number of cell rows to skip, 0 or more.
+        limit: Number of cell rows to return, 1 through 366.
+
+    Returns:
+        Paged per-cell spacing values and summary statistics.
+    """
+    return _conical_event_spacing(result_id, offset, limit)
+
+
+@mcp.tool
 def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[str, Any]:
     """Fetch saved daily observed and gap areas by result ID.
 
     Pages through the daily rows of a saved access run without
     re-running the analysis. Offset starts at 0 and limit is 1 to 366.
+    For conical studies, a cell counts on a UTC day only when a valid viewing
+    event epoch falls in that half-open day; envelope periods are not access.
 
     Args:
         result_id: Result ID from a saved access run.
@@ -714,30 +879,40 @@ def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[s
         limit: Number of daily rows to return, 1 through 366.
 
     Returns:
-        Daily rows with observed and gap areas and cell IDs, plus the
-        geometry status and warning, interpretation, and access evidence.
+        Daily rows with observed and gap areas and cell IDs, plus
+        the geometry status and warning, interpretation, and access evidence.
     """
     return _access_daily(result_id, offset, limit)
 
 
 @mcp.tool
-def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
-    """Fetch the saved grid map by result ID as GeoJSON.
+def get_access_cells(
+    result_id: str,
+    include: str = "all",
+    offset: int = 0,
+    limit: int = 144,
+) -> Dict[str, Any]:
+    """Fetch the saved grid map by result ID as paged GeoJSON.
 
     Returns grid cells as a GeoJSON feature collection, each cell marked
     observed or gap for the saved window with its access count, mean
-    access minutes, and mean revisit hours. The collection metadata and
-    feature properties retain geometry status and warning. Filter
-    with all, observed, or gaps. Modeled access does not confirm an acquisition.
+    access minutes, and mean revisit hours. For conical studies, properties
+    report event counts, observed days, and event spacing instead; an observed
+    cell means only that at least one event epoch occurred at its center.
+    The collection metadata and feature properties retain geometry status and
+    warning. Filter with all, observed, or gaps. Offset starts at 0 and limit
+    is 1 through 366. Modeled access does not confirm an acquisition.
 
     Args:
         result_id: Result ID from a saved access run.
         include: Which cells to return: all, observed, or gaps.
+        offset: Number of matching cells to skip, 0 or more.
+        limit: Number of matching cells to return, 1 through 366.
 
     Returns:
         GeoJSON collection with per-cell status, geometry metadata, and access evidence.
     """
-    return _access_cells(result_id, include)
+    return _access_cells(result_id, include, offset, limit)
 
 
 @mcp.tool
@@ -746,8 +921,9 @@ def get_access_revisit(result_id: str) -> Dict[str, Any]:
 
     Returns mean, median, and max revisit hours, mean access minutes,
     and the longest unobserved gap with their definitions, without
-    re-running the analysis. Modeled access does not confirm an
-    acquisition.
+    re-running the analysis. For conical studies this returns event-spacing
+    metrics instead and explicitly reports continuous viewing and uncovered
+    durations as unavailable. Modeled access does not confirm an acquisition.
 
     Args:
         result_id: Result ID from a saved access run.

@@ -1,0 +1,363 @@
+{
+  "fixture_version": "amsr2-conical-reference-v1",
+  "source_parameters": {
+    "cone_angle": 47.564,
+    "scan_center_azimuth": 0.498,
+    "scan_half_width": 75.332,
+    "along_track_field_of_view": 1.0,
+    "velocity_frame": "inertial",
+    "nadir_reference": "geodetic"
+  },
+  "source_evidence": {
+    "configuration": "data/amsr2_conical_configuration.json",
+    "tatc_validation_url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+    "jaxa_url": "https://www.eorc.jaxa.jp/AMSR/satellite/gcom-w_en.html"
+  },
+  "orbit": {
+    "tle": [
+      "1 38337U 12025A   26277.29678146  .00000240  00000+0  63281-4 0  9990",
+      "2 38337  98.2100 216.2278 0001644  77.4488  41.8708 14.57111943764929"
+    ],
+    "omm": {
+      "OBJECT_NAME": "GCOM-W1 (SHIZUKU)",
+      "OBJECT_ID": "2012-025A",
+      "EPOCH": "2026-10-04T07:07:22.400000",
+      "MEAN_MOTION": 14.57111943764929,
+      "ECCENTRICITY": 0.0001644,
+      "INCLINATION": 98.21,
+      "RA_OF_ASC_NODE": 216.2278,
+      "ARG_OF_PERICENTER": 77.4488,
+      "MEAN_ANOMALY": 41.8708,
+      "EPHEMERIS_TYPE": 0,
+      "CLASSIFICATION_TYPE": "U",
+      "NORAD_CAT_ID": 38337,
+      "ELEMENT_SET_NO": 999,
+      "REV_AT_EPOCH": 0,
+      "BSTAR": 6.3281e-05,
+      "MEAN_MOTION_DOT": 2.4e-06,
+      "MEAN_MOTION_DDOT": 0
+    },
+    "norad_id": 38337,
+    "name": "GCOM-W1 (SHIZUKU)"
+  },
+  "cases": {
+    "descending": {
+      "window_start_utc": "2026-10-05T00:00:00Z",
+      "window_end_utc_exclusive": "2026-10-05T01:00:00Z",
+      "roi_bbox": [
+        0.0,
+        -65.0,
+        10.0,
+        -55.0
+      ],
+      "grid": [
+        2,
+        2
+      ],
+      "cells": [
+        {
+          "cell_id": 0,
+          "center_lon": 2.5,
+          "center_lat": -62.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:08:19.062065857+00:00",
+              "envelope_start_utc": "2026-10-05T00:08:10.840939291+00:00",
+              "envelope_end_utc": "2026-10-05T00:12:39.060432059+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 1,
+          "center_lon": 7.5,
+          "center_lat": -62.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:08:06.990704742+00:00",
+              "envelope_start_utc": "2026-10-05T00:07:58.709976476+00:00",
+              "envelope_end_utc": "2026-10-05T00:12:26.068311415+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 2,
+          "center_lon": 2.5,
+          "center_lat": -57.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:07:11.298598742+00:00",
+              "envelope_start_utc": "2026-10-05T00:07:02.623475012+00:00",
+              "envelope_end_utc": "2026-10-05T00:11:15.587434679+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 3,
+          "center_lon": 7.5,
+          "center_lat": -57.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:06:47.724137543+00:00",
+              "envelope_start_utc": "2026-10-05T00:06:39.586510882+00:00",
+              "envelope_end_utc": "2026-10-05T00:11:08.771933444+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        }
+      ]
+    },
+    "ascending": {
+      "window_start_utc": "2026-10-05T00:40:00Z",
+      "window_end_utc_exclusive": "2026-10-05T01:00:00Z",
+      "roi_bbox": [
+        -172.0,
+        0.0,
+        -158.0,
+        10.0
+      ],
+      "grid": [
+        2,
+        2
+      ],
+      "cells": [
+        {
+          "cell_id": 0,
+          "center_lon": -168.5,
+          "center_lat": 2.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:41:03.418923004+00:00",
+              "envelope_start_utc": "2026-10-05T00:40:55.473332505+00:00",
+              "envelope_end_utc": "2026-10-05T00:45:14.441637032+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 1,
+          "center_lon": -161.5,
+          "center_lat": 2.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:41:33.861967164+00:00",
+              "envelope_start_utc": "2026-10-05T00:41:20.379708930+00:00",
+              "envelope_end_utc": "2026-10-05T00:44:02.116737703+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 2,
+          "center_lon": -168.5,
+          "center_lat": 7.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:42:22.512407+00:00",
+              "envelope_start_utc": "2026-10-05T00:42:14.596520048+00:00",
+              "envelope_end_utc": "2026-10-05T00:46:33.705480359+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 3,
+          "center_lon": -161.5,
+          "center_lat": 7.5,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T00:43:30.663112586+00:00",
+              "envelope_start_utc": "2026-10-05T00:43:07.089810782+00:00",
+              "envelope_end_utc": "2026-10-05T00:44:55.348086762+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        }
+      ]
+    },
+    "midnight": {
+      "window_start_utc": "2026-10-05T23:50:00Z",
+      "window_end_utc_exclusive": "2026-10-06T00:10:00Z",
+      "roi_bbox": [
+        -170.0,
+        38.0,
+        -160.0,
+        42.0
+      ],
+      "grid": [
+        2,
+        2
+      ],
+      "cells": [
+        {
+          "cell_id": 0,
+          "center_lon": -167.5,
+          "center_lat": 39.0,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T23:55:59.228226943+00:00",
+              "envelope_start_utc": "2026-10-05T23:55:50.403279792+00:00",
+              "envelope_end_utc": "2026-10-05T23:59:43.921891585+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 1,
+          "center_lon": -162.5,
+          "center_lat": 39.0,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T23:55:28.551924089+00:00",
+              "envelope_start_utc": "2026-10-05T23:55:20.673259260+00:00",
+              "envelope_end_utc": "2026-10-05T23:59:41.124282095+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 2,
+          "center_lon": -167.5,
+          "center_lat": 41.0,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T23:56:25.829236097+00:00",
+              "envelope_start_utc": "2026-10-05T23:56:17.320772256+00:00",
+              "envelope_end_utc": "2026-10-06T00:00:19.184324644+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        },
+        {
+          "cell_id": 3,
+          "center_lon": -162.5,
+          "center_lat": 41.0,
+          "events": [
+            {
+              "epoch_utc": "2026-10-05T23:56:00.574012421+00:00",
+              "envelope_start_utc": "2026-10-05T23:55:52.660507943+00:00",
+              "envelope_end_utc": "2026-10-06T00:00:12.494488444+00:00",
+              "satellite": "GCOM-W1",
+              "instrument": "AMSR2"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "inside_outside": {
+    "time_utc": "2026-10-05T00:08:00+00:00",
+    "inside": {
+      "longitude_deg": 5.80415974364287,
+      "latitude_deg": -61.88565122271121,
+      "expected_in_field_of_view": true
+    },
+    "outside_sector": {
+      "longitude_deg": 22.84521865675515,
+      "latitude_deg": -56.18007025844859,
+      "scan_azimuth_deg": 85.83,
+      "cone_angle_deg": 47.56400000000005,
+      "expected_in_field_of_view": false
+    }
+  },
+  "projected_positions": {
+    "time_utc": "2026-10-05T00:08:00+00:00",
+    "positions": [
+      {
+        "scan_azimuth_deg": -74.83399999999999,
+        "longitude_deg": -3.466715729168512,
+        "latitude_deg": -53.864483315941776
+      },
+      {
+        "scan_azimuth_deg": 0.498,
+        "longitude_deg": 5.80415974364287,
+        "latitude_deg": -61.88565122271121
+      },
+      {
+        "scan_azimuth_deg": 75.83,
+        "longitude_deg": 22.31061136782518,
+        "latitude_deg": -57.48698444877481
+      }
+    ]
+  },
+  "mission_reference": {
+    "reference": "TAT-C 3.6.0 AMSR2 validation, 2026-09-26 GPM L1C S1 footprints and 2026-10-04 CelesTrak TLE",
+    "residuals": {
+      "orbit_along_track_p95_km": 1.662,
+      "orbit_cross_track_p95_km": 0.399,
+      "orbit_radial_p95_km": 0.555,
+      "event_time_p95_s": 0.27,
+      "swath_width_difference_km": 2.83,
+      "pass_match_percent": 99.95
+    },
+    "engineering_tolerances": {
+      "orbit_position_km": 2.0,
+      "event_time_s": 1.0,
+      "swath_width_km": 5.0
+    },
+    "tolerance_justification": "Each tolerance is a rounded margin above the reported 95th-percentile residual or difference: 2.0 km covers 1.662 km along-track; 1.0 s covers 0.27 s; 5.0 km covers 2.83 km. These are engineering comparison limits for the recorded one-day mission reference, not mission-accuracy specifications."
+  },
+  "two_crossings": {
+    "note": "Synthetic full-rotation conical fixture used only to prove that two valid epochs in one field-of-regard period are preserved. It is not an AMSR2 mission configuration.",
+    "configuration": {
+      "cone_angle": 47.564,
+      "scan_center_azimuth": 0.498,
+      "scan_half_width": 180.0,
+      "along_track_field_of_view": 1.0,
+      "velocity_frame": "inertial",
+      "nadir_reference": "geodetic"
+    },
+    "window_start_utc": "2026-10-05T00:00:00Z",
+    "window_end_utc_exclusive": "2026-10-05T01:00:00Z",
+    "cell_id": 0,
+    "center_lon": 5.0,
+    "center_lat": -60.0,
+    "events": [
+      {
+        "epoch_utc": "2026-10-05T00:07:33.570612119+00:00",
+        "envelope_start_utc": "2026-10-05T00:07:25.391777151+00:00",
+        "envelope_end_utc": "2026-10-05T00:11:54.086468560+00:00",
+        "satellite": "GCOM-W1",
+        "instrument": "Synthetic full rotation"
+      },
+      {
+        "epoch_utc": "2026-10-05T00:11:45.761110426+00:00",
+        "envelope_start_utc": "2026-10-05T00:07:25.391777151+00:00",
+        "envelope_end_utc": "2026-10-05T00:11:54.086468560+00:00",
+        "satellite": "GCOM-W1",
+        "instrument": "Synthetic full rotation"
+      }
+    ]
+  },
+  "reference_tatc_version": "3.6.0",
+  "reference_python": "3.12.3",
+  "generation_note": "Generated with direct TAT-C 3.6.0 public calls (GeneralPerturbationsOrbit.from_omm_json, ConicalInstrument, Satellite with an inertial Attitude, collect_observations, compute_projected_ray_position, is_in_field_of_view). The production mapping was not used to generate expected values.",
+  "inside_outside_ascending": {
+    "time_utc": "2026-10-05T00:41:00+00:00",
+    "inside": {
+      "longitude_deg": -167.4407857562575,
+      "latitude_deg": 2.5240579298472556,
+      "expected_in_field_of_view": true
+    },
+    "outside_sector": {
+      "longitude_deg": -173.81309512836967,
+      "latitude_deg": -5.428678683489669,
+      "scan_azimuth_deg": 85.83,
+      "cone_angle_deg": 47.564000000000135,
+      "expected_in_field_of_view": false
+    }
+  }
+}

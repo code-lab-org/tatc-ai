@@ -234,3 +234,181 @@ def test_lookup_resolution_accepts_a_faithful_excerpt_of_the_candidate():
 
     checks = case.checks(trace, clock)
     assert all(checks.values()), checks
+
+
+def _conical_trace(clock):
+    summary = {
+        "result_id": "conical-1",
+        "result_kind": "conical_study",
+        "accounting_method": "conical_events_v1",
+        "setup_revision": "sha256:abc",
+        "configuration_id": "amsr2-gcom-w1-conical-product-sector-eval",
+        "window_start_utc": clock.d0.isoformat().replace("+00:00", "Z"),
+        "window_end_utc_exclusive": (clock.d0 + __import__("datetime").timedelta(hours=2))
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "roi_bbox": [0.0, -65.0, 10.0, -55.0],
+        "summary_counts": {"event_count": 4},
+        "approximation_status": "approximate",
+        "provenance": {"setup_revision": "sha256:abc"},
+    }
+    return Trace(
+        prompt="Run the conical AMSR2 study.",
+        calls=[
+            Call(
+                "prepare_conical_study",
+                {"grid_rows": 2, "grid_columns": 2},
+                False,
+                "{}",
+                parsed={
+                    "setup_revision": "sha256:abc",
+                    "source_conflicts": [{"chosen_option_id": "product-75deg"}],
+                },
+            ),
+            Call(
+                "finish_conical_study",
+                {
+                    "accepted_setup_revision": "sha256:abc",
+                    "accept_setup": True,
+                },
+                False,
+                "{}",
+                parsed=summary,
+            ),
+            Call("get_access_events", {"result_id": "conical-1"}, False, "{}", parsed={}),
+        ],
+        final=(
+            "The study found 4 viewing events. Daily area counts a cell once when "
+            "an event occurs at its center, and the field-of-regard envelope is not "
+            "continuous viewing."
+        ),
+    )
+
+
+def test_conical_eval_requires_prepared_accepted_revision_and_event_semantics():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_complete"
+    )
+    trace = _conical_trace(clock)
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace.calls[1].args["accepted_setup_revision"] = "sha256:old"
+    checks = case.checks(trace, clock)
+    assert not checks["accepted_revision"]
+    assert not all(checks.values())
+
+    trace = _conical_trace(clock)
+    trace.calls.pop(0)
+    checks = case.checks(trace, clock)
+    assert not checks["prepared"]
+    assert not all(checks.values())
+
+
+def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
+    clock = _clock()
+    case = next(case for case in build_cases(clock) if case.id == "conical_amsr2_complete")
+    for final in (
+        "There were 4 events. Every point in each cell was continuously observed "
+        "throughout each envelope.",
+        "There were 4 viewing events at cell centers. The envelopes mean "
+        "continuous viewing of the whole cell.",
+        "The study found 4 events. Daily area is cell-center sampled; the "
+        "envelope is not continuous viewing. Every point in each cell was observed.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing, but every point in every cell was observed.",
+    ):
+        trace = _conical_trace(clock)
+        trace.final = final
+        assert not case.checks(trace, clock)["reported"], final
+
+
+def test_conical_unresolved_sector_requires_a_choice_before_running():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_unresolved_sector"
+    )
+    asked = Trace(
+        prompt=case.prompt,
+        final=(
+            "I need your choice between the nominal performance sector and the "
+            "wider product sector before I can run this. Which should I use?"
+        ),
+    )
+    checks = case.checks(asked, clock)
+    assert all(checks.values()), checks
+
+    silent = Trace(
+        prompt=case.prompt,
+        final="I chose the product sector, so the study is ready.",
+    )
+    checks = case.checks(silent, clock)
+    assert checks["did_not_finish"]
+    assert not checks["asked_for_choice"]
+    assert not checks["no_silent_choice"]
+    assert not all(checks.values())
+
+    invented = Trace(
+        prompt=case.prompt,
+        calls=[
+            Call(
+                "prepare_conical_study",
+                {"grid_rows": 2, "grid_columns": 2},
+                False,
+                "{}",
+                parsed={"setup_revision": "sha256:invented"},
+            )
+        ],
+        final="I used the product sector and prepared it.",
+    )
+    checks = case.checks(invented, clock)
+    assert not checks["no_invented_choice"]
+    assert not all(checks.values())
+
+    legacy = Trace(
+        prompt=case.prompt,
+        calls=[
+            Call(
+                "finish_access_run",
+                {},
+                False,
+                "{}",
+                parsed={"result_id": "legacy-1"},
+            )
+        ],
+        final="Which sector should I use?",
+    )
+    checks = case.checks(legacy, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
+
+def test_conical_eval_rejects_uncovered_or_unsupported_setup():
+    clock = _clock()
+    for case_id, final in (
+        (
+            "conical_applicability_rejected",
+            "The requested window is outside the established applicability interval; "
+            "that date range is not covered, so I did not run it.",
+        ),
+        (
+            "conical_missing_evidence",
+            "The measured cone and sector evidence is missing, so I cannot run this "
+            "configuration. Please provide the source evidence.",
+        ),
+    ):
+        case = next(case for case in build_cases(clock) if case.id == case_id)
+        checks = case.checks(Trace(prompt=case.prompt, final=final), clock)
+        assert all(checks.values()), (case_id, checks)
+
+
+def test_conical_rejection_eval_rejects_legacy_calculations():
+    clock = _clock()
+    for case_id in ("conical_applicability_rejected", "conical_missing_evidence"):
+        case = next(case for case in build_cases(clock) if case.id == case_id)
+        trace = Trace(
+            prompt=case.prompt,
+            calls=[Call("finish_access_run", {}, False, "{}", {"result_id": "legacy-1"})],
+            final="The applicability interval and source evidence are insufficient.",
+        )
+        assert not case.checks(trace, clock)["did_not_finish"]
