@@ -24,6 +24,8 @@ CONICAL_CONFIG = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json").read_text()
 )
 CONICAL_CONFIG["configuration_id"] += "-eval"
+CONICAL_SHARED_ID = "amsr2-gcom-w1-conical-product-sector"
+CONICAL_SHARED_REVISION = "2026-10-27.1"
 
 PHOENIX = (33.45, -112.07)
 TEMPE = (33.42, -111.94)
@@ -401,6 +403,108 @@ def _conical_complete(expected_config_id: str):
     return checks
 
 
+def _conical_registry_complete(expected_config_id: str, expected_revision: str):
+    base_checks = _conical_complete(expected_config_id)
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        result = base_checks(trace, clock)
+        lookup_calls = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "lookup_instrument_configurations"
+            and not call.error
+            and call.parsed
+        ]
+        prepare_calls = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "prepare_conical_study" and not call.error and call.parsed
+        ]
+        finish = successful_conical_finish(trace)
+        matching_lookup = any(
+            index < prepare_index
+            and call.parsed.get("selection_required") is True
+            and call.parsed.get("selection") is None
+            and any(
+                candidate.get("configuration_id") == expected_config_id
+                and candidate.get("revision") == expected_revision
+                and candidate.get("registry_status") == "reviewed_shared"
+                for candidate in call.parsed.get("candidates", [])
+            )
+            for index, call in lookup_calls
+            for prepare_index, _ in prepare_calls
+        )
+        explicit_prepare = any(
+            call.args.get("configuration_id") == expected_config_id
+            and call.args.get("configuration_revision") == expected_revision
+            and "configuration" not in call.args
+            and call.parsed.get("registry_selection", {}).get("selection")
+            == "explicit_exact_revision"
+            for _, call in prepare_calls
+        )
+        result["looked_up_candidate_without_selection"] = matching_lookup
+        result["prepared_exact_registry_revision"] = explicit_prepare
+        result["result_keeps_registry_revision"] = bool(
+            finish
+            and finish.parsed.get("registry_selection", {}).get("configuration_id")
+            == expected_config_id
+            and finish.parsed.get("registry_selection", {}).get("revision")
+            == expected_revision
+        )
+        return result
+
+    return checks
+
+
+def _conical_registry_failed_refresh(expected_config_id: str, expected_revision: str):
+    base_checks = _conical_registry_complete(expected_config_id, expected_revision)
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        result = base_checks(trace, clock)
+        failure_calls = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "record_instrument_configuration_refresh"
+            and not call.error
+            and call.parsed
+            and call.parsed.get("status") == "failed"
+        ]
+        lookups = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "lookup_instrument_configurations"
+            and not call.error
+            and call.parsed
+        ]
+        finish = successful_conical_finish(trace)
+        uncertainty = (
+            finish.parsed.get("registry_selection", {}).get("refresh_uncertainty", [])
+            if finish and finish.parsed
+            else []
+        )
+        result["recorded_failed_refresh_before_lookup"] = any(
+            failure_index < lookup_index
+            for failure_index, _ in failure_calls
+            for lookup_index, _ in lookups
+        )
+        result["result_retains_refresh_uncertainty"] = bool(
+            uncertainty
+            and uncertainty[0].get("status") == "failed"
+            and uncertainty[0].get("failure_reason")
+        )
+        final = trace.final.lower()
+        result["reported_source_uncertainty"] = any(
+            term in final
+            for term in ("unknown", "could not be checked", "source status is uncertain")
+        ) and not re.search(
+            r"\b(?:source status|sources?)\b[^.!?]{0,40}\b(?:unchanged|no changes?)\b",
+            final,
+        )
+        return result
+
+    return checks
+
+
 def _conical_rejected(cue_terms: Tuple[str, ...]):
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         del clock
@@ -558,6 +662,37 @@ def build_cases(clock: Clock) -> List[Case]:
             "envelopes are not continuous viewing time. "
             f"Configuration JSON: {json.dumps(CONICAL_CONFIG, separators=(',', ':'))}",
             _conical_complete(CONICAL_CONFIG["configuration_id"]),
+        ),
+        Case(
+            "conical_amsr2_registry_selection",
+            ("conical", "registry", "lookup", "revision", "complete"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. Use "
+            "the shared configuration lookup tool. I explicitly select the "
+            f"reviewed configuration revision {CONICAL_SHARED_REVISION} for the "
+            "product scan sector and accept its stated approximations and source "
+            "choices. Use the exact ID and revision returned by lookup. Prepare "
+            "the study, show me its warnings and settings, run it with the exact "
+            "accepted setup revision, then fetch the viewing events. Explain "
+            "cell-center sampling and that field-of-regard envelopes are not "
+            "continuous viewing time.",
+            _conical_registry_complete(CONICAL_SHARED_ID, CONICAL_SHARED_REVISION),
+        ),
+        Case(
+            "conical_amsr2_failed_refresh",
+            ("conical", "registry", "refresh", "uncertainty"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. "
+            "I tried to refresh the JAXA source page on 2026-10-28, but it was "
+            "unavailable. Record a failed source refresh for the reviewed AMSR2 "
+            f"configuration at revision {CONICAL_SHARED_REVISION}, with source "
+            "check ID jaxa-page-attempt-2026-10-28 and failure reason that the "
+            "page was unavailable. Then look up the registry and use the exact "
+            f"revision {CONICAL_SHARED_REVISION}, which I explicitly select for "
+            "this historical window and accept with the source-status warning. "
+            "Prepare, run with the accepted setup revision, and fetch the events. "
+            "State that the failed check leaves current source status unknown.",
+            _conical_registry_failed_refresh(CONICAL_SHARED_ID, CONICAL_SHARED_REVISION),
         ),
         Case(
             "conical_applicability_rejected",

@@ -1,10 +1,10 @@
-"""Typed, sourced configuration for a conical-scanning study.
+"""Typed, sourced settings for shared and study-specific conical configurations.
 
 The model keeps source meaning separate from the TAT-C mapping: every angle
 carries its unit, every geometry parameter is backed by an evidence excerpt,
-and source conflicts retain the option that was chosen and why.  Tool code
-does not supply mission defaults; a researcher or calling assistant supplies
-one complete configuration.
+and source conflicts retain the option that was chosen and why. Registry data
+stays separate from generic tool logic, and study-specific settings remain
+available without automatic promotion.
 """
 
 from __future__ import annotations
@@ -290,7 +290,7 @@ class ConicalGeometry(_StrictModel):
 
 
 class ConicalConfiguration(_StrictModel):
-    """One complete, sourced, study-specific conical configuration."""
+    """One complete, sourced conical configuration."""
 
     schema_version: Literal[SCHEMA_VERSION] = SCHEMA_VERSION
     configuration_id: str = Field(min_length=1)

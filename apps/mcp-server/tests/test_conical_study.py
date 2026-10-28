@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 from fastmcp import Client
 
-from src import conical_study, generic_coverage, result_store
+from src import configuration_registry, conical_study, generic_coverage, result_store
 from src import server as server_module
 from src import coverage_core
 from src.conical_config import ConicalConfiguration
@@ -24,6 +24,56 @@ NOW = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
 
 def _config():
     return json.loads(CONFIG_PATH.read_text())
+
+
+def _refresh_fixture_configuration():
+    configuration = _config()
+    configuration["revision"] = "2026-10-28-fixture-2"
+    configuration["source_revision"] = {
+        **configuration["source_revision"],
+        "revision_id": "amsr2-refresh-fixture-2",
+        "checked_at_utc": "2026-10-28T00:00:00Z",
+        "summary": "Synthetic source fixture for the registry refresh test.",
+    }
+    configuration["geometry"]["scan_half_width"]["value"] = 72.0
+    fixture_evidence = {
+        "evidence_id": "fixture-geometry-refresh",
+        "authority": "Test fixture",
+        "title": "Synthetic AMSR2 geometry refresh",
+        "url": "https://example.invalid/amsr2-geometry-refresh",
+        "document_revision": "fixture-2",
+        "locator": "scan sector",
+        "excerpt": "The test fixture sets the product-sector half width to 72 degrees.",
+        "retrieved_at_utc": "2026-10-28T00:00:00Z",
+        "interpretation": "Test-only evidence for exercising changed-geometry selection.",
+        "supports": ["geometry.scan_half_width"],
+    }
+    configuration["evidence"].append(fixture_evidence)
+    configuration["source_revision"]["evidence_ids"].append(
+        "fixture-geometry-refresh"
+    )
+    selected_sector = configuration["source_conflicts"][0]["options"][1]
+    selected_sector["summary"] = "Test fixture product sector with 72 degree half width."
+    selected_sector["scan_half_width_deg"] = 72.0
+    selected_sector["evidence_ids"] = ["fixture-geometry-refresh"]
+    configuration["geometry_checks"] = [
+        check
+        for check in configuration["geometry_checks"]
+        if check["check_id"] != "scan-sector-consistency"
+    ]
+    configuration["geometry_checks"].append(
+        {
+            "check_id": "scan-sector-refresh-fixture",
+            "description": "Test fixture scan-sector geometry check.",
+            "method": "Fixed source refresh test fixture.",
+            "reported_value": 72.0,
+            "unit": "degree",
+            "tolerance": 0.1,
+            "status": "passed",
+            "evidence_ids": ["fixture-geometry-refresh"],
+        }
+    )
+    return configuration
 
 
 def _reference():
@@ -51,12 +101,14 @@ class FixtureClock(datetime):
 @pytest.fixture(autouse=True)
 def _clean_store(monkeypatch):
     result_store.clear()
+    configuration_registry.clear_refresh_state()
     monkeypatch.setattr(
         generic_coverage.celestrak_client, "get_satellite_info", _sat_info
     )
     monkeypatch.setattr(coverage_core, "datetime", FixtureClock)
     yield
     result_store.clear()
+    configuration_registry.clear_refresh_state()
 
 
 def _call(name, arguments):
@@ -113,6 +165,93 @@ def _prepare(draft_id, rows=2, columns=2, configuration=None):
     return payload
 
 
+def test_configuration_lookup_returns_reviewed_amsr2_without_selecting_it():
+    error, text, lookup = _call(
+        "lookup_instrument_configurations", {"instrument": "AMSR2"}
+    )
+    assert not error, text
+    assert lookup["selection_required"] is True
+    assert lookup["ambiguous"] is False
+    assert lookup["candidate_count"] == 1
+
+    candidate = lookup["candidates"][0]
+    configuration = candidate["configuration"]
+    assert candidate["registry_status"] == "reviewed_shared"
+    assert configuration["configuration_id"] == "amsr2-gcom-w1-conical-product-sector"
+    assert configuration["revision"] == "2026-10-27.1"
+    assert configuration["geometry"]["cone_angle"] == {
+        "value": 47.564,
+        "unit": "degree",
+    }
+    assert configuration["geometry"]["scan_half_width"] == {
+        "value": 75.332,
+        "unit": "degree",
+    }
+    assert "tatc-amsr2-validation" in {
+        evidence["evidence_id"] for evidence in configuration["evidence"]
+    }
+    assert any(
+        check["check_id"] == "observation-timing"
+        and check["reported_value"] == 0.27
+        and check["tolerance"] == 1.0
+        for check in configuration["geometry_checks"]
+    )
+    assert candidate["source_change_checks"][0]["kind"] == "initial_inclusion"
+    assert candidate["source_change_checks"][0]["status"] == "checked"
+
+
+def test_explicit_geometry_refresh_adds_a_revision_and_leaves_both_candidates():
+    updated = _refresh_fixture_configuration()
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": _config()["configuration_id"],
+            "base_revision": _config()["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-28T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture refresh found a changed product-sector half width.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert not error, text
+    assert refresh["status"] == "geometry_changed"
+    assert refresh["geometry_changes"] == [
+        {
+            "parameter": "geometry.scan_half_width",
+            "previous_value": {"value": 75.332, "unit": "degree"},
+            "new_value": {"value": 72.0, "unit": "degree"},
+        }
+    ]
+    assert refresh["new_revision_candidate"]["revision"] == "2026-10-28-fixture-2"
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations",
+        {"instrument": "AMSR2", "operating_mode": "40_rpm"},
+    )
+    assert not error, text
+    assert lookup["candidate_count"] == 2
+    assert lookup["ambiguous"] is True
+    assert lookup["selection_required"] is True
+    assert lookup["selection"] is None
+    old = next(
+        item
+        for item in lookup["candidates"]
+        if item["revision"] == _config()["revision"]
+    )
+    new = next(
+        item
+        for item in lookup["candidates"]
+        if item["revision"] == "2026-10-28-fixture-2"
+    )
+    assert old["source_change_notices"][0]["new_revision"] == "2026-10-28-fixture-2"
+    assert new["registry_status"] == "source_refresh_candidate"
+    assert new["configuration"]["geometry"]["scan_half_width"]["value"] == 72.0
+
+
 def _finish(draft_id, revision, accept=True):
     return _call(
         "finish_conical_study",
@@ -122,6 +261,215 @@ def _finish(draft_id, revision, accept=True):
             "accept_setup": accept,
         },
     )
+
+
+def _prepare_registry(draft_id, configuration_id, configuration_revision=None):
+    arguments = {
+        "draft_id": draft_id,
+        "grid_rows": 2,
+        "grid_columns": 2,
+        "configuration_id": configuration_id,
+    }
+    if configuration_revision is not None:
+        arguments["configuration_revision"] = configuration_revision
+    return _call("prepare_conical_study", arguments)
+
+
+def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
+    base = _config()
+    base_id = base["configuration_id"]
+    base_revision = base["revision"]
+
+    old_draft = _begin()
+    _set_region(old_draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, old_proposal = _prepare_registry(
+        old_draft["draft_id"], base_id, base_revision
+    )
+    assert not error, text
+    assert old_proposal["configuration_revision"] == base_revision
+    assert old_proposal["registry_selection"]["selection"] == "explicit_exact_revision"
+    assert old_proposal["registry_selection"]["source"] == "reviewed_shared"
+
+    error, text, old_summary = _finish(
+        old_draft["draft_id"], old_proposal["setup_revision"]
+    )
+    assert not error, text
+    old_result_id = old_summary["result_id"]
+
+    refreshed = _refresh_fixture_configuration()
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base_id,
+            "base_revision": base_revision,
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-28T00:00:00Z",
+            "checked_source_revision_id": refreshed["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture refresh found a changed product-sector half width.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [refreshed["evidence"][-1]],
+            "updated_configuration": refreshed,
+        },
+    )
+    assert not error, text
+
+    error, text, old_events = _call(
+        "get_access_events", {"result_id": old_result_id, "offset": 0, "limit": 1}
+    )
+    assert not error, text
+    old_selection = old_events["provenance"]["setup_snapshot"]["registry_selection"]
+    assert old_events["configuration_revision"] == base_revision
+    assert old_selection["source_change_notices"] == []
+    assert (
+        old_events["provenance"]["setup_snapshot"]["configuration"]["geometry"]
+        ["scan_half_width"]["value"]
+        == 75.332
+    )
+
+    error, text, ambiguous = _call(
+        "lookup_instrument_configurations",
+        {"instrument": "AMSR2", "operating_mode": "40_rpm"},
+    )
+    assert not error, text
+    assert ambiguous["ambiguous"] is True
+    assert ambiguous["selection"] is None
+
+    new_draft = _begin()
+    _set_region(new_draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, prior_proposal = _prepare_registry(
+        new_draft["draft_id"], base_id, base_revision
+    )
+    assert not error, text
+    assert prior_proposal["registry_selection"]["source_change_notices"][0][
+        "new_revision"
+    ] == refreshed["revision"]
+    assert any("geometry.scan_half_width" in warning for warning in prior_proposal["warnings"])
+
+    error, text, _ = _prepare_registry(new_draft["draft_id"], base_id)
+    assert error
+    assert "configuration_revision is required" in text
+
+    new_revision = refreshed["revision"]
+    error, text, new_proposal = _prepare_registry(
+        new_draft["draft_id"], base_id, new_revision
+    )
+    assert not error, text
+    assert new_proposal["registry_selection"]["source"] == "source_refresh_candidate"
+    assert new_proposal["configuration"]["geometry"]["scan_half_width"]["value"] == 72.0
+    assert any("geometry.scan_half_width" in warning for warning in new_proposal["warnings"])
+
+    error, text, new_summary = _finish(
+        new_draft["draft_id"], new_proposal["setup_revision"]
+    )
+    assert not error, text
+    assert new_summary["configuration_revision"] == new_revision
+    error, text, new_events = _call(
+        "get_access_events", {"result_id": new_summary["result_id"], "limit": 1}
+    )
+    assert not error, text
+    assert new_events["registry_selection"]["revision"] == new_revision
+    assert (
+        new_events["provenance"]["setup_snapshot"]["configuration"]["geometry"]
+        ["scan_half_width"]["value"]
+        == 72.0
+    )
+    for tool_name, arguments in (
+        ("get_access_daily", {"result_id": new_summary["result_id"]}),
+        ("get_access_cells", {"result_id": new_summary["result_id"]}),
+        ("get_access_revisit", {"result_id": new_summary["result_id"]}),
+        (
+            "get_access_event_spacing",
+            {"result_id": new_summary["result_id"], "offset": 0, "limit": 1},
+        ),
+    ):
+        error, text, page = _call(tool_name, arguments)
+        assert not error, text
+        assert page["registry_selection"]["revision"] == new_revision
+        assert (
+            page["provenance"]["setup_snapshot"]["configuration"]["revision"]
+            == new_revision
+        )
+
+
+def test_source_refresh_cannot_reuse_an_immutable_registry_revision():
+    configuration = _config()
+    updated = _refresh_fixture_configuration()
+    updated["revision"] = configuration["revision"]
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": configuration["configuration_id"],
+            "base_revision": configuration["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-28T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture refresh attempts to reuse an existing revision.",
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert error
+    assert "new immutable revision" in text
+    error, text, lookup = _call(
+        "lookup_instrument_configurations",
+        {"configuration_id": configuration["configuration_id"]},
+    )
+    assert not error, text
+    assert lookup["candidate_count"] == 1
+
+
+def test_failed_source_refresh_is_disclosed_and_stales_an_older_proposal():
+    configuration = _config()
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _prepare_registry(
+        draft["draft_id"], configuration["configuration_id"], configuration["revision"]
+    )
+    assert not error, text
+
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": configuration["configuration_id"],
+            "base_revision": configuration["revision"],
+            "status": "failed",
+            "checked_at_utc": "2026-10-28T00:00:00Z",
+            "checked_source_revision_id": "failed-source-check-2026-10-28",
+            "reported_by": "assistant",
+            "summary": "The requested source refresh could not be completed.",
+            "failure_reason": "The source page was unavailable during this check.",
+        },
+    )
+    assert not error, text
+    assert refresh["status"] == "failed"
+
+    error, text, _ = _finish(draft["draft_id"], proposal["setup_revision"])
+    assert error
+    assert "new source-change information" in text
+    assert "No calculation was run" in text
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations",
+        {"configuration_id": configuration["configuration_id"]},
+    )
+    assert not error, text
+    candidate = lookup["candidates"][0]
+    assert candidate["refresh_uncertainty"][0]["failure_reason"] == (
+        "The source page was unavailable during this check."
+    )
+    assert candidate["source_change_checks"][-1]["status"] == "failed"
+
+    error, text, proposal = _prepare_registry(
+        draft["draft_id"], configuration["configuration_id"], configuration["revision"]
+    )
+    assert not error, text
+    assert any("current source state is unknown" in warning for warning in proposal["warnings"])
+    error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
+    assert not error, text
+    assert summary["registry_selection"]["refresh_uncertainty"][0]["failure_reason"]
+    assert any("current source state is unknown" in warning for warning in summary["warnings"])
 
 
 def test_full_mcp_workflow_preserves_provenance_and_pages_events():

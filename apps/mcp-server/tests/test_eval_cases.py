@@ -285,6 +285,75 @@ def _conical_trace(clock):
     )
 
 
+def _registry_conical_trace(clock, failed_refresh=False):
+    from eval.cases import CONICAL_SHARED_ID, CONICAL_SHARED_REVISION
+
+    trace = _conical_trace(clock)
+    selection = {
+        "configuration_id": CONICAL_SHARED_ID,
+        "revision": CONICAL_SHARED_REVISION,
+        "source": "reviewed_shared",
+        "selection": "explicit_exact_revision",
+        "source_change_checks": [],
+        "source_change_notices": [],
+        "refresh_uncertainty": [],
+    }
+    prepare = trace.calls[0]
+    prepare.args = {
+        "grid_rows": 2,
+        "grid_columns": 2,
+        "configuration_id": CONICAL_SHARED_ID,
+        "configuration_revision": CONICAL_SHARED_REVISION,
+    }
+    prepare.parsed["registry_selection"] = selection
+    finish = trace.calls[1]
+    finish.parsed["configuration_id"] = CONICAL_SHARED_ID
+    finish.parsed["configuration_revision"] = CONICAL_SHARED_REVISION
+    finish.parsed["registry_selection"] = selection
+
+    calls = []
+    if failed_refresh:
+        failed_check = {
+            "status": "failed",
+            "failure_reason": "The source page was unavailable during this check.",
+        }
+        selection["refresh_uncertainty"] = [failed_check]
+        calls.append(
+            Call(
+                "record_instrument_configuration_refresh",
+                {"status": "failed"},
+                False,
+                "{}",
+                parsed={"status": "failed", "source_change_check": failed_check},
+            )
+        )
+    calls.append(
+        Call(
+            "lookup_instrument_configurations",
+            {"instrument": "AMSR2", "spacecraft": "GCOM-W1"},
+            False,
+            "{}",
+            parsed={
+                "selection_required": True,
+                "selection": None,
+                "candidates": [
+                    {
+                        "configuration_id": CONICAL_SHARED_ID,
+                        "revision": CONICAL_SHARED_REVISION,
+                        "registry_status": "reviewed_shared",
+                        "refresh_uncertainty": selection["refresh_uncertainty"],
+                    }
+                ],
+            },
+        )
+    )
+    calls.extend(trace.calls)
+    trace.calls = calls
+    if failed_refresh:
+        trace.final += " The failed refresh leaves current source status unknown."
+    return trace
+
+
 def test_conical_eval_requires_prepared_accepted_revision_and_event_semantics():
     clock = _clock()
     case = next(
@@ -322,6 +391,43 @@ def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
         trace = _conical_trace(clock)
         trace.final = final
         assert not case.checks(trace, clock)["reported"], final
+
+
+def test_registry_eval_requires_lookup_and_explicit_revision_selection():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_registry_selection"
+    )
+    trace = _registry_conical_trace(clock)
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace.calls.pop(0)
+    checks = case.checks(trace, clock)
+    assert not checks["looked_up_candidate_without_selection"]
+    assert not all(checks.values())
+
+    trace = _registry_conical_trace(clock)
+    trace.calls[1].args["configuration_revision"] = "latest"
+    checks = case.checks(trace, clock)
+    assert not checks["prepared_exact_registry_revision"]
+    assert not all(checks.values())
+
+
+def test_failed_refresh_eval_requires_uncertainty_in_the_saved_result_and_reply():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_failed_refresh"
+    )
+    trace = _registry_conical_trace(clock, failed_refresh=True)
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace.final = trace.final.replace("unknown", "unchanged")
+    checks = case.checks(trace, clock)
+    assert checks["recorded_failed_refresh_before_lookup"]
+    assert checks["result_retains_refresh_uncertainty"]
+    assert not checks["reported_source_uncertainty"]
 
 
 def test_conical_unresolved_sector_requires_a_choice_before_running():
