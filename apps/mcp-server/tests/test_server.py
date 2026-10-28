@@ -763,12 +763,14 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         fetch.assert_called_once_with("abc123", "gaps")
 
-    def test_tatc_36_staged_access_preserves_cell_ids_and_legacy_results(self):
+    def test_staged_access_returns_correct_cell_results(self):
         # GeographicLib areas and direct TAT-C accesses were derived without
         # the server grid, cell-ID adapter, or summary code. The fixture keeps
         # their exact inputs, unrounded areas, observation periods, and method.
+        # This checks server behavior across supported TAT-C upgrades.
+        # Investigate calculation changes before updating reference values.
         reference = json.loads(
-            (Path(__file__).parent / "fixtures" / "tatc_36_legacy_access_reference.json")
+            (Path(__file__).parent / "fixtures" / "staged_access_reference.json")
             .read_text()
         )
         omm = reference["input"]["omm"]
