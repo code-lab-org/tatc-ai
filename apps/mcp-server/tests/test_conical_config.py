@@ -182,6 +182,15 @@ def test_ground_incidence_choice_accepts_a_separate_sourced_cone_mapping():
     assert configuration.geometry.cone_angle.value == 47.564
 
 
+def test_ground_incidence_mapping_requires_cone_evidence_on_the_selected_option():
+    data = _fixture()
+    conflict = data["source_conflicts"][1]
+    conflict["chosen_option_id"] = "ground-incidence-55deg"
+    conflict["options"][0]["cone_angle_deg"] = 47.564
+    with pytest.raises(ValidationError, match="cone.*evidence"):
+        ConicalConfiguration.model_validate(data)
+
+
 def test_declared_approximation_cannot_claim_supported_status():
     data = _fixture()
     data["approximation_status"] = "supported"

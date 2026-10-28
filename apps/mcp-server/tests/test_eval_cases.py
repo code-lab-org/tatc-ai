@@ -316,6 +316,8 @@ def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
         "continuous viewing of the whole cell.",
         "The study found 4 events. Daily area is cell-center sampled; the "
         "envelope is not continuous viewing. Every point in each cell was observed.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing, but every point in every cell was observed.",
     ):
         trace = _conical_trace(clock)
         trace.final = final

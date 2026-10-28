@@ -400,6 +400,15 @@ class ConicalConfiguration(_StrictModel):
                     "incidence angle without an explicit sourced cone_angle_deg "
                     "mapping; incidence and cone angles are not interchangeable"
                 )
+            if choice.incidence_angle_deg is not None and not any(
+                item.evidence_id in choice.evidence_ids
+                and "geometry.cone_angle" in item.supports
+                for item in self.evidence
+            ):
+                raise ValueError(
+                    f"source conflict {conflict.conflict_id!r} must link its "
+                    "cone mapping to evidence supporting geometry.cone_angle"
+                )
             checks = (
                 ("cone_angle_deg", self.geometry.cone_angle.value),
                 ("scan_center_azimuth_deg", self.geometry.scan_center_azimuth.value),

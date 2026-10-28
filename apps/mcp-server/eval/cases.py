@@ -321,7 +321,7 @@ def _conical_reporting_is_limited(final: str) -> bool:
         negation + r".{0,80}" + continuous + "|" + continuous
         + r".{0,120}\b(?:unavailable|not available|not provided|not computed)\b"
     )
-    for clause in re.split(r"[.!?;\n]", final):
+    for clause in re.split(r"[.!?;\n]|\b(?:but|however|yet|although|whereas)\b", final):
         if re.search(continuous, clause) and not re.search(continuous_limit, clause):
             return False
         whole_cell = re.search(
