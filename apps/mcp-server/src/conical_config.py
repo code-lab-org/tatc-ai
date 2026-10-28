@@ -52,7 +52,7 @@ def iso_utc(value: datetime) -> str:
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
 
 
 class Angle(_StrictModel):
@@ -394,6 +394,12 @@ class ConicalConfiguration(_StrictModel):
 
         for conflict in self.source_conflicts:
             choice = conflict.chosen
+            if choice.incidence_angle_deg is not None and choice.cone_angle_deg is None:
+                raise ValueError(
+                    f"source conflict {conflict.conflict_id!r} selects a ground "
+                    "incidence angle without an explicit sourced cone_angle_deg "
+                    "mapping; incidence and cone angles are not interchangeable"
+                )
             checks = (
                 ("cone_angle_deg", self.geometry.cone_angle.value),
                 ("scan_center_azimuth_deg", self.geometry.scan_center_azimuth.value),

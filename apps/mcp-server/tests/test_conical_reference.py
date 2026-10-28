@@ -71,6 +71,7 @@ def test_mapped_events_match_independent_reference_and_both_directions():
                 f"{case_name} cell {cell['cell_id']} event count changed"
             )
             for actual, expected in zip(events, cell["events"]):
+                assert actual["cell_id"] == cell["cell_id"]
                 difference = abs(
                     (
                         actual["epoch"].astimezone(timezone.utc)

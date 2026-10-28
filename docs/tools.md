@@ -49,6 +49,7 @@ The configuration is typed and rejects unknown fields. It records:
 - Evidence: authority, title, URL, document revision, locator, excerpt, retrieval time, interpretation, and the exact parameter keys each excerpt supports.
 - Source revision: the checked revision ID, time, authority, summary, and evidence IDs.
 - Source conflicts: at least two documented options, the chosen option, and a rationale. Numeric option values are checked against the geometry so a sector width cannot be paired with another option's angles or frame.
+- A selected source option that gives a ground incidence angle must also give a separately sourced cone angle for the TAT-C mapping. An incidence angle alone cannot supply that mapping.
 - Interpretation and approximations: the selected mode, limitations, approximation status, each approximation's affected parameters and impact, and reported geometry checks. A failed check rejects the configuration. Declared approximations cannot be labeled `supported`.
 
 The server validates structure, ranges, units, evidence presence and references, applicability, acceptance identity, and calculation bounds. It does not authenticate arbitrary source text or independently confirm the researcher's conversation. A citation alone is not evidence that a mapping passed its checks.
@@ -94,6 +95,8 @@ The result uses `accounting_method: "conical_events_v1"`:
 ### Result fetches
 
 All conical fetches return the same accepted setup snapshot, provenance, warnings, limits, and accounting definitions, plus `accounting_method`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
+
+Cell replies carry provenance, warnings, and definitions once at the response level. Their GeoJSON metadata keeps the configuration and setup identity without repeating those records.
 
 - `get_access_events` pages events, default limit 100, maximum 366.
 - `get_access_daily` pages half-open UTC daily rows with event counts and visited-cell areas.

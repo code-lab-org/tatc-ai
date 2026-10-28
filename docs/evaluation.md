@@ -23,6 +23,8 @@ The coverage cases include the legacy single-geometry workflow and three conical
 
 The eval is not a mission-accuracy test. The unit and reference integration tests cover event counts, epochs, projected positions, and independent inside/outside cases. A partial or multi-configuration conical proposal is intentionally absent because this increment does not support it.
 
+The complete conical case checks for cell-center sampling and the limits of envelope durations, and rejects common claims of continuous or whole-cell viewing. These text checks are conservative heuristics. The rejection cases fail if either the legacy or conical workflow completes a calculation.
+
 ## Streaming check
 
 The eval conversations are not streamed, but LibreChat streams model responses. Each run first sends every model a short streamed request and reports `stream: ok`, `missing role`, or `no tool call`. LibreChat drops tool calls from a stream whose first delta has no `role`. Models marked `disableStreaming` in `apps/librechat/librechat.yaml` are noted rather than failed.

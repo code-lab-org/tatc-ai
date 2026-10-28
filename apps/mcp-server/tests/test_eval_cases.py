@@ -306,6 +306,22 @@ def test_conical_eval_requires_prepared_accepted_revision_and_event_semantics():
     assert not all(checks.values())
 
 
+def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
+    clock = _clock()
+    case = next(case for case in build_cases(clock) if case.id == "conical_amsr2_complete")
+    for final in (
+        "There were 4 events. Every point in each cell was continuously observed "
+        "throughout each envelope.",
+        "There were 4 viewing events at cell centers. The envelopes mean "
+        "continuous viewing of the whole cell.",
+        "The study found 4 events. Daily area is cell-center sampled; the "
+        "envelope is not continuous viewing. Every point in each cell was observed.",
+    ):
+        trace = _conical_trace(clock)
+        trace.final = final
+        assert not case.checks(trace, clock)["reported"], final
+
+
 def test_conical_unresolved_sector_requires_a_choice_before_running():
     clock = _clock()
     case = next(
@@ -382,3 +398,15 @@ def test_conical_eval_rejects_uncovered_or_unsupported_setup():
         case = next(case for case in build_cases(clock) if case.id == case_id)
         checks = case.checks(Trace(prompt=case.prompt, final=final), clock)
         assert all(checks.values()), (case_id, checks)
+
+
+def test_conical_rejection_eval_rejects_legacy_calculations():
+    clock = _clock()
+    for case_id in ("conical_applicability_rejected", "conical_missing_evidence"):
+        case = next(case for case in build_cases(clock) if case.id == case_id)
+        trace = Trace(
+            prompt=case.prompt,
+            calls=[Call("finish_access_run", {}, False, "{}", {"result_id": "legacy-1"})],
+            final="The applicability interval and source evidence are insufficient.",
+        )
+        assert not case.checks(trace, clock)["did_not_finish"]

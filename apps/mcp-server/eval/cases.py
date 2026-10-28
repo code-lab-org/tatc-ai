@@ -21,8 +21,9 @@ FINISH_TOOLS = {
     "run_satellite_access",
 }
 CONICAL_CONFIG = json.loads(
-    (Path(__file__).resolve().parents[1] / "eval" / "fixtures" / "amsr2_conical_prompt_config.json").read_text()
+    (Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json").read_text()
 )
+CONICAL_CONFIG["configuration_id"] += "-eval"
 
 PHOENIX = (33.45, -112.07)
 TEMPE = (33.42, -111.94)
@@ -304,6 +305,35 @@ def successful_conical_finish(trace: Trace):
     return None
 
 
+def _conical_reporting_is_limited(final: str) -> bool:
+    """Check explicit sampling limits and reject common contradictory claims.
+
+    These text checks are conservative heuristics, not a semantic assessment
+    of every possible explanation.
+    """
+    negation = r"\b(?:not|never|no|cannot|can't|doesn't|isn't|aren't|don't)\b"
+    continuous = r"\b(?:continuous|continuously|uninterrupted)\b"
+    sampling = re.search(
+        r"\bcell[- ]cent(?:er|re)s?\b|"
+        r"\b(?:event|visit|sample)\w*\b[^.!?\n]*\bcent(?:er|re)s?\b", final
+    )
+    continuous_limit = (
+        negation + r".{0,80}" + continuous + "|" + continuous
+        + r".{0,120}\b(?:unavailable|not available|not provided|not computed)\b"
+    )
+    for clause in re.split(r"[.!?;\n]", final):
+        if re.search(continuous, clause) and not re.search(continuous_limit, clause):
+            return False
+        whole_cell = re.search(
+            r"\b(?:every|all) (?:point|pixel|location)s?\b.*\bcell\w*\b|"
+            r"\b(?:whole|entire|full) (?:grid[- ])?cells?\b", clause
+        )
+        if whole_cell and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause):
+            if not re.search(negation, clause):
+                return False
+    return bool(sampling and "envelope" in final and re.search(continuous_limit, final))
+
+
 def _conical_complete(expected_config_id: str):
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         finish = successful_conical_finish(trace)
@@ -364,10 +394,7 @@ def _conical_complete(expected_config_id: str):
         event_count = summary.get("summary_counts", {}).get("event_count", 0)
         result["reported"] = (
             str(event_count) in re.findall(r"\d+", final)
-            and any(
-                cue in final
-                for cue in ("cell", "center", "envelope", "not continuous", "approximat")
-            )
+            and _conical_reporting_is_limited(final)
         )
         return result
 
@@ -381,7 +408,7 @@ def _conical_rejected(cue_terms: Tuple[str, ...]):
         text = trace.final.lower()
         call_text = " ".join(call.text.lower() for call in trace.calls if call.error)
         return {
-            "did_not_finish": finish is None,
+            "did_not_finish": finish is None and successful_finish(trace)[0] is None,
             "explained": any(term in text or term in call_text for term in cue_terms),
         }
 
@@ -420,13 +447,7 @@ def _conical_unresolved():
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         del clock
         conical_finish = successful_conical_finish(trace)
-        legacy_finish = any(
-            call.name in FINISH_TOOLS
-            and not call.error
-            and call.parsed
-            and call.parsed.get("result_id")
-            for call in trace.calls
-        )
+        legacy_finish = successful_finish(trace)[0] is not None
         successful_prepare = any(
             call.name == "prepare_conical_study" and not call.error
             for call in trace.calls

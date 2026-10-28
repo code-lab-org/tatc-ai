@@ -93,6 +93,14 @@ def test_missing_geometry_evidence_is_rejected():
         ConicalConfiguration.model_validate(data)
 
 
+@pytest.mark.parametrize("field", ["excerpt", "locator", "authority", "document_revision"])
+def test_blank_source_evidence_is_rejected(field):
+    data = _fixture()
+    data["evidence"][0][field] = " \t\n "
+    with pytest.raises(ValidationError):
+        ConicalConfiguration.model_validate(data)
+
+
 def test_missing_illumination_evidence_is_rejected():
     data = _fixture()
     data["evidence"] = [
@@ -153,6 +161,25 @@ def test_chosen_sector_cannot_be_combined_with_other_width():
     data["source_conflicts"][0]["chosen_option_id"] = "nominal-61deg"
     with pytest.raises(ValidationError, match="do not combine"):
         ConicalConfiguration.model_validate(data)
+
+
+def test_ground_incidence_choice_requires_an_explicit_cone_mapping():
+    data = _fixture()
+    conflict = data["source_conflicts"][1]
+    conflict["chosen_option_id"] = "ground-incidence-55deg"
+    data["geometry"]["cone_angle"]["value"] = 55.0
+    with pytest.raises(ValidationError, match="incidence.*cone"):
+        ConicalConfiguration.model_validate(data)
+
+
+def test_ground_incidence_choice_accepts_a_separate_sourced_cone_mapping():
+    data = _fixture()
+    conflict = data["source_conflicts"][1]
+    conflict["chosen_option_id"] = "ground-incidence-55deg"
+    conflict["options"][0]["cone_angle_deg"] = 47.564
+    conflict["options"][0]["evidence_ids"].append("tatc-amsr2-validation")
+    configuration = ConicalConfiguration.model_validate(data)
+    assert configuration.geometry.cone_angle.value == 47.564
 
 
 def test_declared_approximation_cannot_claim_supported_status():

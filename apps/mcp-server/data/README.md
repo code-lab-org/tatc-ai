@@ -11,6 +11,6 @@ approximations. The server validates the structure and values but does not
 authenticate the source text or turn this file into a mission default.
 
 The fixed independent TAT-C reference and mission-residual record live in
-`apps/mcp-server/tests/fixtures/amsr2_conical_reference.json`. The compact
-configuration used in the tool-calling eval lives in
-`apps/mcp-server/eval/fixtures/amsr2_conical_prompt_config.json`.
+`apps/mcp-server/tests/fixtures/amsr2_conical_reference.json`. The tool-calling
+eval loads the study configuration above directly, so its settings and source
+evidence have one maintained copy. The independent reference stays separate.
