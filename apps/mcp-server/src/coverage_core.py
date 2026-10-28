@@ -179,11 +179,11 @@ def _validate_window_against_omm(
         )
 
 
-def _as_utc_datetime(value: Any) -> datetime:
-    parsed = pd.Timestamp(value).to_pydatetime()
+def _as_utc_datetime(value: Any) -> pd.Timestamp:
+    parsed = pd.Timestamp(value)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.tz_localize("UTC")
+    return parsed.tz_convert("UTC")
 
 
 def _utc_days(start: datetime, end: datetime) -> Iterable[Tuple[date, datetime, datetime]]:
