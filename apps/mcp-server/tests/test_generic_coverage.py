@@ -34,7 +34,7 @@ def _raw(rows):
     if not rows:
         return gpd.GeoDataFrame(
             {
-                "point_id": pd.Series([], dtype="int64"),
+                "target_hash": pd.Series([], dtype="str"),
                 "geometry": gpd.GeoSeries([], crs="EPSG:4326"),
                 "satellite": pd.Series([], dtype="str"),
                 "instrument": pd.Series([], dtype="str"),
@@ -48,7 +48,7 @@ def _raw(rows):
     return gpd.GeoDataFrame(
         [
             {
-                "point_id": row[0],
+                "target_hash": str(row[0]),
                 "geometry": ShapelyPoint(float(row[1]), float(row[2])),
                 "satellite": "ISS modeled",
                 "instrument": "modeled scan",

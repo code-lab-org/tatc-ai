@@ -6,7 +6,11 @@ import geopandas as gpd
 import pandas as pd
 import pytest
 from shapely.geometry import Point as ShapelyPoint
-from tatc.analysis.coverage import aggregate_observations, collect_observations, reduce_observations
+from tatc.analysis import (
+    aggregate_observations,
+    collect_observations,
+    reduce_observations,
+)
 from tatc.schemas import Instrument, Point, Satellite
 
 from src import coverage_core as mc
@@ -39,6 +43,7 @@ def _raw_observations(rows):
         return gpd.GeoDataFrame(
             {
                 "point_id": pd.Series([], dtype="int64"),
+                "target_hash": pd.Series([], dtype="str"),
                 "geometry": gpd.GeoSeries([], crs="EPSG:4326"),
                 "satellite": pd.Series([], dtype="str"),
                 "instrument": pd.Series([], dtype="str"),
@@ -53,6 +58,7 @@ def _raw_observations(rows):
         [
             {
                 "point_id": row[0],
+                "target_hash": str(row[0]),
                 "geometry": ShapelyPoint(float(row[1]), float(row[2])),
                 "satellite": "FixtureSat",
                 "instrument": "FixtureScan",
@@ -69,7 +75,11 @@ def _raw_observations(rows):
 
 def _summarize(cells, raw, start, end):
     aggregated = aggregate_observations(raw)
-    return mc._summarize_coverage(cells, aggregated, reduce_observations(aggregated), start, end)
+    reduced = reduce_observations(aggregated)
+    cell_id_by_hash = dict(zip(raw["target_hash"], raw["point_id"]))
+    for frame in (aggregated, reduced):
+        frame["point_id"] = frame["target_hash"].map(cell_id_by_hash).astype(int)
+    return mc._summarize_coverage(cells, aggregated, reduced, start, end)
 
 
 def _two_cells():
@@ -152,6 +162,29 @@ def test_utc_day_accounting_excludes_an_interval_ending_at_midnight():
     assert second["observed_area_km2"] == 200.0
     assert first["gap_area_km2"] == 200.0
     assert second["gap_area_km2"] == 100.0
+
+
+def test_utc_day_accounting_preserves_submicrosecond_overlap_after_midnight():
+    start = datetime(2026, 1, 1, 23, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 2, 1, tzinfo=timezone.utc)
+    raw = _raw_observations(
+        [
+            (
+                0,
+                -111.5,
+                33.5,
+                "2026-01-01T23:59:59.999999500Z",
+                "2026-01-02T00:00:00.000000500Z",
+            ),
+            (1, -110.5, 33.5, "2026-01-02T00:00:00Z", "2026-01-02T00:30:00Z"),
+        ]
+    )
+
+    first, second = _summarize(_two_cells(), raw, start, end)["daily"]
+
+    assert first["observed_cell_ids"] == [0]
+    assert second["observed_cell_ids"] == [0, 1]
+    assert second["observed_area_km2"] == 300.0
 
 
 def test_tatc_merges_overlaps_before_area_and_revisit():

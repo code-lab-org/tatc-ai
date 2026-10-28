@@ -3,7 +3,8 @@ import importlib
 import json
 import os
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest import mock
 
 from fastmcp import Client
@@ -761,6 +762,153 @@ class ServerTests(unittest.TestCase):
             )
         self.assertFalse(result.is_error)
         fetch.assert_called_once_with("abc123", "gaps")
+
+    def test_tatc_36_staged_access_preserves_cell_ids_and_legacy_results(self):
+        # GeographicLib areas and direct TAT-C accesses were derived without
+        # the server grid, cell-ID adapter, or summary code. The fixture keeps
+        # their exact inputs, unrounded areas, observation periods, and method.
+        reference = json.loads(
+            (Path(__file__).parent / "fixtures" / "tatc_36_legacy_access_reference.json")
+            .read_text()
+        )
+        omm = reference["input"]["omm"]
+        start = reference["input"]["start_utc"]
+        end = reference["input"]["end_utc_exclusive"]
+        west, south, east, north = (
+            -70.259424,
+            -9.086291,
+            -70.219424,
+            -9.046291,
+        )
+        geometry_assessment = {
+            "status": "supported",
+            "source_text": "Fixture scan has a full field of regard of 4 degrees.",
+            "explanation": "The fixed fixture supplies the geometry for this access run.",
+        }
+        from src import coverage_core
+
+        fixture_now = datetime(2026, 10, 25, 4, 30, tzinfo=timezone.utc)
+
+        class FixtureClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixture_now if tz is None else fixture_now.astimezone(tz)
+
+        with mock.patch.object(coverage_core, "datetime", FixtureClock), mock.patch.object(
+            self.server.celestrak_client,
+            "get_satellite_info",
+            return_value={"norad_id": 25544, "name": "ISS (ZARYA)", "omm": [omm]},
+        ):
+            begin = self.call_tool(
+                "begin_access_run",
+                {
+                    "satellite_identifier": "ISS",
+                    "start_time": start,
+                    "end_time": end,
+                },
+            )
+            self.assertFalse(begin.is_error, begin.content[0].text)
+            draft = json.loads(begin.content[0].text)
+
+            region = self.call_tool(
+                "set_access_region",
+                {
+                    "draft_id": draft["draft_id"],
+                    "west_lon": west,
+                    "south_lat": south,
+                    "east_lon": east,
+                    "north_lat": north,
+                },
+            )
+            self.assertFalse(region.is_error, region.content[0].text)
+
+            finish = self.call_tool(
+                "finish_access_run",
+                {
+                    "draft_id": draft["draft_id"],
+                    "grid_rows": 1,
+                    "grid_columns": 2,
+                    "field_of_regard_deg": 4.0,
+                    "geometry_reference": "https://example.test/fixture-geometry",
+                    "instrument_name": "Fixture scan",
+                    "geometry_assessment": geometry_assessment,
+                },
+            )
+            self.assertFalse(finish.is_error, finish.content[0].text)
+            summary = json.loads(finish.content[0].text)
+
+            result_id = summary["result_id"]
+            daily_result = self.call_tool(
+                "get_access_daily", {"result_id": result_id}
+            )
+            cells_result = self.call_tool(
+                "get_access_cells", {"result_id": result_id}
+            )
+            revisit_result = self.call_tool(
+                "get_access_revisit", {"result_id": result_id}
+            )
+
+        self.assertFalse(daily_result.is_error, daily_result.content[0].text)
+        self.assertFalse(cells_result.is_error, cells_result.content[0].text)
+        self.assertFalse(revisit_result.is_error, revisit_result.content[0].text)
+        daily = json.loads(daily_result.content[0].text)
+        cells = json.loads(cells_result.content[0].text)
+        revisit = json.loads(revisit_result.content[0].text)
+
+        self.assertEqual(summary["satellite"], "ISS (ZARYA)")
+        self.assertEqual(summary["window_start_utc"], start)
+        self.assertEqual(summary["window_end_utc_exclusive"], end)
+        self.assertEqual(
+            summary["summary_counts"],
+            {
+                "total_days": 1,
+                "observed_days": 1,
+                "gap_days": 0,
+                "grid_cell_count": 2,
+                "observed_cell_count": 2,
+                "never_observed_cell_count": 0,
+            },
+        )
+        self.assertEqual(
+            daily["daily"],
+            [
+                {
+                    "utc_date": "2026-10-25",
+                    "window_start_utc": start,
+                    "window_end_utc_exclusive": end,
+                    "observed_area_km2": reference["expected_observed_area_km2"],
+                    "observed_fraction": 1.0,
+                    "gap_area_km2": 0.0,
+                    "gap_fraction": 0.0,
+                    "observed_cell_ids": reference["expected_observed_cell_ids"],
+                    "gap_cell_ids": [],
+                }
+            ],
+        )
+        features = cells["geojson"]["features"]
+        self.assertEqual([feature["properties"]["id"] for feature in features], [0, 1])
+        self.assertEqual(
+            [feature["properties"]["area_km2"] for feature in features],
+            reference["expected_cell_areas_km2"],
+        )
+        self.assertEqual(
+            [feature["properties"]["status"] for feature in features],
+            ["observed", "observed"],
+        )
+        self.assertEqual(
+            [feature["properties"]["access_count"] for feature in features],
+            reference["expected_access_counts"],
+        )
+        self.assertEqual(
+            features[0]["geometry"]["coordinates"][0][0], [west, south]
+        )
+        self.assertIsNone(revisit["revisit"]["mean_revisit_hours"])
+        self.assertIsNone(revisit["revisit"]["max_revisit_hours"])
+        self.assertEqual(revisit["revisit"]["revisit_sample_count"], 0)
+        self.assertIn(
+            "next aggregated access start minus the preceding access end",
+            revisit["revisit"]["revisit_definition"],
+        )
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
 from shapely import orient_polygons
-from shapely.geometry import mapping
+from shapely.geometry import mapping, shape
 
 from .validation import validate_altitude as _validate_altitude
 from .validation import validate_coordinates
@@ -48,10 +48,11 @@ def format_footprint_geojson(footprint: Any) -> Optional[Dict[str, Any]]:
     """Format a TAT-C footprint as a GeoJSON Feature, or None if empty.
 
     TAT-C returns a Polygon, or a MultiPolygon when the footprint crosses
-    the antimeridian. Coordinates are [lon, lat] rounded to 4 decimals
-    (~11 m) to keep tool results compact; the zero elevation is dropped.
-    Exterior rings run counterclockwise and holes clockwise, as RFC 7946
-    section 3.1.6 recommends; TAT-C returns them the other way round.
+    the antimeridian. Coordinates are [lon, lat], rounded to 4 decimals where
+    that keeps the GeoJSON valid; otherwise source precision is retained. The
+    zero elevation is dropped. Exterior rings run counterclockwise and holes
+    clockwise, as RFC 7946 section 3.1.6 recommends; TAT-C returns them the
+    other way round.
     """
     if footprint is None or getattr(footprint, "is_empty", True):
         return None
@@ -59,17 +60,33 @@ def format_footprint_geojson(footprint: Any) -> Optional[Dict[str, Any]]:
     if geometry["type"] not in ("Polygon", "MultiPolygon"):
         return None
 
-    def ring(coords):
-        return [[round(float(c[0]), 4), round(float(c[1]), 4)] for c in coords]
+    def ring(coords, digits: Optional[int]):
+        if digits is None:
+            return [[float(c[0]), float(c[1])] for c in coords]
+        return [
+            [round(float(c[0]), digits), round(float(c[1]), digits)]
+            for c in coords
+        ]
 
-    if geometry["type"] == "Polygon":
-        coordinates = [ring(r) for r in geometry["coordinates"]]
-    else:
-        coordinates = [[ring(r) for r in poly] for poly in geometry["coordinates"]]
+    def coordinates(digits: Optional[int]):
+        if geometry["type"] == "Polygon":
+            return [ring(r, digits) for r in geometry["coordinates"]]
+        return [[ring(r, digits) for r in poly] for poly in geometry["coordinates"]]
+
+    formatted_coordinates = coordinates(4)
+    formatted_geometry = {
+        "type": geometry["type"],
+        "coordinates": formatted_coordinates,
+    }
+    if footprint.is_valid and not shape(formatted_geometry).is_valid:
+        formatted_coordinates = coordinates(None)
     # Per server telemetry format: coordinates in [lon, lat] (WGS84), properties must be {}
     return {
         "type": "Feature",
-        "geometry": {"type": geometry["type"], "coordinates": coordinates},
+        "geometry": {
+            "type": geometry["type"],
+            "coordinates": formatted_coordinates,
+        },
         "properties": {},
     }
 

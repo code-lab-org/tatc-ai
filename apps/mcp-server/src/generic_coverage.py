@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import geopandas as gpd
 import pandas as pd
-from tatc.analysis.coverage import (
+from tatc.analysis import (
     aggregate_observations,
     collect_multi_observations,
     reduce_observations,
@@ -245,6 +245,18 @@ def _collect_cell_observations(task: Tuple[Any, ...]) -> Any:
     )
 
 
+def _restore_cell_ids(
+    results: gpd.GeoDataFrame, cell_id_by_hash: Dict[str, int]
+) -> gpd.GeoDataFrame:
+    """Restore stable grid IDs after TAT-C groups observations by target hash."""
+    restored = results.copy()
+    restored["point_id"] = restored["target_hash"].map(cell_id_by_hash)
+    if restored["point_id"].isna().any():
+        raise ValueError("TAT-C returned an observation for an unknown grid cell")
+    restored["point_id"] = restored["point_id"].astype(int)
+    return restored
+
+
 def _geometry_model(
     stage: Dict[str, Any],
     for_value: Optional[float],
@@ -364,11 +376,24 @@ def _run_stage(
             mp_context=multiprocessing.get_context("spawn"),
         ) as pool:
             collected = list(pool.map(_collect_cell_observations, tasks))
+    # TAT-C 3.6 identifies targets by geometry hash and does not retain
+    # Point.id. Keep the input task's row-major cell ID beside each result.
+    for task, frame in zip(tasks, collected):
+        frame["point_id"] = int(task[2])
     observations = gpd.GeoDataFrame(
         pd.concat(collected, ignore_index=True), geometry="geometry", crs="EPSG:4326"
     )
-    aggregated = aggregate_observations(observations)
-    summary = _summarize_coverage(cells, aggregated, reduce_observations(aggregated), start, end)
+    cell_id_by_hash = (
+        observations[["target_hash", "point_id"]]
+        .drop_duplicates("target_hash")
+        .set_index("target_hash")["point_id"]
+        .to_dict()
+    )
+    aggregated = _restore_cell_ids(
+        aggregate_observations(observations), cell_id_by_hash
+    )
+    reduced = _restore_cell_ids(reduce_observations(aggregated), cell_id_by_hash)
+    summary = _summarize_coverage(cells, aggregated, reduced, start, end)
     limits = (
         BASE_LIMITS[:2]
         + [ILLUMINATION_DAYLIGHT if daylight_only else ILLUMINATION_UNFILTERED]
