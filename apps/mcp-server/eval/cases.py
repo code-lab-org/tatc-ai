@@ -416,6 +416,46 @@ def _without_validation_evidence(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
+def _conical_unresolved():
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        conical_finish = successful_conical_finish(trace)
+        legacy_finish = any(
+            call.name in FINISH_TOOLS
+            and not call.error
+            and call.parsed
+            and call.parsed.get("result_id")
+            for call in trace.calls
+        )
+        successful_prepare = any(
+            call.name == "prepare_conical_study" and not call.error
+            for call in trace.calls
+        )
+        final = trace.final.lower()
+        asked = "?" in trace.final and any(
+            term in final for term in ("sector", "nominal", "product")
+        )
+        silent_choice = any(
+            phrase in final
+            for phrase in (
+                "i choose",
+                "i chose",
+                "i picked",
+                "i selected",
+                "i'll use",
+                "i will use",
+            )
+        )
+        return {
+            "did_not_finish": conical_finish is None and not legacy_finish,
+            "no_invented_choice": not successful_prepare,
+            "asked_for_choice": asked,
+            "no_silent_choice": not silent_choice,
+        }
+
+    return checks
+
+
 def build_cases(clock: Clock) -> List[Case]:
     d0 = clock.fmt(clock.d0)
     modis = (
@@ -519,7 +559,7 @@ def build_cases(clock: Clock) -> List[Case]:
             "Do not guess or choose for me. Ask me which sector to use before any "
             "calculation. "
             f"Configuration JSON: {json.dumps(_with_unresolved_sector(CONICAL_CONFIG), separators=(',', ':'))}",
-            _conical_rejected(("sector", "nominal", "product", "choice", "unresolved", "source conflict")),
+            _conical_unresolved(),
         ),
         Case(
             "conical_missing_evidence",

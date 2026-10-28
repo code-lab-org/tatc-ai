@@ -311,33 +311,59 @@ def test_conical_unresolved_sector_requires_a_choice_before_running():
     case = next(
         case for case in build_cases(clock) if case.id == "conical_unresolved_sector"
     )
-    trace = Trace(
+    asked = Trace(
         prompt=case.prompt,
         final=(
             "I need your choice between the nominal performance sector and the "
             "wider product sector before I can run this. Which should I use?"
         ),
     )
-    checks = case.checks(trace, clock)
+    checks = case.checks(asked, clock)
     assert all(checks.values()), checks
 
-    completed = Trace(
+    silent = Trace(
+        prompt=case.prompt,
+        final="I chose the product sector, so the study is ready.",
+    )
+    checks = case.checks(silent, clock)
+    assert checks["did_not_finish"]
+    assert not checks["asked_for_choice"]
+    assert not checks["no_silent_choice"]
+    assert not all(checks.values())
+
+    invented = Trace(
         prompt=case.prompt,
         calls=[
             Call(
-                "finish_conical_study",
-                {"accepted_setup_revision": "sha256:abc", "accept_setup": True},
+                "prepare_conical_study",
+                {"grid_rows": 2, "grid_columns": 2},
                 False,
                 "{}",
-                parsed={"result_id": "x", "result_kind": "conical_study"},
+                parsed={"setup_revision": "sha256:invented"},
             )
         ],
-        final="Done.",
+        final="I used the product sector and prepared it.",
     )
-    checks = case.checks(completed, clock)
-    assert not checks["did_not_finish"]
+    checks = case.checks(invented, clock)
+    assert not checks["no_invented_choice"]
     assert not all(checks.values())
 
+    legacy = Trace(
+        prompt=case.prompt,
+        calls=[
+            Call(
+                "finish_access_run",
+                {},
+                False,
+                "{}",
+                parsed={"result_id": "legacy-1"},
+            )
+        ],
+        final="Which sector should I use?",
+    )
+    checks = case.checks(legacy, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
 
 def test_conical_eval_rejects_uncovered_or_unsupported_setup():
     clock = _clock()

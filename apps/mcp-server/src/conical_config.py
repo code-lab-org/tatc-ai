@@ -449,17 +449,6 @@ class ConicalConfiguration(_StrictModel):
         """Return the normalized JSON-safe configuration."""
         return self.model_dump(mode="json")
 
-    def source_choices(self) -> List[Dict[str, str]]:
-        return [
-            {
-                "conflict_id": conflict.conflict_id,
-                "chosen_option_id": str(conflict.chosen_option_id),
-                "rationale": str(conflict.rationale),
-            }
-            for conflict in self.source_conflicts
-        ]
-
-
 def source_choices_from_snapshot(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
     """Return the chosen source options in a stored configuration snapshot."""
     return [
