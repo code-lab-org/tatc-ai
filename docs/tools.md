@@ -97,7 +97,7 @@ All conical fetches return the same accepted setup snapshot, provenance, warning
 
 - `get_access_events` pages events, default limit 100, maximum 366.
 - `get_access_daily` pages half-open UTC daily rows with event counts and visited-cell areas.
-- `get_access_cells` returns the grid as GeoJSON with event count, observed days, and per-cell spacing.
+- `get_access_cells` returns paged GeoJSON grid cells with event count, observed days, and per-cell spacing. Offset and limit apply to matching cells.
 - `get_access_revisit` returns event-spacing metrics and explicitly lists continuous metrics as unavailable for conical results.
 - `get_access_event_spacing` pages per-cell spacing values and summary statistics.
 

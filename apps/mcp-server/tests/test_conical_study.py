@@ -136,7 +136,9 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     assert proposal["grid"]["cell_count"] == 4
     assert proposal["configuration"]["tatc_mapping"]["tatc_version"] == "3.6.0"
     assert proposal["source_conflicts"][0]["chosen_option_id"] == "product-75deg"
-    assert any("product sector" in warning for warning in proposal["warnings"])
+    assert any(
+        "product-75deg" in warning for warning in proposal["warnings"]
+    )
     assert any("24 hours" in limit for limit in proposal["limits"])
 
     error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
@@ -205,6 +207,24 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     )
     assert cells["geojson"]["metadata"]["accounting_method"] == "conical_events_v1"
 
+    error, text, cell_page = _call(
+        "get_access_cells",
+        {"result_id": result_id, "offset": 0, "limit": 2},
+    )
+    assert not error, text
+    assert cell_page["cell_count"] == 2
+    assert cell_page["matched_cells"] == 4
+    assert cell_page["total_cells"] == 4
+    error, text, cell_page_two = _call(
+        "get_access_cells",
+        {"result_id": result_id, "offset": 2, "limit": 2},
+    )
+    assert not error, text
+    assert cell_page_two["cell_count"] == 2
+    assert {f["properties"]["id"] for f in cell_page["geojson"]["features"]}.isdisjoint(
+        {f["properties"]["id"] for f in cell_page_two["geojson"]["features"]}
+    )
+
     error, text, spacing = _call(
         "get_access_event_spacing", {"result_id": result_id, "offset": 0, "limit": 2}
     )
@@ -255,6 +275,32 @@ def test_changed_grid_requires_a_new_acceptance():
         error, text, _ = _finish(draft["draft_id"], first["setup_revision"])
     assert error
     assert "does not match" in text or "stale" in text
+
+
+def test_finish_freezes_accepted_stage_before_concurrent_edit(monkeypatch):
+    draft = _begin()
+    accepted_bbox = [0.0, -65.0, 10.0, -55.0]
+    _set_region(draft["draft_id"], accepted_bbox)
+    proposal = _prepare(draft["draft_id"])
+    real_collect = conical_study._collect_tasks
+
+    def edit_draft_then_collect(tasks, max_workers, work):
+        result_store.set_draft_region(draft["draft_id"], [20.0, -10.0, 22.0, -8.0])
+        return real_collect(tasks, max_workers, work)
+
+    monkeypatch.setattr(conical_study, "_collect_tasks", edit_draft_then_collect)
+    error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
+    assert not error, text
+    assert summary["roi_bbox"] == accepted_bbox
+    assert summary["provenance"]["setup_snapshot"]["region"] == accepted_bbox
+    assert summary["summary_counts"]["observed_cell_count"] == 4
+    assert result_store.get_draft(draft["draft_id"])["roi_bbox"] == [
+        20.0,
+        -10.0,
+        22.0,
+        -8.0,
+    ]
+
 
 
 def test_uncovered_applicability_fails_before_calculation(monkeypatch):

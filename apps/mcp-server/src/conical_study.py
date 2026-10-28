@@ -10,6 +10,7 @@ UTC-day and spacing accounting.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import multiprocessing
@@ -29,6 +30,7 @@ from .conical_config import (
     ConicalConfiguration,
     configuration_from_snapshot,
     iso_utc,
+    source_choices_from_snapshot,
 )
 from .conical_tatc import collect_cell_events, resolved_snapshot
 from .coverage_core import (
@@ -39,6 +41,7 @@ from .coverage_core import (
     SHORT_WINDOW_MAX,
     _build_grid,
     _parse_utc,
+    _public_satellites,
 )
 from .result_store import (
     get_draft as _get_draft,
@@ -92,13 +95,6 @@ def _sha256(payload: Any) -> str:
 
 def _omm_hash(omm_records: Sequence[Dict[str, Any]]) -> str:
     return _sha256(list(omm_records))
-
-
-def _public_satellites(stage: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return [
-        {key: value for key, value in satellite.items() if key != "omm_records"}
-        for satellite in stage["satellites"]
-    ]
 
 
 def _parse_window(stage: Dict[str, Any]) -> Tuple[datetime, datetime]:
@@ -190,14 +186,7 @@ def _consequential_payload(
         },
         "configuration_digest": _sha256(snapshot),
         "configuration": snapshot,
-        "source_choices": [
-            {
-                "conflict_id": conflict["conflict_id"],
-                "chosen_option_id": conflict["chosen_option_id"],
-                "rationale": conflict["rationale"],
-            }
-            for conflict in snapshot["source_conflicts"]
-        ],
+        "source_choices": source_choices_from_snapshot(snapshot),
         "approximation_ids": [
             approximation["approximation_id"]
             for approximation in snapshot["approximations"]
@@ -440,7 +429,7 @@ def prepare_conical_study(
 ) -> Dict[str, Any]:
     """Resolve a sourced conical configuration into an acceptance proposal."""
     resolved_configuration = _load_configuration(configuration)
-    stage = _get_draft(draft_id)
+    stage = copy.deepcopy(_get_draft(draft_id))
     if stage.get("roi_bbox") is None:
         raise ValueError(
             "This draft has no region yet. Call the region tool with four "
@@ -763,7 +752,10 @@ def finish_conical_study(
         raise ValueError(
             f"_max_workers must be an integer between 1 and {MAX_YEAR_WORKERS}"
         )
-    stage = _get_draft(draft_id)
+    # Freeze the accepted draft inputs before calculating. The store is shared
+    # by concurrent tool calls, so later edits must not change the evidence
+    # saved beside this result.
+    stage = copy.deepcopy(_get_draft(draft_id))
     proposal = stage.get("conical_proposal")
     if not proposal:
         raise ValueError(
@@ -877,7 +869,10 @@ def get_conical_daily(result_id: Any, offset: Any = 0, limit: Any = 31) -> Dict[
     }
 
 
-def get_conical_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
+def get_conical_cells(
+    result_id: Any, include: Any = "all", offset: Any = 0, limit: Any = 144
+) -> Dict[str, Any]:
+    _paginate([], offset, limit, "cell")
     if not isinstance(include, str) or include.strip().lower() not in (
         "all",
         "observed",
@@ -918,10 +913,14 @@ def get_conical_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
                 "geometry": cell["geometry"],
             }
         )
+    page = _paginate(features, offset, limit, "cell")
     return {
         **_header(result_id, payload),
         "include": wanted,
-        "cell_count": len(features),
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "matched_cells": page["total"],
+        "cell_count": len(page["items"]),
         "total_cells": len(payload["grid_cells"]),
         "geojson": {
             "type": "FeatureCollection",
@@ -935,7 +934,7 @@ def get_conical_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
                 "warnings": payload["warnings"],
                 "provenance": payload["provenance"],
             },
-            "features": features,
+            "features": page["items"],
         },
     }
 

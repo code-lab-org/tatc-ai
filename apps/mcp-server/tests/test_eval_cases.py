@@ -306,6 +306,39 @@ def test_conical_eval_requires_prepared_accepted_revision_and_event_semantics():
     assert not all(checks.values())
 
 
+def test_conical_unresolved_sector_requires_a_choice_before_running():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_unresolved_sector"
+    )
+    trace = Trace(
+        prompt=case.prompt,
+        final=(
+            "I need your choice between the nominal performance sector and the "
+            "wider product sector before I can run this. Which should I use?"
+        ),
+    )
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    completed = Trace(
+        prompt=case.prompt,
+        calls=[
+            Call(
+                "finish_conical_study",
+                {"accepted_setup_revision": "sha256:abc", "accept_setup": True},
+                False,
+                "{}",
+                parsed={"result_id": "x", "result_kind": "conical_study"},
+            )
+        ],
+        final="Done.",
+    )
+    checks = case.checks(completed, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
+
+
 def test_conical_eval_rejects_uncovered_or_unsupported_setup():
     clock = _clock()
     for case_id, final in (

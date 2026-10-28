@@ -5,7 +5,10 @@
   "instrument": "AMSR2",
   "spacecraft": {
     "name": "GCOM-W1",
-    "aliases": ["GCOM-W", "SHIZUKU"],
+    "aliases": [
+      "GCOM-W",
+      "SHIZUKU"
+    ],
     "norad_id": 38337,
     "orbit_provider": "celestrak",
     "orbit_provider_identifier": "GCOM-W1"
@@ -20,20 +23,41 @@
   "applicability": {
     "start_utc": "2012-08-10T00:00:00Z",
     "end_utc_exclusive": "2026-10-27T00:00:00Z",
-    "evidence_ids": ["jaxa-gcom-w-regular-observation", "jaxa-gcom-w-status"],
+    "evidence_ids": [
+      "jaxa-gcom-w-regular-observation",
+      "jaxa-gcom-w-status"
+    ],
     "basis": "JAXA moved GCOM-W1 to regular observation on 2012-08-10 and lists GCOM-W (AMSR2 mounted) in operation at retrieval on 2026-10-27. The end is the evidence cutoff, not a mission end date."
   },
   "geometry": {
     "model_family": "conical",
-    "cone_angle": {"value": 47.564, "unit": "degree"},
-    "scan_center_azimuth": {"value": 0.498, "unit": "degree"},
-    "scan_half_width": {"value": 75.332, "unit": "degree"},
-    "along_track_field_of_view": {"value": 1.0, "unit": "degree"},
+    "cone_angle": {
+      "value": 47.564,
+      "unit": "degree"
+    },
+    "scan_center_azimuth": {
+      "value": 0.498,
+      "unit": "degree"
+    },
+    "scan_half_width": {
+      "value": 75.332,
+      "unit": "degree"
+    },
+    "along_track_field_of_view": {
+      "value": 1.0,
+      "unit": "degree"
+    },
     "velocity_frame": "inertial",
     "nadir_reference": "geodetic",
     "illumination_requirement": "none",
-    "beam_width": {"value": 1.2, "unit": "degree"},
-    "scan_sample_spacing": {"value": 0.622, "unit": "degree"}
+    "beam_width": {
+      "value": 1.2,
+      "unit": "degree"
+    },
+    "scan_sample_spacing": {
+      "value": 0.622,
+      "unit": "degree"
+    }
   },
   "evidence": [
     {
@@ -64,7 +88,9 @@
       "excerpt": "the line of sight to each footprint (on the ellipsoid) is computed from the spacecraft position at the scan time and decomposed into a cone angle (from the geodetic nadir) and a scan azimuth",
       "retrieved_at_utc": "2026-10-27T00:00:00Z",
       "interpretation": "The measured cone angle uses the geodetic nadir.",
-      "supports": ["geometry.nadir_reference"]
+      "supports": [
+        "geometry.nadir_reference"
+      ]
     },
     {
       "evidence_id": "tatc-amsr2-along-track",
@@ -76,7 +102,9 @@
       "excerpt": "a ConicalInstrument with the measured cone angle and scan sector (center and half width), in the inertial velocity frame, and a 1 deg along-track field of view (its footprint is the region the arc sweeps as the satellite moves along track by the distance this angle subtends at nadir, about 12 km).",
       "retrieved_at_utc": "2026-10-27T00:00:00Z",
       "interpretation": "The 1 degree along-track field of view is an explicit approximation for integration-time motion and footprint width.",
-      "supports": ["geometry.along_track_field_of_view"]
+      "supports": [
+        "geometry.along_track_field_of_view"
+      ]
     },
     {
       "evidence_id": "jaxa-amsr2-specs",
@@ -88,7 +116,11 @@
       "excerpt": "Swath width: Nominal 1450 km, effective 1620 km. The performance guarantee range is +/-61 degrees scanning angle (1450km). The product contains data for a scanning angle of +/-75 degrees (1620km). Incidence angle: Nominal 55 degrees. 10.65 GHz: beam width 1.2 degrees.",
       "retrieved_at_utc": "2026-10-27T00:00:00Z",
       "interpretation": "JAXA separates the nominal performance guarantee sector from the wider product sector, and the nominal ground incidence angle from a cone angle. The 10.65 GHz beam width describes the channel.",
-      "supports": ["geometry.beam_width", "source_conflict.scan_sector", "source_conflict.incidence_vs_cone"]
+      "supports": [
+        "geometry.beam_width",
+        "source_conflict.scan_sector",
+        "source_conflict.incidence_vs_cone"
+      ]
     },
     {
       "evidence_id": "jaxa-gcom-w-status",
@@ -100,7 +132,10 @@
       "excerpt": "GCOM-W (AMSR2 mounted) [In Operation]. International Designation Code 2012-025A. Launch Date May 18, 2012. Sun-Synchronous Subrecurrent/Recurrent. Altitude 700km. Inclination Approx. 98 degrees.",
       "retrieved_at_utc": "2026-10-27T00:00:00Z",
       "interpretation": "Confirms spacecraft identity and in-operation status at retrieval.",
-      "supports": ["applicability.end", "spacecraft.identity"]
+      "supports": [
+        "applicability.end",
+        "spacecraft.identity"
+      ]
     },
     {
       "evidence_id": "jaxa-gcom-w-regular-observation",
@@ -112,7 +147,23 @@
       "excerpt": "JAXA completed the initial functional verification of the Global Change Observation Mission 1st - Water \"SHIZUKU\" (GCOM-W1) and has moved to the regular observation operation on August 10 as scheduled.",
       "retrieved_at_utc": "2026-10-27T00:00:00Z",
       "interpretation": "Establishes the applicability start; earlier commissioning data is not claimed.",
-      "supports": ["applicability.start"]
+      "supports": [
+        "applicability.start"
+      ]
+    },
+    {
+      "evidence_id": "jaxa-amsr2-passive-microwave",
+      "authority": "Japan Aerospace Exploration Agency (JAXA)",
+      "title": "GCOM-W (AMSR2 mounted): AMSR2 Overview",
+      "url": "https://www.eorc.jaxa.jp/AMSR/satellite/gcom-w_en.html",
+      "document_revision": "Retrieved 2026-10-27 from the GCOM-W satellite catalog page",
+      "locator": "AMSR2 Overview, first paragraph",
+      "excerpt": "The Advanced Microwave Scanning Radiometer 2 (AMSR2) ... is a sensor to observe radiometers, or microwaves emitted naturally from the ground, sea surface and atmosphere, using six different frequency bands ranging from 7 GHz to 89 GHz.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "AMSR2 measures naturally emitted microwave radiation, so this configuration declares no target-sunlight requirement. The absence of an illumination filter is a source-backed setting, not a daylight claim.",
+      "supports": [
+        "geometry.illumination_requirement"
+      ]
     }
   ],
   "source_revision": {
@@ -126,7 +177,8 @@
       "tatc-amsr2-along-track",
       "jaxa-amsr2-specs",
       "jaxa-gcom-w-status",
-      "jaxa-gcom-w-regular-observation"
+      "jaxa-gcom-w-regular-observation",
+      "jaxa-amsr2-passive-microwave"
     ]
   },
   "interpretation": {
@@ -145,16 +197,26 @@
     {
       "approximation_id": "along-track-view-width",
       "description": "A fixed 1 degree along-track field of view stands in for integration-time arc motion and footprint width.",
-      "affected_parameters": ["geometry.along_track_field_of_view"],
+      "affected_parameters": [
+        "geometry.along_track_field_of_view"
+      ],
       "impact": "The cone-crossing epoch is not moved, but footprint extent and the in-view validity check depend on this approximation.",
-      "evidence_ids": ["tatc-amsr2-along-track"]
+      "evidence_ids": [
+        "tatc-amsr2-along-track"
+      ]
     },
     {
       "approximation_id": "measured-cone-and-sector",
       "description": "Cone angle, scan center, and half width are medians from one day of L1C footprint centers; scan jitter and channel variation are not modeled.",
-      "affected_parameters": ["geometry.cone_angle", "geometry.scan_center_azimuth", "geometry.scan_half_width"],
+      "affected_parameters": [
+        "geometry.cone_angle",
+        "geometry.scan_center_azimuth",
+        "geometry.scan_half_width"
+      ],
       "impact": "The TAT-C validation matched 99.95% of passes with a 0.27 s p95 epoch residual; this is not a mission-accuracy guarantee.",
-      "evidence_ids": ["tatc-amsr2-validation"]
+      "evidence_ids": [
+        "tatc-amsr2-validation"
+      ]
     }
   ],
   "source_conflicts": [
@@ -165,14 +227,19 @@
         {
           "option_id": "nominal-61deg",
           "summary": "Nominal performance guarantee: +/-61 degrees, 1450 km.",
-          "evidence_ids": ["jaxa-amsr2-specs"],
+          "evidence_ids": [
+            "jaxa-amsr2-specs"
+          ],
           "scan_half_width_deg": 61.0,
           "swath_width_km": 1450.0
         },
         {
           "option_id": "product-75deg",
           "summary": "Product sector: +/-75 degrees, 1620 km; measured 75.332 degrees.",
-          "evidence_ids": ["jaxa-amsr2-specs", "tatc-amsr2-validation"],
+          "evidence_ids": [
+            "jaxa-amsr2-specs",
+            "tatc-amsr2-validation"
+          ],
           "scan_half_width_deg": 75.332,
           "swath_width_km": 1620.0
         }
@@ -187,13 +254,17 @@
         {
           "option_id": "ground-incidence-55deg",
           "summary": "Nominal ground incidence 55 degrees; not a cone angle.",
-          "evidence_ids": ["jaxa-amsr2-specs"],
+          "evidence_ids": [
+            "jaxa-amsr2-specs"
+          ],
           "incidence_angle_deg": 55.0
         },
         {
           "option_id": "nadir-cone-47.564deg",
           "summary": "Measured cone angle 47.564 degrees from geodetic nadir.",
-          "evidence_ids": ["tatc-amsr2-validation"],
+          "evidence_ids": [
+            "tatc-amsr2-validation"
+          ],
           "cone_angle_deg": 47.564
         }
       ],
@@ -207,13 +278,17 @@
         {
           "option_id": "earth-fixed",
           "summary": "Earth-fixed velocity frame aligned with the ground track.",
-          "evidence_ids": ["tatc-amsr2-validation"],
+          "evidence_ids": [
+            "tatc-amsr2-validation"
+          ],
           "velocity_frame": "earth_fixed"
         },
         {
           "option_id": "inertial",
           "summary": "Inertial velocity frame aligned with the orbit plane.",
-          "evidence_ids": ["tatc-amsr2-validation"],
+          "evidence_ids": [
+            "tatc-amsr2-validation"
+          ],
           "velocity_frame": "inertial"
         }
       ],
@@ -230,7 +305,9 @@
       "unit": "degree",
       "tolerance": 0.1,
       "status": "passed",
-      "evidence_ids": ["tatc-amsr2-validation"]
+      "evidence_ids": [
+        "tatc-amsr2-validation"
+      ]
     },
     {
       "check_id": "scan-sector-consistency",
@@ -240,7 +317,9 @@
       "unit": "degree",
       "tolerance": 0.1,
       "status": "passed",
-      "evidence_ids": ["tatc-amsr2-validation"]
+      "evidence_ids": [
+        "tatc-amsr2-validation"
+      ]
     },
     {
       "check_id": "observation-timing",
@@ -250,7 +329,9 @@
       "unit": "s",
       "tolerance": 1.0,
       "status": "passed",
-      "evidence_ids": ["tatc-amsr2-validation"]
+      "evidence_ids": [
+        "tatc-amsr2-validation"
+      ]
     },
     {
       "check_id": "orbit-reference-residual",
@@ -260,7 +341,9 @@
       "unit": "km",
       "tolerance": 2.0,
       "status": "limited",
-      "evidence_ids": ["tatc-amsr2-validation"]
+      "evidence_ids": [
+        "tatc-amsr2-validation"
+      ]
     }
   ]
 }

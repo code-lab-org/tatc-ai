@@ -344,5 +344,20 @@
   },
   "reference_tatc_version": "3.6.0",
   "reference_python": "3.12.3",
-  "generation_note": "Generated with direct TAT-C 3.6.0 public calls (GeneralPerturbationsOrbit.from_omm_json, ConicalInstrument, Satellite with an inertial Attitude, collect_observations, compute_projected_ray_position, is_in_field_of_view). The production mapping was not used to generate expected values."
+  "generation_note": "Generated with direct TAT-C 3.6.0 public calls (GeneralPerturbationsOrbit.from_omm_json, ConicalInstrument, Satellite with an inertial Attitude, collect_observations, compute_projected_ray_position, is_in_field_of_view). The production mapping was not used to generate expected values.",
+  "inside_outside_ascending": {
+    "time_utc": "2026-10-05T00:41:00+00:00",
+    "inside": {
+      "longitude_deg": -167.4407857562575,
+      "latitude_deg": 2.5240579298472556,
+      "expected_in_field_of_view": true
+    },
+    "outside_sector": {
+      "longitude_deg": -173.81309512836967,
+      "latitude_deg": -5.428678683489669,
+      "scan_azimuth_deg": 85.83,
+      "cone_angle_deg": 47.564000000000135,
+      "expected_in_field_of_view": false
+    }
+  }
 }

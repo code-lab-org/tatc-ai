@@ -30,6 +30,7 @@ REQUIRED_GEOMETRY_SUPPORT = (
     "geometry.along_track_field_of_view",
     "geometry.velocity_frame",
     "geometry.nadir_reference",
+    "geometry.illumination_requirement",
 )
 _ANGLE_UNITS = {
     "deg": "degree",
@@ -285,17 +286,6 @@ class ConicalGeometry(_StrictModel):
             0 < self.scan_sample_spacing.value <= 180
         ):
             raise ValueError("scan_sample_spacing must be greater than 0 and at most 180 degrees")
-        # TAT-C's ConicalInstrument derives its field of regard from these
-        # values and caps it at 180 degrees. Reject a combination that would
-        # be silently clipped.
-        derived_for = 2 * (
-            self.cone_angle.value + self.along_track_field_of_view.value / 2 + 1
-        )
-        if derived_for > 180:
-            raise ValueError(
-                "cone_angle and along_track_field_of_view require a TAT-C field "
-                "of regard beyond 180 degrees; reduce one of them"
-            )
         return self
 
 
@@ -442,13 +432,6 @@ class ConicalConfiguration(_StrictModel):
             "instrument acquisition or usable data product.",
             "Events are sampled at grid-cell centers; an observed cell does not "
             "mean every point in the cell or region was viewed.",
-            "The narrower JAXA nominal performance-guarantee scan sector is a "
-            "different option; this configuration uses the wider product sector."
-            if any(
-                "nominal" in conflict.description.lower()
-                for conflict in self.source_conflicts
-            )
-            else "",
             "The established applicability interval ends at "
             f"{iso_utc(self.applicability.end_utc_exclusive)}; dates after that "
             "are not established for this configuration.",
@@ -475,6 +458,18 @@ class ConicalConfiguration(_StrictModel):
             }
             for conflict in self.source_conflicts
         ]
+
+
+def source_choices_from_snapshot(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Return the chosen source options in a stored configuration snapshot."""
+    return [
+        {
+            "conflict_id": conflict["conflict_id"],
+            "chosen_option_id": str(conflict["chosen_option_id"]),
+            "rationale": str(conflict["rationale"]),
+        }
+        for conflict in snapshot.get("source_conflicts", [])
+    ]
 
 
 def configuration_from_snapshot(snapshot: Dict[str, Any]) -> ConicalConfiguration:

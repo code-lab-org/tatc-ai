@@ -394,6 +394,15 @@ def _with_applicability_end(config: Dict[str, Any], end: datetime) -> Dict[str, 
     return data
 
 
+def _with_unresolved_sector(config: Dict[str, Any]) -> Dict[str, Any]:
+    data = copy.deepcopy(config)
+    for conflict in data["source_conflicts"]:
+        if conflict["conflict_id"] == "scan-sector-nominal-vs-product":
+            conflict["chosen_option_id"] = None
+            conflict["rationale"] = None
+    return data
+
+
 def _without_validation_evidence(config: Dict[str, Any]) -> Dict[str, Any]:
     data = copy.deepcopy(config)
     data["evidence"] = [
@@ -499,6 +508,18 @@ def build_cases(clock: Clock) -> List[Case]:
             "calculation and tell me which part is uncovered. "
             f"Configuration JSON: {json.dumps(_with_applicability_end(CONICAL_CONFIG, clock.d0 + timedelta(hours=1)), separators=(',', ':'))}",
             _conical_rejected(("applicab", "outside", "not covered", "uncovered", "date")),
+        ),
+        Case(
+            "conical_unresolved_sector",
+            ("conical", "source_conflict", "mode_selection", "reject"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, east=10, "
+            f"north=-55 with a 2x2 grid from {d0} for 2 hours. I have not chosen "
+            "between the nominal performance scan sector and the wider product "
+            "sector, and this configuration has no recorded choice or rationale. "
+            "Do not guess or choose for me. Ask me which sector to use before any "
+            "calculation. "
+            f"Configuration JSON: {json.dumps(_with_unresolved_sector(CONICAL_CONFIG), separators=(',', ':'))}",
+            _conical_rejected(("sector", "nominal", "product", "choice", "unresolved", "source conflict")),
         ),
         Case(
             "conical_missing_evidence",

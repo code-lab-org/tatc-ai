@@ -42,6 +42,7 @@ from .coverage_core import (
     _build_grid,
     _geojson_cells,
     _parse_utc,
+    _public_satellites,
     _summarize_coverage,
     _validate_bbox,
     _validate_omm_freshness,
@@ -211,13 +212,6 @@ def _stage_access(
         "window_end_utc_exclusive": _utc_iso(end),
         "roi_bbox": None,
     }
-
-
-def _public_satellites(stage: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return [
-        {key: value for key, value in s.items() if key != "omm_records"}
-        for s in stage["satellites"]
-    ]
 
 
 def _collect_cell_observations(task: Tuple[Any, ...]) -> Any:
@@ -619,10 +613,13 @@ def get_access_daily(
     }
 
 
-def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
-    """Return the saved grid as GeoJSON, optionally filtered by status."""
+def get_access_cells(
+    result_id: Any, include: Any = "all", offset: Any = 0, limit: Any = 144
+) -> Dict[str, Any]:
+    """Return the saved grid as GeoJSON, optionally filtered and paged."""
     # Validate the filter before touching the store so a bad value gets
     # a filter error even when the ID is also unknown.
+    _paginate([], offset, limit, "cell")
     if not isinstance(include, str) or include.strip().lower() not in (
         "all", "observed", "gaps",
     ):
@@ -634,7 +631,7 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
     if payload.get("result_kind") == "conical_study":
         from . import conical_study
 
-        return conical_study.get_conical_cells(result_id, include)
+        return conical_study.get_conical_cells(result_id, include, offset, limit)
     wanted = include.strip().lower()
     features = []
     for cell in payload["grid_cells"]:
@@ -657,10 +654,14 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
                 "geometry": cell["geometry"],
             }
         )
+    page = _paginate(features, offset, limit, "cell")
     return {
         **_fetch_header(result_id, payload),
         "include": wanted,
-        "cell_count": len(features),
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "matched_cells": page["total"],
+        "cell_count": len(page["items"]),
         "total_cells": len(payload["grid_cells"]),
         "geojson": {
             "type": "FeatureCollection",
@@ -672,7 +673,7 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
                 "interpretation": payload["interpretation"],
                 "evidence": payload["evidence"],
             },
-            "features": features,
+            "features": page["items"],
         },
         **_fetch_footer(payload),
     }

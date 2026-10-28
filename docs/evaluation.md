@@ -18,6 +18,7 @@ The coverage cases include the legacy single-geometry workflow and three conical
 
 - `conical_amsr2_complete`: a sourced AMSR2 configuration with conflicting nominal/product sector choices and declared approximations. The model must prepare, accept the current revision, run, fetch viewing events, and preserve cell-center and envelope limits.
 - `conical_applicability_rejected`: a window outside the established applicability interval. The model must stop before calculation and identify the uncovered dates.
+- `conical_unresolved_sector`: a configuration with no recorded choice between the nominal and product scan sectors. The model must ask for the choice and must not prepare or run.
 - `conical_missing_evidence`: a configuration missing the measured cone/sector evidence. The model must not invent evidence or substitute a nominal swath.
 
 The eval is not a mission-accuracy test. The unit and reference integration tests cover event counts, epochs, projected positions, and independent inside/outside cases. A partial or multi-configuration conical proposal is intentionally absent because this increment does not support it.

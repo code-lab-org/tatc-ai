@@ -93,6 +93,18 @@ def test_missing_geometry_evidence_is_rejected():
         ConicalConfiguration.model_validate(data)
 
 
+def test_missing_illumination_evidence_is_rejected():
+    data = _fixture()
+    data["evidence"] = [
+        item
+        for item in data["evidence"]
+        if item["evidence_id"] != "jaxa-amsr2-passive-microwave"
+    ]
+    data["source_revision"]["evidence_ids"].remove("jaxa-amsr2-passive-microwave")
+    with pytest.raises(ValidationError, match="geometry.illumination_requirement"):
+        ConicalConfiguration.model_validate(data)
+
+
 def test_invalid_angle_unit_is_rejected():
     data = _fixture()
     data["geometry"]["cone_angle"]["unit"] = "rad"

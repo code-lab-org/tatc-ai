@@ -34,6 +34,14 @@ MAX_CELL_AXIS_SPAN_DEG = 10.0
 _WGS84_GEOD = Geod(ellps="WGS84")
 
 
+def _public_satellites(stage: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return staged satellite summaries without their OMM records."""
+    return [
+        {key: value for key, value in satellite.items() if key != "omm_records"}
+        for satellite in stage["satellites"]
+    ]
+
+
 def _parse_utc(value: str, name: str) -> datetime:
     """Parse a timezone-qualified UTC ISO/date-time value."""
     if not isinstance(value, str) or not value.strip():

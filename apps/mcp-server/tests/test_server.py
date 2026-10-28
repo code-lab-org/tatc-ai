@@ -886,7 +886,7 @@ class ServerTests(unittest.TestCase):
                 "get_access_cells", {"result_id": "abc123", "include": "gaps"}
             )
         self.assertFalse(result.is_error)
-        fetch.assert_called_once_with("abc123", "gaps")
+        fetch.assert_called_once_with("abc123", "gaps", 0, 144)
 
     def test_staged_access_returns_correct_cell_results(self):
         # GeographicLib areas and direct TAT-C accesses were derived without

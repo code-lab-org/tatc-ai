@@ -175,36 +175,43 @@ def test_projected_reference_positions_within_one_meter():
         )
 
 
-def test_independent_inside_and_outside_view_points():
+def test_independent_inside_and_outside_view_points_both_directions():
     fixture = _fixture()
     configuration = _config()
     mapped = build_conical_satellite(configuration, [fixture["orbit"]["omm"]])
     instrument = mapped.satellite.get_instrument(0)
-    time = _parse(fixture["inside_outside"]["time_utc"])
-    track = mapped.satellite.orbit.get_orbit_track([time])
-    inside = fixture["inside_outside"]["inside"]
-    outside = fixture["inside_outside"]["outside_sector"]
-    inside_target = wgs84.latlon(
-        inside["latitude_deg"], inside["longitude_deg"]
-    )
-    outside_target = wgs84.latlon(
-        outside["latitude_deg"], outside["longitude_deg"]
-    )
-    assert bool(instrument.is_in_field_of_view(track, inside_target)[0]) is (
-        inside["expected_in_field_of_view"]
-    )
-    assert bool(instrument.is_in_field_of_view(track, outside_target)[0]) is (
-        outside["expected_in_field_of_view"]
-    )
-    # The outside point is still on the same cone and inside the broad
-    # field-of-regard envelope, but outside the accepted scan sector.
-    assert outside["cone_angle_deg"] == pytest.approx(47.564, abs=0.01)
-    assert outside["cone_angle_deg"] <= instrument.field_of_regard / 2
-    assert outside["scan_azimuth_deg"] > (
-        configuration.geometry.scan_center_azimuth.value
-        + configuration.geometry.scan_half_width.value
-    )
-
+    for key, expected_direction in (
+        ("inside_outside", "descending"),
+        ("inside_outside_ascending", "ascending"),
+    ):
+        block = fixture[key]
+        time = _parse(block["time_utc"])
+        track = mapped.satellite.orbit.get_orbit_track([time, time + timedelta(seconds=60)])
+        latitudes = track.subpoint().latitude.degrees
+        actual_direction = "ascending" if latitudes[1] > latitudes[0] else "descending"
+        assert actual_direction == expected_direction
+        inside = block["inside"]
+        outside = block["outside_sector"]
+        inside_target = wgs84.latlon(
+            inside["latitude_deg"], inside["longitude_deg"]
+        )
+        outside_target = wgs84.latlon(
+            outside["latitude_deg"], outside["longitude_deg"]
+        )
+        assert bool(instrument.is_in_field_of_view(
+            mapped.satellite.orbit.get_orbit_track([time]), inside_target
+        )[0]) is inside["expected_in_field_of_view"]
+        assert bool(instrument.is_in_field_of_view(
+            mapped.satellite.orbit.get_orbit_track([time]), outside_target
+        )[0]) is outside["expected_in_field_of_view"]
+        # The outside point is still on the same cone and inside the broad
+        # field-of-regard envelope, but outside the accepted scan sector.
+        assert outside["cone_angle_deg"] == pytest.approx(47.564, abs=0.01)
+        assert outside["cone_angle_deg"] <= instrument.field_of_regard / 2
+        assert outside["scan_azimuth_deg"] > (
+            configuration.geometry.scan_center_azimuth.value
+            + configuration.geometry.scan_half_width.value
+        )
 
 def _synthetic_full_rotation():
     data = json.loads(CONFIG.read_text())

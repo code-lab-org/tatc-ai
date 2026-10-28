@@ -101,6 +101,14 @@ SERVER_INSTRUCTIONS = (
     "explanation to the finish tool. Its checks validate the structure and "
     "numeric value, not the scientific interpretation or source authenticity. "
     "A citation alone is not evidence. Do not fetch arbitrary reference URLs. "
+    "For a legacy run, a researcher-supplied synthetic study excerpt is valid "
+    "evidence for that study assumption. Do not mark a legacy run approximate "
+    "only because the excerpt is synthetic or because the real instrument is "
+    "more complex. Mark it approximate when the excerpt itself documents a gap, "
+    "separate pointing, or another mismatch with the continuous model, or when "
+    "the researcher's explicit assumption leaves that mismatch unresolved. "
+    "The conical source-conflict and approximation rules apply only to conical "
+    "preparation; they do not relabel a legacy geometry assessment. "
     "For coverage, call the begin tool, then the region tool, then the finish "
     "tool, then the fetch tools by result ID for daily rows, coverage cells "
     "as GeoJSON, or "
@@ -878,8 +886,13 @@ def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[s
 
 
 @mcp.tool
-def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
-    """Fetch the saved grid map by result ID as GeoJSON.
+def get_access_cells(
+    result_id: str,
+    include: str = "all",
+    offset: int = 0,
+    limit: int = 144,
+) -> Dict[str, Any]:
+    """Fetch the saved grid map by result ID as paged GeoJSON.
 
     Returns grid cells as a GeoJSON feature collection, each cell marked
     observed or gap for the saved window with its access count, mean
@@ -887,17 +900,19 @@ def get_access_cells(result_id: str, include: str = "all") -> Dict[str, Any]:
     report event counts, observed days, and event spacing instead; an observed
     cell means only that at least one event epoch occurred at its center.
     The collection metadata and feature properties retain geometry status and
-    warning. Filter with all, observed, or gaps. Modeled access does not
-    confirm an acquisition.
+    warning. Filter with all, observed, or gaps. Offset starts at 0 and limit
+    is 1 through 366. Modeled access does not confirm an acquisition.
 
     Args:
         result_id: Result ID from a saved access run.
         include: Which cells to return: all, observed, or gaps.
+        offset: Number of matching cells to skip, 0 or more.
+        limit: Number of matching cells to return, 1 through 366.
 
     Returns:
         GeoJSON collection with per-cell status, geometry metadata, and access evidence.
     """
-    return _access_cells(result_id, include)
+    return _access_cells(result_id, include, offset, limit)
 
 
 @mcp.tool
