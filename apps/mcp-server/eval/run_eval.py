@@ -2,7 +2,8 @@
 
 Each model gets the server's real tool list and instructions, the way
 LibreChat presents them (tools named <tool>_mcp_tatc, server instructions
-in the system message), and works through the coverage cases in cases.py.
+in the system message), and works through the legacy coverage and conical
+study cases in cases.py.
 Tool calls run in-process against the real server through a FastMCP
 client; CelesTrak and OSCAR responses replay from a recorded cache.
 Checks score what the server actually computed.

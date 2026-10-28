@@ -103,6 +103,14 @@ def set_draft_region(draft_id: Any, roi_bbox: Any) -> Dict[str, Any]:
         return payload
 
 
+def set_draft_conical_proposal(draft_id: Any, proposal: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach the latest conical proposal to a staged draft."""
+    with _lock:
+        payload = _lookup_locked(_drafts, _DRAFT, draft_id)
+        payload["conical_proposal"] = proposal
+        return payload
+
+
 def clear() -> None:
     """Drop every saved result and draft. Used by tests."""
     with _lock:

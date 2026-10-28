@@ -35,6 +35,7 @@ from .coverage_core import (
     MAX_OMM_AGE,
     MAX_OMM_WINDOW_OFFSET,
     MAX_YEAR_GRID_CELLS,
+    MAX_YEAR_CELL_CONFIGURATIONS,
     MAX_YEAR_WINDOW,
     MAX_YEAR_WORKERS,
     SHORT_WINDOW_MAX,
@@ -63,7 +64,7 @@ from .tatc_integration import create_orbit_from_omm
 MAX_SATELLITES = 6
 # Long windows cost cells x satellites x days; this keeps a full year under
 # the client's 10-minute tool timeout with four workers.
-MAX_YEAR_CELL_SATELLITES = 72
+MAX_YEAR_CELL_SATELLITES = MAX_YEAR_CELL_CONFIGURATIONS
 # Below this many cell-satellite-days, starting worker processes costs more
 # than it saves.
 POOL_MIN_CELL_SATELLITE_DAYS = 100
@@ -410,6 +411,7 @@ def _run_stage(
         "acquisition. See geometry_assessment for the selected geometry and caveat."
     )
     return {
+        "accounting_method": "legacy_intervals_v1",
         "satellite": stage["satellite"],
         "satellites": _public_satellites(stage),
         "instrument": label,
@@ -445,6 +447,7 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
     observed_days = sum(1 for row in days if row["observed_cell_ids"])
     return {
         "result_id": result_id,
+        "accounting_method": full["accounting_method"],
         "satellite": full["satellite"],
         "satellites": full["satellites"],
         "instrument": full["instrument"],
@@ -573,6 +576,7 @@ def finish_access_run(
 def _fetch_header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "result_id": result_id.strip(),
+        "accounting_method": payload.get("accounting_method", "legacy_intervals_v1"),
         "satellite": payload["satellite"],
         "daylight_only": payload["daylight_only"],
         "window_start_utc": payload["window_start_utc"],
@@ -600,6 +604,10 @@ def get_access_daily(
     # arg error even when the ID is also unknown.
     _paginate([], offset, limit, "daily")
     payload = _get_saved(result_id)
+    if payload.get("result_kind") == "conical_study":
+        from . import conical_study
+
+        return conical_study.get_conical_daily(result_id, offset, limit)
     page = _paginate(payload["daily"], offset, limit, "daily")
     return {
         **_fetch_header(result_id, payload),
@@ -623,6 +631,10 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
             f"got {include!r}"
         )
     payload = _get_saved(result_id)
+    if payload.get("result_kind") == "conical_study":
+        from . import conical_study
+
+        return conical_study.get_conical_cells(result_id, include)
     wanted = include.strip().lower()
     features = []
     for cell in payload["grid_cells"]:
@@ -669,6 +681,10 @@ def get_access_cells(result_id: Any, include: Any = "all") -> Dict[str, Any]:
 def get_access_revisit(result_id: Any) -> Dict[str, Any]:
     """Return the saved revisit numbers with their definitions."""
     payload = _get_saved(result_id)
+    if payload.get("result_kind") == "conical_study":
+        from . import conical_study
+
+        return conical_study.get_conical_revisit(result_id)
     return {
         **_fetch_header(result_id, payload),
         "instrument": payload["instrument"],

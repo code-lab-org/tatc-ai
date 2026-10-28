@@ -32,11 +32,12 @@ To build the image locally instead (e.g. to test before pushing):
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
 
-See the [tool guide](docs/tools.md) for ground-track maps and coverage estimates.
+See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical-scanning studies.
 
 ### Tool-calling eval
 
-The eval checks how well Voyager models use the MCP tools:
+The eval checks how well Voyager models use the MCP tools. The server image
+uses Python 3.12; run tests and evals with a matching environment.
 
 ```bash
 cd apps/mcp-server

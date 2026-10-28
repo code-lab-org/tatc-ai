@@ -1,0 +1,360 @@
+{
+  "schema_version": "conical-configuration-v1",
+  "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+  "revision": "2026-10-27.1",
+  "instrument": "AMSR2",
+  "spacecraft": {
+    "name": "GCOM-W1",
+    "aliases": ["GCOM-W", "SHIZUKU", "GCOM-W1 (SHIZUKU)"],
+    "norad_id": 38337,
+    "orbit_provider": "celestrak",
+    "orbit_provider_identifier": "GCOM-W1"
+  },
+  "operating_mode": "conical_scan_40_rpm_product_sector",
+  "channel": {
+    "name": "S1",
+    "center_frequency_ghz": 10.65,
+    "polarization": "V/H",
+    "notes": "Lowest-frequency AMSR2 channel group. The TAT-C validation states that the S1 footprints span the same scan as the other channel groups; the 1.2 degree beam width is recorded for sample-size context and does not change cone-crossing epochs."
+  },
+  "applicability": {
+    "start_utc": "2012-08-10T00:00:00Z",
+    "end_utc_exclusive": "2026-10-27T00:00:00Z",
+    "evidence_ids": [
+      "jaxa-gcom-w-regular-observation",
+      "jaxa-gcom-w-status"
+    ],
+    "basis": "JAXA moved GCOM-W1 to regular observation on 2012-08-10 and listed GCOM-W (AMSR2 mounted) as in operation when the source was retrieved on 2026-10-27. The end is the evidence cutoff, not a claimed mission end date."
+  },
+  "geometry": {
+    "model_family": "conical",
+    "cone_angle": {"value": 47.564, "unit": "degree"},
+    "scan_center_azimuth": {"value": 0.498, "unit": "degree"},
+    "scan_half_width": {"value": 75.332, "unit": "degree"},
+    "along_track_field_of_view": {"value": 1.0, "unit": "degree"},
+    "velocity_frame": "inertial",
+    "nadir_reference": "geodetic",
+    "illumination_requirement": "none",
+    "beam_width": {"value": 1.2, "unit": "degree"},
+    "scan_sample_spacing": {"value": 0.622, "unit": "degree"}
+  },
+  "evidence": [
+    {
+      "evidence_id": "tatc-amsr2-validation",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Test 2, Scan Geometry, results and paragraph",
+      "excerpt": "AMSR2's lines of sight lie on a cone 47.56 deg from nadir to within about 0.1 deg across the whole scan (an incidence angle of about 55 deg at the ground). The observed arc spans scan azimuths from -74.8 to +75.8 deg (a sector of about 75.3 deg on either side, sampled every 0.62 deg), centered within about 0.5 deg of the inertial velocity at all latitudes, but up to 4.3 deg from the Earth-fixed velocity: like NOAA-20, GCOM-W keeps its attitude aligned with the orbit plane. The center of the arc lies 844 km ahead of the sub-satellite point, and its ends are 1,627 km apart (the swath width).",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "This supplies the measured cone angle, scan-sector center and half width, the inertial velocity frame, the measured sample spacing, and the distinction between the 47.564 degree cone angle and the roughly 55 degree ground incidence angle.",
+      "supports": [
+        "geometry.cone_angle",
+        "geometry.scan_center_azimuth",
+        "geometry.scan_half_width",
+        "geometry.scan_sample_spacing",
+        "geometry.velocity_frame"
+      ]
+    },
+    {
+      "evidence_id": "tatc-amsr2-nadir-reference",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Test 2, Scan Geometry, setup paragraph before the cone-angle calculation",
+      "excerpt": "For every twentieth scan, the line of sight to each footprint (on the ellipsoid) is computed from the spacecraft position at the scan time and decomposed into a cone angle (from the geodetic nadir) and a scan azimuth (from the horizontal direction of the velocity, positive to the left), relative to both the Earth-fixed and the inertial velocity.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "The reported cone angle is measured from the geodetic nadir, so the TAT-C instrument uses its geodetic nadir reference rather than a geocentric direction.",
+      "supports": ["geometry.nadir_reference"]
+    },
+    {
+      "evidence_id": "tatc-amsr2-along-track-view",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Test 3, Footprints, candidate list entry for the conical instrument",
+      "excerpt": "Conical instrument: a ConicalInstrument with the measured cone angle and scan sector (center and half width), in the inertial velocity frame, and a 1 deg along-track field of view (its footprint is the region the arc sweeps as the satellite moves along track by the distance this angle subtends at nadir, about 12 km).",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "The 1 degree along-track field of view is a stated approximation for the arc motion over an integration time and footprint width; it is not a measured integration time.",
+      "supports": [
+        "geometry.along_track_field_of_view",
+        "approximation.along_track_view_width"
+      ]
+    },
+    {
+      "evidence_id": "tatc-amsr2-geometry-check",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Test 2 results table and Test 3 swath paragraph",
+      "excerpt": "cone angle, median (deg) 47.564; cone angle, std. dev. (deg) 0.097; scan sector center (deg) 0.498; scan sector half-width (deg) 75.332; sample spacing (deg) 0.622; arc end-to-end distance (swath width, km) 1627.163; ... The conical instrument's footprint is this arc, swept along track; its swath width (the cross-track extent of the arc's ends) is within 3 km of the observed swath.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "Reported source checks support the cone and sector values and the measured swath-width comparison; they are mission-reference residuals, not a software integration gate.",
+      "supports": ["geometry_check.scan_geometry"]
+    },
+    {
+      "evidence_id": "tatc-amsr2-observations",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Test 4, Observations, summary of results",
+      "excerpt": "The conical instrument matches 99.95% of the observed passes (4,191 of 4,193) with only 7 extra predictions (0.2%), and its epoch matches the observation times to 0.02 s (median) and 0.27 s (95th percentile) everywhere in the scan.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "Supports an engineering tolerance of about one second for event-time comparison and records that this is measured against one day of mission footprints, not a general accuracy guarantee.",
+      "supports": ["geometry_check.observation_timing"]
+    },
+    {
+      "evidence_id": "tatc-amsr2-orbit-residual",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Test 1, Orbit, results and paragraph",
+      "excerpt": "Eight days before its epoch, the TLE reproduces GCOM-W's position to about 1.7 km along track (95th percentile), and to 0.6 km or better across track and radially.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "The mission-reference orbit residual is a limitation on mission-data comparisons; the independent software-integration comparison uses the same orbit fixture for both sides and a separate one-meter tolerance.",
+      "supports": ["geometry_check.orbit_reference_residual"]
+    },
+    {
+      "evidence_id": "jaxa-amsr2-specs",
+      "authority": "Japan Aerospace Exploration Agency (JAXA), Earth Observation Research Center",
+      "title": "GCOM-W (AMSR2 mounted): AMSR2 Specifications",
+      "url": "https://www.eorc.jaxa.jp/AMSR/satellite/gcom-w_en.html",
+      "document_revision": "Retrieved 2026-10-27 from the GCOM-W satellite catalog page",
+      "locator": "AMSR2 Specifications: Scan and rate; Swath width; Incidence angle; AMSR2 Channel Set, 10.65 GHz row",
+      "excerpt": "Scan and rate: Conical scan at 40 rpm. Swath width: Nominal 1450 km, effective 1620 km. The performance guarantee range is +/-61 degrees scanning angle (1450km). The product contains data for a scanning angle of +/-75 degrees (1620km). Incidence angle: Nominal 55 degrees. 10.65 GHz row: beam width 1.2 degrees, ground resolution 24 x 42 km, sampling interval 10 km.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "JAXA distinguishes the nominal performance-guarantee sector (+/-61 degrees, 1450 km) from the product sector (+/-75 degrees, 1620 km), and gives a nominal 55 degree ground incidence angle that is not a cone angle from nadir. The 1.2 degree beam width describes the 10.65 GHz channel and does not set the scan sector.",
+      "supports": [
+        "geometry.beam_width",
+        "source_conflict.scan_sector",
+        "source_conflict.incidence_vs_cone",
+        "channel.geometry"
+      ]
+    },
+    {
+      "evidence_id": "jaxa-gcom-w-status",
+      "authority": "Japan Aerospace Exploration Agency (JAXA), Earth Observation Research Center",
+      "title": "GCOM-W (AMSR2 mounted)",
+      "url": "https://www.eorc.jaxa.jp/AMSR/satellite/gcom-w_en.html",
+      "document_revision": "Retrieved 2026-10-27 from the GCOM-W satellite catalog page",
+      "locator": "AMSR-related Satellite Catalog status and Satellite Specifications",
+      "excerpt": "GCOM-W (AMSR2 mounted) [In Operation]. International Designation Code 2012-025A. Launch Date May 18, 2012. Orbiter: Sun-Synchronous Subrecurrent/Recurrent. Altitude 700km. Inclination Approx. 98 degrees.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "Confirms the spacecraft identity and the in-operation status used to bound the applicability evidence, and supports resolving GCOM-W1 to NORAD 38337 with the CelesTrak orbit provider.",
+      "supports": ["applicability.end", "spacecraft.identity"]
+    },
+    {
+      "evidence_id": "jaxa-gcom-w-regular-observation",
+      "authority": "Japan Aerospace Exploration Agency (JAXA)",
+      "title": "SHIZUKU (GCOM-W1) Regular Observation Operations",
+      "url": "https://global.jaxa.jp/projects/sat/gcom_w/topics.html",
+      "document_revision": "JAXA GCOM-W topics page, updated 2012-08-10; retrieved 2026-10-27",
+      "locator": "Aug. 10, 2012 Updated topic",
+      "excerpt": "JAXA completed the initial functional verification of the Global Change Observation Mission 1st - Water \"SHIZUKU\" (GCOM-W1) and has moved to the regular observation operation on August 10 as scheduled.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "Establishes 2012-08-10 as the start of regular observation operations for the applicability interval; earlier commissioning data is not claimed.",
+      "supports": ["applicability.start"]
+    },
+    {
+      "evidence_id": "tatc-amsr2-channel-geometry",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Conical Scanner Validation: AMSR2",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; analysis day 2026-09-26 with a 2026-10-04 CelesTrak TLE",
+      "locator": "Reference Data, S1 group description",
+      "excerpt": "This notebook uses the lowest-frequency group (S1, 10.65 GHz, 243 samples per scan), whose footprints span the same scan as the other channels.",
+      "retrieved_at_utc": "2026-10-27T00:00:00Z",
+      "interpretation": "The validated scan geometry comes from the 10.65 GHz S1 group; the shared scan geometry supports using the same cone and sector for this channel, while channel-specific beam effects remain outside the event model.",
+      "supports": ["channel.geometry"]
+    }
+  ],
+  "source_revision": {
+    "revision_id": "tatc-3.6.0-jaxa-amsr2-2026-10-27",
+    "checked_at_utc": "2026-10-27T00:00:00Z",
+    "authority": "TAT-C 3.6.0 validation documentation and JAXA GCOM-W/AMSR2 specifications",
+    "summary": "Cone, scan sector, velocity frame, and validation checks come from the TAT-C 3.6.0 AMSR2 validation; JAXA supplies the nominal/product sector distinction, incidence-angle meaning, channel beam width, and mission status. The source set was checked on 2026-10-27.",
+    "evidence_ids": [
+      "tatc-amsr2-validation",
+      "tatc-amsr2-nadir-reference",
+      "tatc-amsr2-along-track-view",
+      "tatc-amsr2-geometry-check",
+      "tatc-amsr2-observations",
+      "tatc-amsr2-orbit-residual",
+      "tatc-amsr2-channel-geometry",
+      "jaxa-amsr2-specs",
+      "jaxa-gcom-w-status",
+      "jaxa-gcom-w-regular-observation"
+    ]
+  },
+  "interpretation": {
+    "summary": "AMSR2 on GCOM-W1 is modeled as a forward-looking conical scanner in the inertial velocity frame using the product scan sector measured by the TAT-C 3.6.0 validation. The cone angle is the angle from the geodetic nadir, not the roughly 55 degree ground incidence angle.",
+    "selected_mode": "conical_scan_40_rpm_product_sector",
+    "limitations": [
+      "The cone angle, scan center, and half width are medians measured from one day of L1C footprints; per-scan and per-channel variation is not modeled.",
+      "The 1 degree along-track field of view approximates integration-time motion and footprint width; it is not a measured integration time.",
+      "The product sector is wider than JAXA's nominal performance-guarantee sector. Results describe the product scan, not the guaranteed nominal performance.",
+      "Applicability ends at the source retrieval date (2026-10-27), not at a documented mission end date; later dates are not established.",
+      "The TAT-C validation compares one analysis day of mission footprints. It does not establish general mission accuracy for this or other dates."
+    ]
+  },
+  "approximation_status": "approximate",
+  "approximations": [
+    {
+      "approximation_id": "along-track-view-width",
+      "description": "A fixed 1 degree along-track field of view stands in for the motion of the scanned arc over an integration time and sets the instantaneous footprint width.",
+      "affected_parameters": ["geometry.along_track_field_of_view"],
+      "impact": "The cone-crossing epoch is not moved, but the footprint extent and the TAT-C in-field-of-view validity check depend on this value; footprint area is not a measured integration footprint.",
+      "evidence_ids": ["tatc-amsr2-along-track-view"]
+    },
+    {
+      "approximation_id": "measured-cone-and-sector",
+      "description": "The cone angle, scan center, and half width are medians measured from one day of L1C footprint centers; scan jitter and channel-dependent variation are not modeled.",
+      "affected_parameters": [
+        "geometry.cone_angle",
+        "geometry.scan_center_azimuth",
+        "geometry.scan_half_width"
+      ],
+      "impact": "Validation matched 99.95% of observed passes with a 0.27 s 95th-percentile epoch residual; this is one mission day, not a mission-accuracy guarantee.",
+      "evidence_ids": ["tatc-amsr2-validation", "tatc-amsr2-observations"]
+    },
+    {
+      "approximation_id": "fixed-inertial-attitude",
+      "description": "Spacecraft attitude is modeled as a fixed body alignment with the inertial velocity frame; yaw steering, attitude oscillations, and scan-timing jitter are not modeled.",
+      "affected_parameters": ["geometry.velocity_frame"],
+      "impact": "The validation measured the arc center within about 0.5 degrees of inertial velocity but up to 4.3 degrees from Earth-fixed velocity; using the wrong frame would rotate the scan arc.",
+      "evidence_ids": ["tatc-amsr2-validation"]
+    }
+  ],
+  "source_conflicts": [
+    {
+      "conflict_id": "scan-sector-nominal-vs-product",
+      "description": "JAXA distinguishes a nominal performance-guarantee scan sector of +/-61 degrees (1450 km) from the wider product sector of +/-75 degrees (1620 km). The TAT-C validation measured a product-sector half-width of 75.332 degrees.",
+      "options": [
+        {
+          "option_id": "nominal-61deg",
+          "summary": "JAXA nominal performance-guarantee sector: +/-61 degrees, 1450 km swath.",
+          "evidence_ids": ["jaxa-amsr2-specs"],
+          "scan_half_width_deg": 61.0,
+          "swath_width_km": 1450.0
+        },
+        {
+          "option_id": "product-75deg",
+          "summary": "JAXA product sector: +/-75 degrees, 1620 km swath; TAT-C measured 75.332 degrees.",
+          "evidence_ids": ["jaxa-amsr2-specs", "tatc-amsr2-validation"],
+          "scan_half_width_deg": 75.332,
+          "swath_width_km": 1620.0
+        }
+      ],
+      "chosen_option_id": "product-75deg",
+      "rationale": "The study uses the product scan sector because the TAT-C 3.6.0 AMSR2 validation measured a 75.332 degree half-width from L1C footprints and matched 99.95% of observed passes with that sector. The nominal +/-61 degree performance-guarantee sector is a different configuration; its width is not combined with the measured product-sector angles."
+    },
+    {
+      "conflict_id": "incidence-angle-vs-cone-angle",
+      "description": "JAXA reports a nominal 55 degree incidence angle at the ground, while TAT-C requires a 47.564 degree cone angle from nadir. They are different angle definitions and must not be interchanged.",
+      "options": [
+        {
+          "option_id": "ground-incidence-55deg",
+          "summary": "JAXA nominal ground incidence angle of 55 degrees; not a TAT-C cone angle.",
+          "evidence_ids": ["jaxa-amsr2-specs"],
+          "incidence_angle_deg": 55.0
+        },
+        {
+          "option_id": "nadir-cone-47.564deg",
+          "summary": "TAT-C measured cone angle of 47.564 degrees from the geodetic nadir, corresponding to about 55 degrees ground incidence.",
+          "evidence_ids": ["tatc-amsr2-validation"],
+          "cone_angle_deg": 47.564
+        }
+      ],
+      "chosen_option_id": "nadir-cone-47.564deg",
+      "rationale": "TAT-C's ConicalInstrument consumes the angle from nadir. The validation measured 47.564 degrees and separately notes the roughly 55 degree ground incidence, so the 55 degree value is retained as context rather than used as the cone angle."
+    },
+    {
+      "conflict_id": "velocity-frame",
+      "description": "The scan-arc center is within about 0.5 degrees of the inertial velocity but up to 4.3 degrees from the Earth-fixed ground-track direction. The source distinguishes these frames.",
+      "options": [
+        {
+          "option_id": "earth-fixed",
+          "summary": "Earth-fixed velocity frame, aligned with the ground track as for a yaw-steered spacecraft.",
+          "evidence_ids": ["tatc-amsr2-validation"],
+          "velocity_frame": "earth_fixed"
+        },
+        {
+          "option_id": "inertial",
+          "summary": "Inertial velocity frame, aligned with the orbit plane as observed for GCOM-W.",
+          "evidence_ids": ["tatc-amsr2-validation"],
+          "velocity_frame": "inertial"
+        }
+      ],
+      "chosen_option_id": "inertial",
+      "rationale": "The validation measured the arc center within about 0.5 degree of inertial velocity at all latitudes and up to 4.3 degrees from Earth-fixed velocity, so the study uses the inertial frame."
+    }
+  ],
+  "geometry_checks": [
+    {
+      "check_id": "cone-angle-consistency",
+      "description": "Median measured cone angle across the analysis day.",
+      "method": "TAT-C 3.6.0 validation Test 2, median and standard deviation of per-scan measured cone angles.",
+      "reported_value": 47.564,
+      "unit": "degree",
+      "tolerance": 0.1,
+      "status": "passed",
+      "evidence_ids": ["tatc-amsr2-geometry-check"]
+    },
+    {
+      "check_id": "scan-sector-consistency",
+      "description": "Measured product scan-sector half width and center.",
+      "method": "TAT-C 3.6.0 validation Test 2, median first/last sample azimuths in the inertial frame.",
+      "reported_value": 75.332,
+      "unit": "degree",
+      "tolerance": 0.1,
+      "status": "passed",
+      "evidence_ids": ["tatc-amsr2-geometry-check"]
+    },
+    {
+      "check_id": "swath-width-agreement",
+      "description": "Difference between the TAT-C conical-instrument swath and the observed arc end-to-end distance.",
+      "method": "TAT-C 3.6.0 validation Test 3, conical instrument swath width minus observed swath width.",
+      "reported_value": 2.83,
+      "unit": "km",
+      "tolerance": 3.0,
+      "status": "passed",
+      "evidence_ids": ["tatc-amsr2-geometry-check"]
+    },
+    {
+      "check_id": "observation-timing",
+      "description": "95th-percentile absolute difference between predicted cone-crossing epochs and observed passes.",
+      "method": "TAT-C 3.6.0 validation Test 4, conical instrument epoch versus observed cone crossing.",
+      "reported_value": 0.27,
+      "unit": "s",
+      "tolerance": 1.0,
+      "status": "passed",
+      "evidence_ids": ["tatc-amsr2-observations"]
+    },
+    {
+      "check_id": "orbit-reference-residual",
+      "description": "Mission-reference along-track orbit residual eight days after the TLE epoch.",
+      "method": "TAT-C 3.6.0 validation Test 1, propagated TLE versus reported GCOM-W position, 95th percentile.",
+      "reported_value": 1.662,
+      "unit": "km",
+      "tolerance": 2.0,
+      "status": "limited",
+      "evidence_ids": ["tatc-amsr2-orbit-residual"]
+    },
+    {
+      "check_id": "along-track-view-approximation",
+      "description": "Integration-time/view-width approximation for the along-track field of view.",
+      "method": "TAT-C 3.6.0 validation Test 3/Test 5, fixed 1 degree along-track view; Test 5 also evaluates time-step-tailored widths.",
+      "reported_value": 1.0,
+      "unit": "degree",
+      "tolerance": null,
+      "status": "limited",
+      "evidence_ids": ["tatc-amsr2-along-track-view"]
+    }
+  ]
+}
