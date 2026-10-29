@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 RUN python -c "import cartopy.io.shapereader as s; s.natural_earth(resolution='110m', category='physical', name='coastline')"
 
 COPY apps/mcp-server/src /app/src
+COPY apps/mcp-server/data /app/data
 
 EXPOSE 8000
 

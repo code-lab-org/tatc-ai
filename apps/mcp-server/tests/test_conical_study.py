@@ -3,8 +3,11 @@
 import asyncio
 import copy
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -198,6 +201,235 @@ def test_configuration_lookup_returns_reviewed_amsr2_without_selecting_it():
     )
     assert candidate["source_change_checks"][0]["kind"] == "initial_inclusion"
     assert candidate["source_change_checks"][0]["status"] == "checked"
+
+
+def test_revision_filter_uses_exact_equality():
+    error, text, exact = _call(
+        "lookup_instrument_configurations",
+        {"configuration_id": _config()["configuration_id"], "revision": "2026-10-27.1"},
+    )
+    assert not error, text
+    assert exact["candidate_count"] == 1
+
+    error, text, prefix = _call(
+        "lookup_instrument_configurations",
+        {"configuration_id": _config()["configuration_id"], "revision": "2026-10-27"},
+    )
+    assert not error, text
+    assert prefix["status"] == "no_match"
+    assert prefix["candidate_count"] == 0
+    assert prefix["selection"] is None
+
+
+def test_lookup_exposes_mode_ambiguity_and_prepare_requires_exact_revision(monkeypatch):
+    from src.conical_config import ConicalConfiguration
+
+    configurations = []
+    for suffix, mode in (
+        ("product", "conical_scan_product_sector"),
+        ("nominal", "conical_scan_nominal_sector"),
+    ):
+        raw = _config()
+        raw["configuration_id"] += f"-{suffix}-fixture"
+        raw["revision"] = "fixture-1"
+        raw["operating_mode"] = mode
+        raw["interpretation"]["selected_mode"] = mode
+        configuration = ConicalConfiguration.model_validate(raw)
+        configurations.append(
+            (configuration, {"registry_status": "reviewed_shared", "source_change_checks": []})
+        )
+    monkeypatch.setattr(configuration_registry, "_load_entries", lambda: configurations)
+
+    error, text, ambiguous = _call(
+        "lookup_instrument_configurations", {"instrument": "AMSR2"}
+    )
+    assert not error, text
+    assert ambiguous["candidate_count"] == 2
+    assert ambiguous["ambiguous"] is True
+    assert ambiguous["selection_required"] is True
+    assert ambiguous["selection"] is None
+
+    error, text, narrowed = _call(
+        "lookup_instrument_configurations",
+        {"instrument": "AMSR2", "operating_mode": "nominal_sector"},
+    )
+    assert not error, text
+    assert narrowed["candidate_count"] == 1
+    assert narrowed["selection_required"] is True
+    assert narrowed["selection"] is None
+    assert narrowed["candidates"][0]["operating_mode"] == "conical_scan_nominal_sector"
+
+    error, text, _ = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": "unused-mode-ambiguity-fixture",
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration_id": narrowed["candidates"][0]["configuration_id"],
+        },
+    )
+    assert error
+    assert "configuration_revision is required" in text
+
+
+def _record_failed_refresh(source_revision_id, checked_at="2026-10-28T00:00:00Z", summary=None):
+    return _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": _config()["configuration_id"],
+            "base_revision": _config()["revision"],
+            "status": "failed",
+            "checked_at_utc": checked_at,
+            "checked_source_revision_id": source_revision_id,
+            "reported_by": "assistant",
+            "summary": summary or f"Failed check {source_revision_id}.",
+            "failure_reason": "The source page was unavailable.",
+        },
+    )
+
+
+def test_equivalent_refresh_timestamps_are_idempotent_after_utc_normalization():
+    error, text, first = _record_failed_refresh("same-source-attempt")
+    assert not error, text
+    error, text, duplicate = _record_failed_refresh(
+        "same-source-attempt", checked_at="2026-10-28T03:00:00+03:00"
+    )
+    assert not error, text
+    assert duplicate["source_change_check"]["check_id"] == first["source_change_check"]["check_id"]
+    assert duplicate["idempotent_replay"] is True
+    assert duplicate["source_change_check"]["checked_at_utc"] == "2026-10-28T00:00:00Z"
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations", {"configuration_id": _config()["configuration_id"]}
+    )
+    assert not error, text
+    uncertainty = lookup["candidates"][0]["refresh_uncertainty"]
+    assert len(uncertainty) == 1
+    assert uncertainty[0]["checked_at_utc"] == "2026-10-28T00:00:00Z"
+
+
+def test_refresh_record_capacity_rejects_without_mutation_and_keeps_duplicates_idempotent(monkeypatch):
+    monkeypatch.setattr(configuration_registry, "MAX_REFRESH_RECORDS", 1)
+    error, text, first = _record_failed_refresh("capacity-source-1")
+    assert not error, text
+    error, text, duplicate = _record_failed_refresh("capacity-source-1")
+    assert not error, text
+    assert duplicate["idempotent_replay"] is True
+
+    error, text, _ = _record_failed_refresh("capacity-source-2")
+    assert error
+    assert "capacity" in text.lower()
+    error, text, lookup = _call(
+        "lookup_instrument_configurations", {"configuration_id": _config()["configuration_id"]}
+    )
+    assert not error, text
+    uncertainty = lookup["candidates"][0]["refresh_uncertainty"]
+    assert [item["checked_source_revision_id"] for item in uncertainty] == [
+        "capacity-source-1"
+    ]
+    assert uncertainty[0]["check_id"] == first["source_change_check"]["check_id"]
+
+
+def test_candidate_capacity_rejects_geometry_refresh_without_mutation(monkeypatch):
+    monkeypatch.setattr(configuration_registry, "MAX_REFRESH_CANDIDATES", 0)
+    updated = _refresh_fixture_configuration()
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": _config()["configuration_id"],
+            "base_revision": _config()["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-28T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture refresh found a changed sector.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert error
+    assert "candidate capacity" in text.lower()
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations", {"instrument": "AMSR2"}
+    )
+    assert not error, text
+    assert lookup["candidate_count"] == 1
+    assert lookup["candidates"][0]["source_change_notices"] == []
+
+
+def test_refresh_payload_capacity_rejects_before_mutation(monkeypatch):
+    monkeypatch.setattr(configuration_registry, "MAX_REFRESH_STATE_BYTES", 256)
+    error, text, _ = _record_failed_refresh(
+        "oversized-source-check", summary="x" * 1024
+    )
+    assert error
+    assert "serialized refresh state" in text.lower()
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations", {"configuration_id": _config()["configuration_id"]}
+    )
+    assert not error, text
+    assert lookup["candidates"][0]["refresh_uncertainty"] == []
+
+
+def test_changed_geometry_source_evidence_must_match_retained_content():
+    updated = _refresh_fixture_configuration()
+    mismatched_evidence = copy.deepcopy(updated["evidence"][-1])
+    mismatched_evidence["excerpt"] += " Altered content with the same evidence ID."
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": _config()["configuration_id"],
+            "base_revision": _config()["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-28T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture refresh found a changed sector.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [mismatched_evidence],
+            "updated_configuration": updated,
+        },
+    )
+    assert error
+    assert "exact source evidence" in text.lower()
+    error, text, lookup = _call(
+        "lookup_instrument_configurations", {"instrument": "AMSR2"}
+    )
+    assert not error, text
+    assert lookup["candidate_count"] == 1
+    assert lookup["candidates"][0]["source_change_notices"] == []
+
+
+def test_concurrent_mcp_conversations_have_isolated_refresh_state():
+    barrier = threading.Barrier(2)
+    from eval.run_eval import _converse_with_case_state
+
+    def conversation(source_revision_id):
+        class Harness:
+            def converse(self, _model, _prompt):
+                error, text, _ = _record_failed_refresh(source_revision_id)
+                assert not error, text
+                barrier.wait(timeout=10)
+                error, text, lookup = _call(
+                    "lookup_instrument_configurations",
+                    {"configuration_id": _config()["configuration_id"]},
+                )
+                assert not error, text
+                checks = lookup["candidates"][0]["refresh_uncertainty"]
+                return {item["checked_source_revision_id"] for item in checks}
+
+        case = SimpleNamespace(tags=("conical", "registry", "refresh"), prompt="")
+        return _converse_with_case_state(Harness(), "offline-model", case)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = list(
+            executor.map(conversation, ("conversation-source-a", "conversation-source-b"))
+        )
+    assert first == {"conversation-source-a"}
+    assert second == {"conversation-source-b"}
 
 
 def test_explicit_geometry_refresh_adds_a_revision_and_leaves_both_candidates():

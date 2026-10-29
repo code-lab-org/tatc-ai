@@ -393,6 +393,25 @@ def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
         assert not case.checks(trace, clock)["reported"], final
 
 
+def test_conical_reporting_accepts_negated_continuous_claims():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_complete"
+    )
+    for final in (
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing. A gap area of zero wouldn't mean continuous observation.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing. Continuous viewing and uncovered durations aren't available.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing. Each whole cell is classified observed or gap based on the "
+        "event at its center.",
+    ):
+        trace = _conical_trace(clock)
+        trace.final = final
+        assert case.checks(trace, clock)["reported"], final
+
+
 def test_registry_eval_requires_lookup_and_explicit_revision_selection():
     clock = _clock()
     case = next(
@@ -413,6 +432,11 @@ def test_registry_eval_requires_lookup_and_explicit_revision_selection():
     assert not checks["prepared_exact_registry_revision"]
     assert not all(checks.values())
 
+    trace = _registry_conical_trace(clock)
+    trace.calls[1].args["configuration"] = None
+    checks = case.checks(trace, clock)
+    assert checks["prepared_exact_registry_revision"]
+
 
 def test_failed_refresh_eval_requires_uncertainty_in_the_saved_result_and_reply():
     clock = _clock()
@@ -423,9 +447,88 @@ def test_failed_refresh_eval_requires_uncertainty_in_the_saved_result_and_reply(
     checks = case.checks(trace, clock)
     assert all(checks.values()), checks
 
+    refresh = trace.calls.pop(0)
+    lookup = trace.calls.pop(0)
+    trace.calls[0:0] = [lookup, refresh]
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace = _registry_conical_trace(clock, failed_refresh=True)
+    refresh = trace.calls.pop(0)
+    lookup = trace.calls.pop(0)
+    prepare = trace.calls.pop(0)
+    trace.calls[0:0] = [lookup, prepare, refresh]
+    checks = case.checks(trace, clock)
+    assert not checks["recorded_failed_refresh_before_prepare"]
+
+    trace = _registry_conical_trace(clock, failed_refresh=True)
+    trace.final = (
+        "The failed refresh leaves source status unknown; the source cannot be "
+        "considered unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown, but the sources are unchanged."
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown, but the source page has not changed."
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; there is no claim that the sources are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; it is not a claim that the sources and "
+        "geometry are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown; nothing was verified as unchanged."
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; the failed check does not claim that the "
+        "sources remain unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; the failed check does not confirm the sources "
+        "are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; the source was not verified, and the sources "
+        "are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown, but the source was never changed."
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown. No fresh evidence was available and the "
+        "sources are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
     trace.final = trace.final.replace("unknown", "unchanged")
     checks = case.checks(trace, clock)
-    assert checks["recorded_failed_refresh_before_lookup"]
+    assert checks["recorded_failed_refresh_before_prepare"]
     assert checks["result_retains_refresh_uncertainty"]
     assert not checks["reported_source_uncertainty"]
 

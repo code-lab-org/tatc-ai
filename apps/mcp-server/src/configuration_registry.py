@@ -5,8 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
 
 from pydantic import (
     AwareDatetime,
@@ -14,6 +18,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -21,6 +26,9 @@ from .conical_config import ConicalConfiguration, SourceEvidence
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 REGISTRY_PATH = DATA_DIR / "instrument_configuration_registry.json"
+MAX_REFRESH_RECORDS = 256
+MAX_REFRESH_CANDIDATES = 32
+MAX_REFRESH_STATE_BYTES = 1_048_576
 
 
 class _StrictModel(BaseModel):
@@ -44,6 +52,11 @@ class SourceChangeCheck(_StrictModel):
     failure_reason: Optional[str] = None
     new_revision: Optional[str] = None
     geometry_changes: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("checked_at_utc")
+    @classmethod
+    def _normalize_checked_at_utc(cls, value: datetime) -> datetime:
+        return value.astimezone(timezone.utc)
 
     @model_validator(mode="after")
     def _check_status_fields(self) -> "SourceChangeCheck":
@@ -72,9 +85,86 @@ class RegistryEntry(_StrictModel):
     source_change_checks: List[SourceChangeCheck] = Field(min_length=1)
 
 
-_refresh_lock = threading.RLock()
-_refresh_checks: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-_refresh_candidates: List[Tuple[ConicalConfiguration, Dict[str, Any]]] = []
+@dataclass
+class _RefreshState:
+    lock: Any = field(default_factory=threading.RLock)
+    checks: Dict[Tuple[str, str], List[Dict[str, Any]]] = field(default_factory=dict)
+    candidates: List[Tuple[ConicalConfiguration, Dict[str, Any]]] = field(
+        default_factory=list
+    )
+
+
+_default_refresh_state = _RefreshState()
+_refresh_state_context: ContextVar[Optional[_RefreshState]] = ContextVar(
+    "instrument_configuration_refresh_state", default=None
+)
+
+
+def _current_refresh_state() -> _RefreshState:
+    return _refresh_state_context.get() or _default_refresh_state
+
+
+@contextmanager
+def isolated_refresh_state() -> Iterator[None]:
+    """Give one conversation isolated refresh state across async tool calls."""
+    token = _refresh_state_context.set(_RefreshState())
+    try:
+        yield
+    finally:
+        _refresh_state_context.reset(token)
+
+
+def _canonical_payload_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    ).encode("utf-8")
+
+
+def _serialized_refresh_state_bytes(
+    state: _RefreshState,
+    extra_record: Optional[Tuple[Tuple[str, str], Dict[str, Any]]] = None,
+    extra_candidate: Optional[
+        Tuple[ConicalConfiguration, Dict[str, Any]]
+    ] = None,
+) -> int:
+    check_groups = {
+        key: [dict(record) for record in records]
+        for key, records in state.checks.items()
+    }
+    checks = [
+        {
+            "configuration_id": key[0],
+            "base_revision": key[1],
+            "records": records,
+        }
+        for key, records in sorted(check_groups.items())
+    ]
+    candidates = [
+        {"configuration": configuration.portable(), "metadata": metadata}
+        for configuration, metadata in state.candidates
+    ]
+    if extra_record is not None:
+        key, record = extra_record
+        group = next(
+            (item for item in checks if (item["configuration_id"], item["base_revision"]) == key),
+            None,
+        )
+        if group is None:
+            checks.append(
+                {
+                    "configuration_id": key[0],
+                    "base_revision": key[1],
+                    "records": [record],
+                }
+            )
+        else:
+            group["records"].append(record)
+    if extra_candidate is not None:
+        configuration, metadata = extra_candidate
+        candidates.append(
+            {"configuration": configuration.portable(), "metadata": metadata}
+        )
+    return len(_canonical_payload_bytes({"checks": checks, "candidates": candidates}))
 
 
 def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
@@ -144,12 +234,13 @@ def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
 
 def _entries_with_refreshes() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
     entries = _load_entries()
-    with _refresh_lock:
+    state = _current_refresh_state()
+    with state.lock:
         checks_by_key = {
             key: [dict(check) for check in checks]
-            for key, checks in _refresh_checks.items()
+            for key, checks in state.checks.items()
         }
-        candidates = list(_refresh_candidates)
+        candidates = list(state.candidates)
 
     result = []
     for configuration, original_metadata in entries:
@@ -197,10 +288,11 @@ def _entries_with_refreshes() -> List[Tuple[ConicalConfiguration, Dict[str, Any]
 
 
 def clear_refresh_state() -> None:
-    """Clear process-local refresh records. Used by the MCP tests."""
-    with _refresh_lock:
-        _refresh_checks.clear()
-        _refresh_candidates.clear()
+    """Clear refresh records in the active conversation or default state."""
+    state = _current_refresh_state()
+    with state.lock:
+        state.checks.clear()
+        state.candidates.clear()
 
 
 def _geometry_changes(
@@ -249,6 +341,7 @@ def record_instrument_configuration_refresh(
             f"No registry revision {key[1]!r} exists for configuration {key[0]!r}"
         )
     base_configuration, base_metadata = base_entry
+    checked_at_utc = checked_at_utc.astimezone(timezone.utc)
     if base_metadata["registry_status"] != "reviewed_shared":
         raise ValueError("A source refresh must start from a reviewed shared revision")
 
@@ -331,6 +424,22 @@ def record_instrument_configuration_refresh(
                 "Refresh evidence must support every changed parameter: "
                 + ", ".join(unsupported_changes)
             )
+        retained_evidence = {
+            item.evidence_id: item.model_dump(mode="json")
+            for item in updated_configuration.evidence
+        }
+        mismatched_evidence = [
+            item.evidence_id
+            for item in source_evidence
+            if retained_evidence.get(item.evidence_id)
+            != item.model_dump(mode="json")
+        ]
+        if mismatched_evidence:
+            raise ValueError(
+                "Updated configuration must retain the exact source evidence "
+                "supplied for changed geometry: "
+                + ", ".join(sorted(mismatched_evidence))
+            )
     elif updated_configuration is not None:
         raise ValueError(
             "Only a geometry_changed source check can include an updated configuration"
@@ -375,8 +484,10 @@ def record_instrument_configuration_refresh(
         ),
         "geometry_changes": changes,
     }
-    digest_input = json.dumps(
+    digest_input = _canonical_payload_bytes(
         {
+            "configuration_id": key[0],
+            "base_revision": key[1],
             **check_payload,
             "checked_at_utc": checked_at_utc.isoformat(),
             "source_evidence": [
@@ -388,12 +499,9 @@ def record_instrument_configuration_refresh(
                 else None
             ),
         },
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
     )
     check_payload["check_id"] = "refresh-" + hashlib.sha256(
-        digest_input.encode("utf-8")
+        digest_input
     ).hexdigest()[:16]
     try:
         check = SourceChangeCheck.model_validate(check_payload)
@@ -401,11 +509,19 @@ def record_instrument_configuration_refresh(
         raise ValueError(f"Invalid source refresh record: {exc}") from exc
     record = check.model_dump(mode="json")
 
-    with _refresh_lock:
-        records = _refresh_checks.get(key, [])
-        duplicate_record = any(item["check_id"] == record["check_id"] for item in records)
+    state = _current_refresh_state()
+    with state.lock:
+        records = state.checks.get(key, [])
+        existing_record = next(
+            (item for item in records if item["check_id"] == record["check_id"]),
+            None,
+        )
+        duplicate_record = existing_record is not None
+        if duplicate_record and existing_record != record:
+            raise ValueError("Refresh check ID collision with different check content")
         candidate_key = None
         existing_candidate = False
+        candidate_entry = None
         if updated_configuration is not None:
             candidate_key = (
                 updated_configuration.configuration_id,
@@ -413,7 +529,7 @@ def record_instrument_configuration_refresh(
             )
             existing_candidate = any(
                 (configuration.configuration_id, configuration.revision) == candidate_key
-                for configuration, _ in _refresh_candidates
+                for configuration, _ in state.candidates
             )
             static_keys = {
                 (configuration.configuration_id, configuration.revision)
@@ -423,27 +539,49 @@ def record_instrument_configuration_refresh(
                 raise ValueError(
                     "Configuration IDs and revisions are immutable and must be unique"
                 )
-        if not duplicate_record:
-            _refresh_checks.setdefault(key, []).append(record)
         if updated_configuration is not None and not existing_candidate:
-            _refresh_candidates.append(
-                (
-                    updated_configuration,
-                    {
-                        "registry_status": "source_refresh_candidate",
-                        "source_change_checks": [record],
-                        "source_change_notices": [record],
-                        "refresh_uncertainty": [],
-                        "base_revision": base_revision,
-                    },
-                )
+            candidate_entry = (
+                updated_configuration,
+                {
+                    "registry_status": "source_refresh_candidate",
+                    "source_change_checks": [record],
+                    "source_change_notices": [record],
+                    "refresh_uncertainty": [],
+                    "base_revision": base_revision,
+                },
             )
+        if not duplicate_record:
+            total_records = sum(len(items) for items in state.checks.values())
+            if total_records >= MAX_REFRESH_RECORDS:
+                raise ValueError(
+                    f"Refresh record capacity ({MAX_REFRESH_RECORDS}) has been reached"
+                )
+        if candidate_entry is not None and len(state.candidates) >= MAX_REFRESH_CANDIDATES:
+            raise ValueError(
+                f"Refresh candidate capacity ({MAX_REFRESH_CANDIDATES}) has been reached"
+            )
+        if not duplicate_record or candidate_entry is not None:
+            payload_bytes = _serialized_refresh_state_bytes(
+                state,
+                extra_record=(key, record) if not duplicate_record else None,
+                extra_candidate=candidate_entry,
+            )
+            if payload_bytes > MAX_REFRESH_STATE_BYTES:
+                raise ValueError(
+                    "Serialized refresh state capacity exceeded: "
+                    f"{payload_bytes} bytes would exceed {MAX_REFRESH_STATE_BYTES} bytes"
+                )
+        if not duplicate_record:
+            state.checks.setdefault(key, []).append(record)
+        if candidate_entry is not None:
+            state.candidates.append(candidate_entry)
 
     return {
         "status": status,
         "base_configuration_id": configuration_id,
         "base_revision": base_revision,
         "source_change_check": record,
+        "idempotent_replay": duplicate_record,
         "geometry_changes": changes,
         "new_revision_candidate": (
             {
@@ -468,6 +606,10 @@ def _matches(value: Optional[str], candidates: List[str]) -> bool:
         return True
     query = value.strip().casefold()
     return bool(query) and any(query in candidate.casefold() for candidate in candidates)
+
+
+def _matches_exact(value: Optional[str], candidate: str) -> bool:
+    return value is None or (bool(value.strip()) and value.strip() == candidate)
 
 
 def lookup_instrument_configurations(
@@ -498,7 +640,7 @@ def lookup_instrument_configurations(
             continue
         if not _matches(configuration_id, [configuration.configuration_id]):
             continue
-        if not _matches(revision, [configuration.revision]):
+        if not _matches_exact(revision, configuration.revision):
             continue
 
         candidates.append(

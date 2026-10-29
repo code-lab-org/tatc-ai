@@ -782,7 +782,7 @@ def lookup_instrument_configurations(
         spacecraft: Spacecraft name or alias.
         operating_mode: Operating mode or part of its name.
         configuration_id: Stable configuration identifier.
-        revision: Exact immutable configuration revision.
+        revision: Exact immutable configuration revision, matched by equality.
 
     Returns:
         Matching revision candidates and an explicit-selection requirement.
@@ -813,7 +813,12 @@ def record_instrument_configuration_refresh(
     immutable revision. The refresh record and candidate remain in memory for
     this server process; a shared registry update requires a reviewed repository
     change. A failed check records uncertainty and does not claim that sources
-    or geometry remain unchanged.
+    or geometry remain unchanged. Refresh state is capped at 256 records, 32
+    candidate revisions, and 1 MiB of serialized data. New checks are rejected
+    at capacity; existing notices are never evicted. Repeating an identical
+    check is idempotent, including equivalent UTC instants written with other
+    offsets. Source evidence for changed geometry must exactly match the evidence
+    retained in the updated configuration.
 
     Args:
         configuration_id: Stable ID of the reviewed shared configuration.

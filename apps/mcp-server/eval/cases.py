@@ -313,7 +313,11 @@ def _conical_reporting_is_limited(final: str) -> bool:
     These text checks are conservative heuristics, not a semantic assessment
     of every possible explanation.
     """
-    negation = r"\b(?:not|never|no|cannot|can't|doesn't|isn't|aren't|don't)\b"
+    negation = (
+        r"\b(?:not|never|no|cannot|can't|couldn't|wouldn't|shouldn't|doesn't|"
+        r"didn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|don't|"
+        r"does not|do not|did not|is not|are not|was not|were not|no longer)\b"
+    )
     continuous = r"\b(?:continuous|continuously|uninterrupted)\b"
     sampling = re.search(
         r"\bcell[- ]cent(?:er|re)s?\b|"
@@ -321,7 +325,8 @@ def _conical_reporting_is_limited(final: str) -> bool:
     )
     continuous_limit = (
         negation + r".{0,80}" + continuous + "|" + continuous
-        + r".{0,120}\b(?:unavailable|not available|not provided|not computed)\b"
+        + r".{0,120}\b(?:unavailable|not available|not provided|not computed|"
+        + r"(?:isn't|aren't|wasn't|weren't)\s+available)\b"
     )
     for clause in re.split(r"[.!?;\n]|\b(?:but|however|yet|although|whereas)\b", final):
         if re.search(continuous, clause) and not re.search(continuous_limit, clause):
@@ -330,9 +335,18 @@ def _conical_reporting_is_limited(final: str) -> bool:
             r"\b(?:every|all) (?:point|pixel|location)s?\b.*\bcell\w*\b|"
             r"\b(?:whole|entire|full) (?:grid[- ])?cells?\b", clause
         )
-        if whole_cell and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause):
-            if not re.search(negation, clause):
-                return False
+        classification = re.search(
+            r"\b(?:classif\w*|counted|counts? as|based on|described as|"
+            r"labell?ed|marked as)\b",
+            clause,
+        )
+        if (
+            whole_cell
+            and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause)
+            and not classification
+            and not re.search(negation, clause)
+        ):
+            return False
     return bool(sampling and "envelope" in final and re.search(continuous_limit, final))
 
 
@@ -437,7 +451,7 @@ def _conical_registry_complete(expected_config_id: str, expected_revision: str):
         explicit_prepare = any(
             call.args.get("configuration_id") == expected_config_id
             and call.args.get("configuration_revision") == expected_revision
-            and "configuration" not in call.args
+            and call.args.get("configuration") is None
             and call.parsed.get("registry_selection", {}).get("selection")
             == "explicit_exact_revision"
             for _, call in prepare_calls
@@ -469,10 +483,10 @@ def _conical_registry_failed_refresh(expected_config_id: str, expected_revision:
             and call.parsed
             and call.parsed.get("status") == "failed"
         ]
-        lookups = [
+        prepares = [
             (index, call)
             for index, call in enumerate(trace.calls)
-            if call.name == "lookup_instrument_configurations"
+            if call.name == "prepare_conical_study"
             and not call.error
             and call.parsed
         ]
@@ -482,10 +496,10 @@ def _conical_registry_failed_refresh(expected_config_id: str, expected_revision:
             if finish and finish.parsed
             else []
         )
-        result["recorded_failed_refresh_before_lookup"] = any(
-            failure_index < lookup_index
+        result["recorded_failed_refresh_before_prepare"] = any(
+            failure_index < prepare_index
             for failure_index, _ in failure_calls
-            for lookup_index, _ in lookups
+            for prepare_index, _ in prepares
         )
         result["result_retains_refresh_uncertainty"] = bool(
             uncertainty
@@ -493,12 +507,55 @@ def _conical_registry_failed_refresh(expected_config_id: str, expected_revision:
             and uncertainty[0].get("failure_reason")
         )
         final = trace.final.lower()
-        result["reported_source_uncertainty"] = any(
+        reports_uncertainty = any(
             term in final
             for term in ("unknown", "could not be checked", "source status is uncertain")
-        ) and not re.search(
-            r"\b(?:source status|sources?)\b[^.!?]{0,40}\b(?:unchanged|no changes?)\b",
-            final,
+        )
+        affirmative_unchanged = False
+        clauses = re.split(r"[.!?;]|\b(?:but|however|yet)\b|,\s*and\b", final)
+        for clause in clauses:
+            source_subject = (
+                r"\b(?:source(?: status| state)?|sources?|source evidence|geometry)\b"
+            )
+            explicit_no_change = re.search(
+                source_subject
+                + r"[^.!?]{0,100}\b(?:has|have|had|did|does|is|are|was|were|remain|remains)"
+                + r"(?:\s+(?:not|never)|n't)\s+change(?:d)?\b",
+                clause,
+            )
+            unchanged = re.search(
+                source_subject + r"[^.!?]{0,100}\b(unchanged|no changes?)\b",
+                clause,
+            )
+            if explicit_no_change:
+                affirmative_unchanged = True
+                break
+            if unchanged:
+                before = clause[: unchanged.start(1)]
+                negated_claim = re.search(
+                    r"\b(?:no|without)\s+claim\b[^.!?]{0,120}$"
+                    r"|\bnot\s+an?\s+claim\b[^.!?]{0,120}$"
+                    r"|\b(?:no|without)\s+(?:evidence|indication|proof|sign)"
+                    r"\s+that\b[^.!?]{0,120}$"
+                    r"|\b(?:does|do|did|is|are|was|were|has|have|had)\s+not\s+"
+                    r"(?:claim|confirm|establish|show|prove|mean|indicate|say|"
+                    r"state)\b[^.!?]{0,120}$"
+                    r"|\b(?:cannot|can't|couldn't)\s+(?:claim|confirm|establish|"
+                    r"show|prove|mean|indicate|say|state)\b[^.!?]{0,120}$",
+                    before,
+                )
+                local_negation = re.search(
+                    r"\b(?:not|no|never|nothing|none|nobody|neither|cannot|can't|"
+                    r"couldn't|wouldn't|shouldn't|doesn't|didn't|isn't|aren't|"
+                    r"wasn't|weren't|hasn't|haven't|hadn't|no longer)\b"
+                    r"[^.!?]{0,40}$",
+                    before,
+                )
+                if not (negated_claim or local_negation):
+                    affirmative_unchanged = True
+                    break
+        result["reported_source_uncertainty"] = (
+            reports_uncertainty and not affirmative_unchanged
         )
         return result
 
@@ -687,11 +744,16 @@ def build_cases(clock: Clock) -> List[Case]:
             "unavailable. Record a failed source refresh for the reviewed AMSR2 "
             f"configuration at revision {CONICAL_SHARED_REVISION}, with source "
             "check ID jaxa-page-attempt-2026-10-28 and failure reason that the "
-            "page was unavailable. Then look up the registry and use the exact "
+            "page was unavailable. You may look up the configuration first to "
+            "discover its exact ID. Record the failed refresh before preparing, "
+            "then use the exact "
             f"revision {CONICAL_SHARED_REVISION}, which I explicitly select for "
             "this historical window and accept with the source-status warning. "
             "Prepare, run with the accepted setup revision, and fetch the events. "
-            "State that the failed check leaves current source status unknown.",
+            "State that the failed check leaves current source status unknown. "
+            "Report the event count, say that daily area is cell-center sampled, "
+            "and explain that the field-of-regard envelope is not continuous "
+            "viewing time.",
             _conical_registry_failed_refresh(CONICAL_SHARED_ID, CONICAL_SHARED_REVISION),
         ),
         Case(
