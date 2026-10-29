@@ -1,7 +1,7 @@
 {
   "schema_version": "conical-configuration-v1",
-  "configuration_id": "amsr2-gcom-w1-conical-product-sector",
-  "revision": "2026-10-27.1",
+  "configuration_id": "amsr2-gcom-w1-conical-product-sector-study",
+  "revision": "2026-10-27.1-study",
   "instrument": "AMSR2",
   "spacecraft": {
     "name": "GCOM-W1",

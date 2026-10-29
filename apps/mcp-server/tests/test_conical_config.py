@@ -43,7 +43,8 @@ def _valid():
 
 def test_amsr2_fixture_is_typed_and_source_backed():
     configuration = _valid()
-    assert configuration.configuration_id == "amsr2-gcom-w1-conical-product-sector"
+    assert configuration.configuration_id == "amsr2-gcom-w1-conical-product-sector-study"
+    assert configuration.revision == "2026-10-27.1-study"
     assert configuration.spacecraft.norad_id == 38337
     assert configuration.operating_mode == "conical_scan_40_rpm_product_sector"
     assert configuration.channel.center_frequency_ghz == 10.65

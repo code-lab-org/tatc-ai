@@ -16,7 +16,7 @@ The eval reads the proxy key from `apps/librechat/.env` and sends prompts and to
 
 The coverage cases include the legacy single-geometry workflow and these conical-scanning cases:
 
-- `conical_amsr2_complete`: a study-specific sourced AMSR2 configuration with conflicting nominal/product sector choices and declared approximations. The model must prepare, accept the current revision, run, fetch viewing events, and preserve cell-center and envelope limits.
+- `conical_amsr2_complete`: a study-specific sourced AMSR2 configuration with conflicting nominal/product sector choices and declared approximations. The model must prepare, accept the current revision, run, fetch viewing events, and preserve cell-center and envelope limits. It uses the study-specific fixture with its own ID and revision; the reviewed shared entry is the independent TAT-C reference target.
 - `conical_amsr2_registry_selection`: the model must look up the reviewed shared configuration, leave lookup unselected, prepare with the exact configuration ID and revision the researcher chose, and retain that revision in the result.
 - `conical_amsr2_failed_refresh`: the model records a reported failed source check, uses the researcher's exact prior revision, and carries source uncertainty into the result and reply.
 - `conical_applicability_rejected`: a window outside the established applicability interval. The model must stop before calculation and identify the uncovered dates.

@@ -796,7 +796,13 @@ def lookup_instrument_configurations(
 def record_instrument_configuration_refresh(
     configuration_id: str,
     base_revision: str,
-    status: Literal["unchanged", "documentation_changed", "geometry_changed", "failed"],
+    status: Literal[
+        "unchanged",
+        "documentation_changed",
+        "geometry_changed",
+        "applicability_changed",
+        "failed",
+    ],
     checked_at_utc: AwareDatetime,
     checked_source_revision_id: str,
     reported_by: Literal["assistant", "maintainer"],
@@ -809,29 +815,34 @@ def record_instrument_configuration_refresh(
     """Record a source check supplied by the assistant or a maintainer.
 
     This tool does not fetch source documents or edit the repository registry.
-    A changed geometry requires a complete sourced configuration with a new
-    immutable revision. The refresh record and candidate remain in memory for
-    this server process; a shared registry update requires a reviewed repository
-    change. A failed check records uncertainty and does not claim that sources
-    or geometry remain unchanged. Refresh state is capped at 256 records, 32
-    candidate revisions, and 1 MiB of serialized data. New checks are rejected
-    at capacity; existing notices are never evicted. Repeating an identical
-    check is idempotent, including equivalent UTC instants written with other
-    offsets. Source evidence for changed geometry must exactly match the evidence
-    retained in the updated configuration.
+    A changed geometry or applicability interval requires a complete sourced
+    configuration with a new immutable revision. The refresh record and candidate
+    remain in memory for this server process; a shared registry update requires a
+    reviewed repository change. A failed check records uncertainty and does not
+    claim that sources or geometry remain unchanged. Refresh state is capped at
+    256 records, 32 candidate revisions, and 1 MiB of serialized data. New checks
+    are rejected at capacity; existing notices are never evicted. Repeating an
+    identical check is idempotent, including equivalent UTC instants written with
+    other offsets. Source evidence for changed geometry or applicability must
+    exactly match the evidence retained in the updated configuration. A revised
+    geometry cannot keep a check that reports the prior value, must cite the
+    refresh evidence, and cannot silently remove or narrow an approximation;
+    removal requires evidence supporting approximation.<id>.removed.
 
     Args:
         configuration_id: Stable ID of the reviewed shared configuration.
         base_revision: Exact shared revision against which the source was checked.
-        status: Whether evidence was unchanged, changed without geometry impact,
-            changed the geometry, or could not be checked.
+        status: Whether evidence was unchanged, changed without geometry or
+            applicability impact, changed the geometry or applicability, or could
+            not be checked.
         checked_at_utc: UTC time when the source check was performed.
         checked_source_revision_id: Source document revision or attempted check ID.
         reported_by: Whether the supplied finding came from the assistant or maintainer.
         summary: Short account of the source check and its findings.
         evidence_ids: Existing evidence IDs supporting this check.
         source_evidence: New source evidence retained with the check.
-        updated_configuration: Complete new configuration for a changed geometry.
+        updated_configuration: Complete new configuration for a changed geometry
+            or applicability interval.
         failure_reason: Required explanation when status is failed.
 
     Returns:

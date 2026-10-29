@@ -309,6 +309,17 @@ def _warnings(
                 f"{check.get('new_revision')}: {changes}. Choose and accept one "
                 "exact configuration revision for this study."
             )
+        elif check.get("status") == "applicability_changed":
+            changes = ", ".join(
+                f"{item['parameter']}: {item['previous_value']} -> "
+                f"{item['new_value']}"
+                for item in check.get("applicability_changes", [])
+            )
+            warnings.append(
+                "An explicit source refresh reports changed applicability in "
+                f"revision {check.get('new_revision')}: {changes}. Choose and "
+                "accept one exact configuration revision for this study."
+            )
         elif check.get("status") == "documentation_changed":
             warnings.append(
                 "An explicit source refresh reports a documentation change without "
@@ -861,7 +872,20 @@ def finish_conical_study(
         _, current_selection = resolve_instrument_configuration(
             registry_selection["configuration_id"], registry_selection["revision"]
         )
-        if _canonical(current_selection) != _canonical(registry_selection):
+        material_keys = (
+            "configuration_id",
+            "revision",
+            "source",
+            "base_revision",
+            "source_change_notices",
+            "refresh_uncertainty",
+            "shared_registry_update_required",
+        )
+        if _canonical(
+            {key: current_selection.get(key) for key in material_keys}
+        ) != _canonical(
+            {key: registry_selection.get(key) for key in material_keys}
+        ):
             raise ValueError(
                 "The selected registry revision has new source-change information "
                 "since preparation. Prepare again and obtain acceptance of the "

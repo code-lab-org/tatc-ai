@@ -21,6 +21,12 @@ from src.conical_config import ConicalConfiguration
 CONFIG_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json"
 )
+REGISTRY_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "configurations"
+    / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+)
 REFERENCE_PATH = Path(__file__).resolve().parent / "fixtures" / "amsr2_conical_reference.json"
 NOW = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
 
@@ -29,8 +35,12 @@ def _config():
     return json.loads(CONFIG_PATH.read_text())
 
 
+def _registry_config():
+    return json.loads(REGISTRY_CONFIG_PATH.read_text())
+
+
 def _refresh_fixture_configuration():
-    configuration = _config()
+    configuration = _registry_config()
     configuration["revision"] = "2026-10-28-fixture-2"
     configuration["source_revision"] = {
         **configuration["source_revision"],
@@ -76,6 +86,44 @@ def _refresh_fixture_configuration():
             "evidence_ids": ["fixture-geometry-refresh"],
         }
     )
+    return configuration
+
+
+def _applicability_refresh_fixture_configuration():
+    configuration = _registry_config()
+    configuration["revision"] = "2026-10-29-fixture-2"
+    configuration["applicability"]["end_utc_exclusive"] = "2026-11-15T00:00:00Z"
+    configuration["applicability"]["basis"] = (
+        "The test fixture extends the evidence cutoff to 2026-11-15."
+    )
+    evidence = {
+        "evidence_id": "fixture-applicability-refresh",
+        "authority": "Test fixture",
+        "title": "Synthetic AMSR2 applicability refresh",
+        "url": "https://example.invalid/amsr2-applicability-refresh",
+        "document_revision": "fixture-2",
+        "locator": "applicability interval",
+        "excerpt": "The test fixture extends the established applicability to 2026-11-15.",
+        "retrieved_at_utc": "2026-10-29T00:00:00Z",
+        "interpretation": "Test-only evidence for exercising changed applicability.",
+        "supports": ["applicability.end"],
+    }
+    configuration["evidence"].append(evidence)
+    configuration["applicability"]["evidence_ids"].append(evidence["evidence_id"])
+    configuration["source_revision"] = {
+        **configuration["source_revision"],
+        "revision_id": "amsr2-applicability-refresh-fixture",
+        "checked_at_utc": "2026-10-29T00:00:00Z",
+        "summary": "Synthetic source fixture for the applicability refresh test.",
+        "evidence_ids": [
+            *configuration["source_revision"]["evidence_ids"],
+            evidence["evidence_id"],
+        ],
+    }
+    configuration["interpretation"]["limitations"] = [
+        limitation.replace("2026-10-27", "2026-11-15")
+        for limitation in configuration["interpretation"]["limitations"]
+    ]
     return configuration
 
 
@@ -206,14 +254,14 @@ def test_configuration_lookup_returns_reviewed_amsr2_without_selecting_it():
 def test_revision_filter_uses_exact_equality():
     error, text, exact = _call(
         "lookup_instrument_configurations",
-        {"configuration_id": _config()["configuration_id"], "revision": "2026-10-27.1"},
+        {"configuration_id": _registry_config()["configuration_id"], "revision": "2026-10-27.1"},
     )
     assert not error, text
     assert exact["candidate_count"] == 1
 
     error, text, prefix = _call(
         "lookup_instrument_configurations",
-        {"configuration_id": _config()["configuration_id"], "revision": "2026-10-27"},
+        {"configuration_id": _registry_config()["configuration_id"], "revision": "2026-10-27"},
     )
     assert not error, text
     assert prefix["status"] == "no_match"
@@ -229,7 +277,7 @@ def test_lookup_exposes_mode_ambiguity_and_prepare_requires_exact_revision(monke
         ("product", "conical_scan_product_sector"),
         ("nominal", "conical_scan_nominal_sector"),
     ):
-        raw = _config()
+        raw = _registry_config()
         raw["configuration_id"] += f"-{suffix}-fixture"
         raw["revision"] = "fixture-1"
         raw["operating_mode"] = mode
@@ -276,8 +324,8 @@ def _record_failed_refresh(source_revision_id, checked_at="2026-10-28T00:00:00Z"
     return _call(
         "record_instrument_configuration_refresh",
         {
-            "configuration_id": _config()["configuration_id"],
-            "base_revision": _config()["revision"],
+            "configuration_id": _registry_config()["configuration_id"],
+            "base_revision": _registry_config()["revision"],
             "status": "failed",
             "checked_at_utc": checked_at,
             "checked_source_revision_id": source_revision_id,
@@ -300,7 +348,7 @@ def test_equivalent_refresh_timestamps_are_idempotent_after_utc_normalization():
     assert duplicate["source_change_check"]["checked_at_utc"] == "2026-10-28T00:00:00Z"
 
     error, text, lookup = _call(
-        "lookup_instrument_configurations", {"configuration_id": _config()["configuration_id"]}
+        "lookup_instrument_configurations", {"configuration_id": _registry_config()["configuration_id"]}
     )
     assert not error, text
     uncertainty = lookup["candidates"][0]["refresh_uncertainty"]
@@ -320,7 +368,7 @@ def test_refresh_record_capacity_rejects_without_mutation_and_keeps_duplicates_i
     assert error
     assert "capacity" in text.lower()
     error, text, lookup = _call(
-        "lookup_instrument_configurations", {"configuration_id": _config()["configuration_id"]}
+        "lookup_instrument_configurations", {"configuration_id": _registry_config()["configuration_id"]}
     )
     assert not error, text
     uncertainty = lookup["candidates"][0]["refresh_uncertainty"]
@@ -330,14 +378,105 @@ def test_refresh_record_capacity_rejects_without_mutation_and_keeps_duplicates_i
     assert uncertainty[0]["check_id"] == first["source_change_check"]["check_id"]
 
 
+def test_later_successful_check_supersedes_failed_refresh_uncertainty():
+    error, text, failed = _record_failed_refresh(
+        "resolved-source-check", checked_at="2026-10-28T00:00:00Z"
+    )
+    assert not error, text
+
+    error, text, unchanged = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": _registry_config()["configuration_id"],
+            "base_revision": _registry_config()["revision"],
+            "status": "unchanged",
+            "checked_at_utc": "2026-10-28T01:00:00Z",
+            "checked_source_revision_id": "resolved-source-check",
+            "reported_by": "assistant",
+            "summary": "A later check found the same source content.",
+            "evidence_ids": ["jaxa-gcom-w-status"],
+        },
+    )
+    assert not error, text
+    assert unchanged["status"] == "unchanged"
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations",
+        {"configuration_id": _registry_config()["configuration_id"]},
+    )
+    assert not error, text
+    candidate = lookup["candidates"][0]
+    assert candidate["current_source_status"] == "unchanged"
+    assert candidate["refresh_uncertainty"] == []
+    assert [check["check_id"] for check in candidate["superseded_refresh_failures"]] == [
+        failed["source_change_check"]["check_id"]
+    ]
+    assert any(
+        check["status"] == "failed"
+        for check in candidate["source_change_checks"]
+    )
+
+
+def test_candidate_does_not_report_a_superseded_failure_as_current_uncertainty():
+    error, text, failed = _record_failed_refresh(
+        "candidate-source-check", checked_at="2026-10-28T00:00:00Z"
+    )
+    assert not error, text
+
+    updated = _refresh_fixture_configuration()
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": _registry_config()["configuration_id"],
+            "base_revision": _registry_config()["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-28T01:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "A later check found and documented changed geometry.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert not error, text
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations",
+        {
+            "configuration_id": _registry_config()["configuration_id"],
+            "revision": updated["revision"],
+        },
+    )
+    assert not error, text
+    candidate = lookup["candidates"][0]
+    assert candidate["current_source_status"] == "geometry_changed"
+    assert candidate["refresh_uncertainty"] == []
+    assert any(
+        check["check_id"] == failed["source_change_check"]["check_id"]
+        for check in candidate["superseded_refresh_failures"]
+    )
+
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _prepare_registry(
+        draft["draft_id"], _registry_config()["configuration_id"], updated["revision"]
+    )
+    assert not error, text
+    assert not any(
+        "current source state is unknown" in warning
+        for warning in proposal["warnings"]
+    )
+
+
 def test_candidate_capacity_rejects_geometry_refresh_without_mutation(monkeypatch):
     monkeypatch.setattr(configuration_registry, "MAX_REFRESH_CANDIDATES", 0)
     updated = _refresh_fixture_configuration()
     error, text, _ = _call(
         "record_instrument_configuration_refresh",
         {
-            "configuration_id": _config()["configuration_id"],
-            "base_revision": _config()["revision"],
+            "configuration_id": _registry_config()["configuration_id"],
+            "base_revision": _registry_config()["revision"],
             "status": "geometry_changed",
             "checked_at_utc": "2026-10-28T00:00:00Z",
             "checked_source_revision_id": updated["source_revision"]["revision_id"],
@@ -368,7 +507,7 @@ def test_refresh_payload_capacity_rejects_before_mutation(monkeypatch):
     assert "serialized refresh state" in text.lower()
 
     error, text, lookup = _call(
-        "lookup_instrument_configurations", {"configuration_id": _config()["configuration_id"]}
+        "lookup_instrument_configurations", {"configuration_id": _registry_config()["configuration_id"]}
     )
     assert not error, text
     assert lookup["candidates"][0]["refresh_uncertainty"] == []
@@ -381,8 +520,8 @@ def test_changed_geometry_source_evidence_must_match_retained_content():
     error, text, _ = _call(
         "record_instrument_configuration_refresh",
         {
-            "configuration_id": _config()["configuration_id"],
-            "base_revision": _config()["revision"],
+            "configuration_id": _registry_config()["configuration_id"],
+            "base_revision": _registry_config()["revision"],
             "status": "geometry_changed",
             "checked_at_utc": "2026-10-28T00:00:00Z",
             "checked_source_revision_id": updated["source_revision"]["revision_id"],
@@ -415,7 +554,7 @@ def test_concurrent_mcp_conversations_have_isolated_refresh_state():
                 barrier.wait(timeout=10)
                 error, text, lookup = _call(
                     "lookup_instrument_configurations",
-                    {"configuration_id": _config()["configuration_id"]},
+                    {"configuration_id": _registry_config()["configuration_id"]},
                 )
                 assert not error, text
                 checks = lookup["candidates"][0]["refresh_uncertainty"]
@@ -437,8 +576,8 @@ def test_explicit_geometry_refresh_adds_a_revision_and_leaves_both_candidates():
     error, text, refresh = _call(
         "record_instrument_configuration_refresh",
         {
-            "configuration_id": _config()["configuration_id"],
-            "base_revision": _config()["revision"],
+            "configuration_id": _registry_config()["configuration_id"],
+            "base_revision": _registry_config()["revision"],
             "status": "geometry_changed",
             "checked_at_utc": "2026-10-28T00:00:00Z",
             "checked_source_revision_id": updated["source_revision"]["revision_id"],
@@ -472,7 +611,7 @@ def test_explicit_geometry_refresh_adds_a_revision_and_leaves_both_candidates():
     old = next(
         item
         for item in lookup["candidates"]
-        if item["revision"] == _config()["revision"]
+        if item["revision"] == _registry_config()["revision"]
     )
     new = next(
         item
@@ -508,7 +647,7 @@ def _prepare_registry(draft_id, configuration_id, configuration_revision=None):
 
 
 def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
-    base = _config()
+    base = _registry_config()
     base_id = base["configuration_id"]
     base_revision = base["revision"]
 
@@ -624,8 +763,229 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
         )
 
 
+def test_geometry_refresh_rejects_a_stale_passing_geometry_check():
+    base = _registry_config()
+    updated = _refresh_fixture_configuration()
+    stale_check = next(
+        check
+        for check in base["geometry_checks"]
+        if check["check_id"] == "scan-sector-consistency"
+    )
+    updated["geometry_checks"].append(copy.deepcopy(stale_check))
+
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture changes geometry but keeps the prior check.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert error
+    assert "stale geometry checks" in text
+    assert "scan-sector-consistency" in text
+
+
+def test_geometry_refresh_rejects_silently_cleared_approximations():
+    base = _registry_config()
+    updated = _refresh_fixture_configuration()
+    updated["approximations"] = []
+    updated["approximation_status"] = "supported"
+
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture changes geometry and clears its limitations.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert error
+    assert "removes declared approximations" in text
+
+
+def test_applicability_refresh_creates_a_sourced_revision_without_mutating_base():
+    base = _registry_config()
+    updated = _applicability_refresh_fixture_configuration()
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "applicability_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture refresh extends the established applicability.",
+            "evidence_ids": ["fixture-applicability-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert not error, text
+    assert refresh["geometry_changes"] == []
+    assert refresh["applicability_changes"] == [
+        {
+            "parameter": "applicability.end_utc_exclusive",
+            "previous_value": "2026-10-27T00:00:00Z",
+            "new_value": "2026-11-15T00:00:00Z",
+        },
+        {
+            "parameter": "applicability.evidence_ids",
+            "previous_value": base["applicability"]["evidence_ids"],
+            "new_value": updated["applicability"]["evidence_ids"],
+        },
+        {
+            "parameter": "applicability.basis",
+            "previous_value": base["applicability"]["basis"],
+            "new_value": updated["applicability"]["basis"],
+        },
+    ]
+
+    error, text, base_lookup = _call(
+        "lookup_instrument_configurations",
+        {
+            "configuration_id": base["configuration_id"],
+            "revision": base["revision"],
+        },
+    )
+    assert not error, text
+    base_candidate = base_lookup["candidates"][0]
+    assert base_candidate["applicability"]["end_utc_exclusive"] == (
+        "2026-10-27T00:00:00Z"
+    )
+    assert base_candidate["source_change_notices"][0]["status"] == (
+        "applicability_changed"
+    )
+
+    error, text, updated_lookup = _call(
+        "lookup_instrument_configurations",
+        {
+            "configuration_id": base["configuration_id"],
+            "revision": updated["revision"],
+        },
+    )
+    assert not error, text
+    candidate = updated_lookup["candidates"][0]
+    assert candidate["registry_status"] == "source_refresh_candidate"
+    assert candidate["applicability"]["end_utc_exclusive"] == (
+        "2026-11-15T00:00:00Z"
+    )
+
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _prepare_registry(
+        draft["draft_id"], base["configuration_id"], updated["revision"]
+    )
+    assert not error, text
+    assert proposal["configuration"]["applicability"]["end_utc_exclusive"] == (
+        "2026-11-15T00:00:00Z"
+    )
+
+
+def test_applicability_refresh_requires_changed_dates_and_supporting_evidence():
+    base = _registry_config()
+    unchanged = copy.deepcopy(base)
+    unchanged["revision"] = "2026-10-29-fixture-unchanged"
+    unchanged["source_revision"] = {
+        **unchanged["source_revision"],
+        "revision_id": "amsr2-applicability-unchanged-fixture",
+    }
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "applicability_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": unchanged["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture reports no applicability change.",
+            "evidence_ids": ["jaxa-gcom-w-status"],
+            "updated_configuration": unchanged,
+        },
+    )
+    assert error
+    assert "no applicability parameter changed" in text
+
+    unsupported = _applicability_refresh_fixture_configuration()
+    unsupported["revision"] = "2026-10-29-fixture-unsupported"
+    unsupported["source_revision"]["revision_id"] = (
+        "amsr2-applicability-unsupported-fixture"
+    )
+    unsupported["evidence"][-1]["supports"] = ["geometry.scan_half_width"]
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "applicability_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": unsupported["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture changes dates without applicability evidence.",
+            "evidence_ids": ["fixture-applicability-refresh"],
+            "source_evidence": [unsupported["evidence"][-1]],
+            "updated_configuration": unsupported,
+        },
+    )
+    assert error
+    assert "support changed applicability" in text
+
+
+def test_geometry_refresh_may_recheck_the_same_source_document_revision():
+    base = _registry_config()
+    updated = _refresh_fixture_configuration()
+    updated["revision"] = "2026-10-29-same-document"
+    updated["source_revision"] = {
+        **base["source_revision"],
+        "evidence_ids": [
+            *base["source_revision"]["evidence_ids"],
+            "fixture-geometry-refresh",
+        ],
+    }
+    updated["evidence"][-1]["document_revision"] = next(
+        evidence["document_revision"]
+        for evidence in base["evidence"]
+        if evidence["evidence_id"] == "tatc-amsr2-validation"
+    )
+
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": base["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "A recheck of the same document found a revised sector width.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert not error, text
+    assert refresh["status"] == "geometry_changed"
+    assert refresh["new_revision_candidate"]["revision"] == "2026-10-29-same-document"
+
+
 def test_source_refresh_cannot_reuse_an_immutable_registry_revision():
-    configuration = _config()
+    configuration = _registry_config()
     updated = _refresh_fixture_configuration()
     updated["revision"] = configuration["revision"]
     error, text, _ = _call(
@@ -653,7 +1013,7 @@ def test_source_refresh_cannot_reuse_an_immutable_registry_revision():
 
 
 def test_failed_source_refresh_is_disclosed_and_stales_an_older_proposal():
-    configuration = _config()
+    configuration = _registry_config()
     draft = _begin()
     _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
     error, text, proposal = _prepare_registry(
@@ -704,13 +1064,48 @@ def test_failed_source_refresh_is_disclosed_and_stales_an_older_proposal():
     assert any("current source state is unknown" in warning for warning in summary["warnings"])
 
 
+def test_unchanged_refresh_does_not_stale_a_prepared_registry_setup():
+    configuration = _registry_config()
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _prepare_registry(
+        draft["draft_id"], configuration["configuration_id"], configuration["revision"]
+    )
+    assert not error, text
+
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": configuration["configuration_id"],
+            "base_revision": configuration["revision"],
+            "status": "unchanged",
+            "checked_at_utc": "2026-10-28T01:00:00Z",
+            "checked_source_revision_id": "amsr2-unchanged-check-2026-10-28",
+            "reported_by": "assistant",
+            "summary": "A later check found the same source content.",
+            "evidence_ids": ["jaxa-gcom-w-status"],
+        },
+    )
+    assert not error, text
+    assert refresh["status"] == "unchanged"
+
+    error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
+    assert not error, text
+    assert summary["configuration_revision"] == configuration["revision"]
+    error, text, events = _call(
+        "get_access_events", {"result_id": summary["result_id"], "limit": 1}
+    )
+    assert not error, text
+    assert events["registry_selection"]["refresh_uncertainty"] == []
+
+
 def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     draft = _begin()
     _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
     proposal = _prepare(draft["draft_id"])
     assert proposal["status"] == "awaiting_acceptance"
     assert "result_id" not in proposal
-    assert proposal["configuration_id"] == "amsr2-gcom-w1-conical-product-sector"
+    assert proposal["configuration_id"] == _config()["configuration_id"]
     assert proposal["setup_revision"].startswith("sha256:")
     assert proposal["acceptance"]["required"] is True
     assert proposal["grid"]["cell_count"] == 4
@@ -746,7 +1141,7 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     assert summary["provenance"]["setup_revision"] == proposal["setup_revision"]
     assert (
         summary["provenance"]["setup_snapshot"]["configuration"]["configuration_id"]
-        == "amsr2-gcom-w1-conical-product-sector"
+        == _config()["configuration_id"]
     )
     assert summary["provenance"]["accepted_choices"][0]["chosen_option_id"] == "product-75deg"
     assert summary["storage"]["retention_hours"] == 24
@@ -759,7 +1154,7 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     assert events["total_events"] == 4
     assert len(events["events"]) == 2
     assert events["events"][0]["envelope_start_utc"]
-    assert events["events"][0]["configuration_id"] == "amsr2-gcom-w1-conical-product-sector"
+    assert events["events"][0]["configuration_id"] == _config()["configuration_id"]
     assert events["provenance"]["setup_revision"] == proposal["setup_revision"]
     error, text, second = _call(
         "get_access_events", {"result_id": result_id, "offset": 2, "limit": 2}
@@ -1083,7 +1478,7 @@ def test_saved_snapshot_is_immutable_after_a_new_preparation():
     assert saved_after["provenance"] == saved_before["provenance"]
     assert (
         saved_after["provenance"]["setup_snapshot"]["configuration"]["configuration_id"]
-        == "amsr2-gcom-w1-conical-product-sector"
+        == _config()["configuration_id"]
     )
     assert saved_after["setup_revision"] == first["setup_revision"]
 

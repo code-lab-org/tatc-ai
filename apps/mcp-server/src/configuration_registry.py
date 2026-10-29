@@ -29,6 +29,11 @@ REGISTRY_PATH = DATA_DIR / "instrument_configuration_registry.json"
 MAX_REFRESH_RECORDS = 256
 MAX_REFRESH_CANDIDATES = 32
 MAX_REFRESH_STATE_BYTES = 1_048_576
+NOTICE_STATUSES = (
+    "documentation_changed",
+    "geometry_changed",
+    "applicability_changed",
+)
 
 
 class _StrictModel(BaseModel):
@@ -41,7 +46,12 @@ class SourceChangeCheck(_StrictModel):
     check_id: str = Field(min_length=1)
     kind: Literal["initial_inclusion", "explicit_refresh"]
     status: Literal[
-        "checked", "unchanged", "documentation_changed", "geometry_changed", "failed"
+        "checked",
+        "unchanged",
+        "documentation_changed",
+        "geometry_changed",
+        "applicability_changed",
+        "failed",
     ]
     checked_at_utc: AwareDatetime
     checked_source_revision_id: str = Field(min_length=1)
@@ -52,6 +62,7 @@ class SourceChangeCheck(_StrictModel):
     failure_reason: Optional[str] = None
     new_revision: Optional[str] = None
     geometry_changes: List[Dict[str, Any]] = Field(default_factory=list)
+    applicability_changes: List[Dict[str, Any]] = Field(default_factory=list)
 
     @field_validator("checked_at_utc")
     @classmethod
@@ -73,6 +84,21 @@ class SourceChangeCheck(_StrictModel):
                 raise ValueError(
                     "geometry_changed checks require evidence_ids, new_revision, "
                     "and geometry_changes"
+                )
+        if self.status == "applicability_changed":
+            if (
+                not self.evidence_ids
+                or not self.new_revision
+                or not self.applicability_changes
+            ):
+                raise ValueError(
+                    "applicability_changed checks require evidence_ids, "
+                    "new_revision, and applicability_changes"
+                )
+            if self.geometry_changes:
+                raise ValueError(
+                    "applicability_changed checks cannot include geometry_changes; "
+                    "use geometry_changed when geometry also changes"
                 )
         return self
 
@@ -232,6 +258,37 @@ def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
     return entries
 
 
+def _current_source_state(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Separate the latest source status from retained earlier checks."""
+    refreshes = [
+        (index, check)
+        for index, check in enumerate(checks)
+        if check["kind"] == "explicit_refresh"
+    ]
+    if not refreshes:
+        return {
+            "current_source_status": "checked",
+            "source_change_notices": [],
+            "refresh_uncertainty": [],
+            "superseded_refresh_failures": [],
+        }
+    _, latest = max(
+        refreshes, key=lambda item: (item[1]["checked_at_utc"], item[0])
+    )
+    return {
+        "current_source_status": latest["status"],
+        "source_change_notices": [
+            check for check in checks if check["status"] in NOTICE_STATUSES
+        ],
+        "refresh_uncertainty": [latest] if latest["status"] == "failed" else [],
+        "superseded_refresh_failures": [
+            check
+            for _, check in refreshes
+            if check["status"] == "failed" and check["check_id"] != latest["check_id"]
+        ],
+    }
+
+
 def _entries_with_refreshes() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
     entries = _load_entries()
     state = _current_refresh_state()
@@ -249,14 +306,7 @@ def _entries_with_refreshes() -> List[Tuple[ConicalConfiguration, Dict[str, Any]
         refreshes = checks_by_key.get(key, [])
         checks = metadata["source_change_checks"] + refreshes
         metadata["source_change_checks"] = checks
-        metadata["source_change_notices"] = [
-            check
-            for check in checks
-            if check["status"] in ("documentation_changed", "geometry_changed")
-        ]
-        metadata["refresh_uncertainty"] = [
-            check for check in checks if check["status"] == "failed"
-        ]
+        metadata.update(_current_source_state(checks))
         result.append((configuration, metadata))
     base_metadata_by_key = {
         (configuration.configuration_id, configuration.revision): metadata
@@ -275,14 +325,7 @@ def _entries_with_refreshes() -> List[Tuple[ConicalConfiguration, Dict[str, Any]
                 checks.append(check)
                 seen_check_ids.add(check["check_id"])
         metadata["source_change_checks"] = checks
-        metadata["source_change_notices"] = [
-            check
-            for check in checks
-            if check["status"] in ("documentation_changed", "geometry_changed")
-        ]
-        metadata["refresh_uncertainty"] = [
-            check for check in checks if check["status"] == "failed"
-        ]
+        metadata.update(_current_source_state(checks))
         result.append((configuration, metadata))
     return result
 
@@ -311,10 +354,167 @@ def _geometry_changes(
     ]
 
 
+def _applicability_changes(
+    before: ConicalConfiguration, after: ConicalConfiguration
+) -> List[Dict[str, Any]]:
+    old = before.applicability.model_dump(mode="json")
+    new = after.applicability.model_dump(mode="json")
+    return [
+        {
+            "parameter": f"applicability.{name}",
+            "previous_value": old[name],
+            "new_value": new[name],
+        }
+        for name in old
+        if old[name] != new[name]
+    ]
+
+
+def _validate_applicability_refresh(
+    changes: List[Dict[str, Any]],
+    source_evidence: List[SourceEvidence],
+    updated_configuration: ConicalConfiguration,
+) -> None:
+    changed_dates = {
+        change["parameter"]
+        for change in changes
+        if change["parameter"]
+        in ("applicability.start_utc", "applicability.end_utc_exclusive")
+    }
+    required_support = set()
+    if "applicability.start_utc" in changed_dates:
+        required_support.add("applicability.start")
+    if "applicability.end_utc_exclusive" in changed_dates:
+        required_support.add("applicability.end")
+    if not required_support:
+        return
+    supported = {
+        parameter
+        for item in source_evidence
+        for parameter in item.supports
+    }
+    missing = sorted(required_support - supported)
+    if missing:
+        raise ValueError(
+            "Refresh evidence must support changed applicability: "
+            + ", ".join(missing)
+        )
+    evidence_ids = {
+        item.evidence_id
+        for item in source_evidence
+        if required_support.intersection(item.supports)
+    }
+    if not evidence_ids.intersection(updated_configuration.applicability.evidence_ids):
+        raise ValueError(
+            "Updated configuration must retain the supplied evidence for changed "
+            "applicability"
+        )
+
+
+def _validate_revised_assessment(
+    base: ConicalConfiguration,
+    updated: ConicalConfiguration,
+    changes: List[Dict[str, Any]],
+    source_evidence: List[SourceEvidence],
+) -> None:
+    """Reject stale checks and silent removal of declared simplifications."""
+    numeric_changes = [
+        (
+            change["parameter"],
+            float(change["previous_value"]["value"]),
+            float(change["new_value"]["value"]),
+            change["previous_value"].get("unit"),
+        )
+        for change in changes
+        if isinstance(change["previous_value"], dict)
+        and "value" in change["previous_value"]
+    ]
+    stale_checks = []
+    for check in updated.geometry_checks:
+        if check.reported_value is None:
+            continue
+        for parameter, previous, current, unit in numeric_changes:
+            if check.unit != unit:
+                continue
+            tolerance = max(float(check.tolerance or 0.0), 1e-9)
+            if (
+                abs(check.reported_value - previous) <= tolerance
+                and abs(check.reported_value - current) > tolerance
+            ):
+                stale_checks.append((check.check_id, parameter))
+                break
+    if stale_checks:
+        raise ValueError(
+            "Changed geometry leaves stale geometry checks reporting the prior "
+            "value: "
+            + ", ".join(f"{check_id} ({parameter})" for check_id, parameter in stale_checks)
+        )
+
+    if changes:
+        refresh_evidence_ids = {item.evidence_id for item in source_evidence}
+        if not any(
+            refresh_evidence_ids.intersection(check.evidence_ids)
+            for check in updated.geometry_checks
+        ):
+            raise ValueError(
+                "A changed-geometry revision must include a geometry check that "
+                "cites the refresh evidence"
+            )
+
+    updated_approximations = {
+        item.approximation_id: item for item in updated.approximations
+    }
+    retained_evidence = {
+        item.evidence_id: item.model_dump(mode="json")
+        for item in updated.evidence
+    }
+    removed = []
+    narrowed = []
+    for approximation in base.approximations:
+        replacement = updated_approximations.get(approximation.approximation_id)
+        if replacement is None:
+            token = f"approximation.{approximation.approximation_id}.removed"
+            supporting = [
+                item
+                for item in source_evidence
+                if token in item.supports
+                and retained_evidence.get(item.evidence_id)
+                == item.model_dump(mode="json")
+            ]
+            if not supporting:
+                removed.append(approximation.approximation_id)
+            continue
+        missing_parameters = sorted(
+            set(approximation.affected_parameters)
+            - set(replacement.affected_parameters)
+        )
+        if missing_parameters:
+            narrowed.append(
+                f"{approximation.approximation_id} ({', '.join(missing_parameters)})"
+            )
+    if removed:
+        raise ValueError(
+            "A revised configuration removes declared approximations without "
+            "evidence supporting approximation.<id>.removed: "
+            + ", ".join(sorted(removed))
+        )
+    if narrowed:
+        raise ValueError(
+            "A revised configuration narrows declared approximation scope: "
+            + ", ".join(narrowed)
+        )
+
+
 def record_instrument_configuration_refresh(
     configuration_id: str,
     base_revision: str,
-    status: Literal["unchanged", "documentation_changed", "geometry_changed", "failed"],
+    status: Literal[
+        "unchanged",
+        "documentation_changed",
+        "geometry_changed",
+        "applicability_changed",
+        "failed",
+    ],
     checked_at_utc: AwareDatetime,
     checked_source_revision_id: str,
     reported_by: Literal["assistant", "maintainer"],
@@ -357,6 +557,7 @@ def record_instrument_configuration_refresh(
         item.evidence_id for item in source_evidence
     )]))
     changes: List[Dict[str, Any]] = []
+    applicability_changes: List[Dict[str, Any]] = []
 
     if status == "failed":
         if updated_configuration is not None:
@@ -394,26 +595,17 @@ def record_instrument_configuration_refresh(
             raise ValueError(
                 "The source check says geometry_changed but no geometry parameter changed"
             )
+        applicability_changes = _applicability_changes(
+            base_configuration, updated_configuration
+        )
+        _validate_applicability_refresh(
+            applicability_changes, source_evidence, updated_configuration
+        )
         supported_by_refresh = {
             parameter
             for item in source_evidence
             for parameter in item.supports
         }
-        if (
-            updated_configuration.applicability.model_dump(mode="json")
-            != base_configuration.applicability.model_dump(mode="json")
-        ):
-            applicability_evidence = {
-                item.evidence_id
-                for item in source_evidence
-                if "applicability" in item.supports
-            }
-            if not applicability_evidence.intersection(
-                updated_configuration.applicability.evidence_ids
-            ):
-                raise ValueError(
-                    "Refresh evidence must support any changed applicability interval"
-                )
         unsupported_changes = sorted(
             change["parameter"]
             for change in changes
@@ -424,6 +616,63 @@ def record_instrument_configuration_refresh(
                 "Refresh evidence must support every changed parameter: "
                 + ", ".join(unsupported_changes)
             )
+        _validate_revised_assessment(
+            base_configuration, updated_configuration, changes, source_evidence
+        )
+    elif status == "applicability_changed":
+        if updated_configuration is None:
+            raise ValueError(
+                "An applicability-changing refresh must include the complete new "
+                "sourced configuration"
+            )
+        if updated_configuration.configuration_id != configuration_id:
+            raise ValueError("The refreshed revision must keep the configuration_id")
+        same_identity = (
+            updated_configuration.instrument == base_configuration.instrument
+            and updated_configuration.spacecraft.model_dump(mode="json")
+            == base_configuration.spacecraft.model_dump(mode="json")
+            and updated_configuration.operating_mode == base_configuration.operating_mode
+            and updated_configuration.channel.model_dump(mode="json")
+            == base_configuration.channel.model_dump(mode="json")
+        )
+        if not same_identity:
+            raise ValueError(
+                "A new source revision cannot change the configuration's instrument, "
+                "spacecraft, operating mode, or channel"
+            )
+        if updated_configuration.revision == base_revision:
+            raise ValueError("A changed configuration must use a new immutable revision")
+        if updated_configuration.source_revision.revision_id != checked_source_revision_id:
+            raise ValueError(
+                "The updated configuration source_revision must match the checked source revision"
+            )
+        changes = _geometry_changes(base_configuration, updated_configuration)
+        if changes:
+            raise ValueError(
+                "The source check says applicability_changed but geometry also "
+                "changed; use geometry_changed"
+            )
+        applicability_changes = _applicability_changes(
+            base_configuration, updated_configuration
+        )
+        if not applicability_changes:
+            raise ValueError(
+                "The source check says applicability_changed but no applicability "
+                "parameter changed"
+            )
+        _validate_applicability_refresh(
+            applicability_changes, source_evidence, updated_configuration
+        )
+        _validate_revised_assessment(
+            base_configuration, updated_configuration, changes, source_evidence
+        )
+    elif updated_configuration is not None:
+        raise ValueError(
+            "Only a geometry_changed or applicability_changed source check can "
+            "include an updated configuration"
+        )
+
+    if updated_configuration is not None:
         retained_evidence = {
             item.evidence_id: item.model_dump(mode="json")
             for item in updated_configuration.evidence
@@ -437,18 +686,19 @@ def record_instrument_configuration_refresh(
         if mismatched_evidence:
             raise ValueError(
                 "Updated configuration must retain the exact source evidence "
-                "supplied for changed geometry: "
+                "supplied with the refresh: "
                 + ", ".join(sorted(mismatched_evidence))
             )
-    elif updated_configuration is not None:
-        raise ValueError(
-            "Only a geometry_changed source check can include an updated configuration"
-        )
 
-    if status in ("unchanged", "documentation_changed", "geometry_changed"):
+    if status in (
+        "unchanged",
+        "documentation_changed",
+        "geometry_changed",
+        "applicability_changed",
+    ):
         if not evidence_ids:
             raise ValueError(f"A {status} source check must include source evidence")
-        if status == "geometry_changed":
+        if updated_configuration is not None:
             known = {item.evidence_id for item in updated_configuration.evidence}
         else:
             known = {item.evidence_id for item in base_configuration.evidence}
@@ -459,7 +709,7 @@ def record_instrument_configuration_refresh(
                 "Source refresh references evidence not retained with its revision: "
                 + ", ".join(missing)
             )
-    if status == "geometry_changed":
+    if updated_configuration is not None:
         if not {item.evidence_id for item in source_evidence}.issubset(
             set(updated_configuration.source_revision.evidence_ids)
         ):
@@ -483,6 +733,7 @@ def record_instrument_configuration_refresh(
             else None
         ),
         "geometry_changes": changes,
+        "applicability_changes": applicability_changes,
     }
     digest_input = _canonical_payload_bytes(
         {
@@ -583,6 +834,7 @@ def record_instrument_configuration_refresh(
         "source_change_check": record,
         "idempotent_replay": duplicate_record,
         "geometry_changes": changes,
+        "applicability_changes": applicability_changes,
         "new_revision_candidate": (
             {
                 "configuration_id": updated_configuration.configuration_id,
@@ -710,6 +962,10 @@ def resolve_instrument_configuration(
                 "source_change_checks": metadata["source_change_checks"],
                 "source_change_notices": metadata["source_change_notices"],
                 "refresh_uncertainty": metadata["refresh_uncertainty"],
+                "current_source_status": metadata["current_source_status"],
+                "superseded_refresh_failures": metadata[
+                    "superseded_refresh_failures"
+                ],
                 "base_revision": metadata.get("base_revision"),
                 "shared_registry_update_required": (
                     metadata["registry_status"] == "source_refresh_candidate"

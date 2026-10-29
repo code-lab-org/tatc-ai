@@ -12,8 +12,11 @@ checks are retained in the file. The independent TAT-C reference and mission
 residual record are in `../tests/fixtures/amsr2_conical_reference.json`.
 
 `amsr2_conical_configuration.json` is one study-specific, sourced AMSR2
-configuration used by the conical-study tests and documentation. It is not a
-shared registry entry, and accepting it in a study does not promote it.
+configuration used by the conical-study tests and documentation. It has its own
+configuration ID and revision (`amsr2-gcom-w1-conical-product-sector-study` at
+`2026-10-27.1-study`) so it cannot be confused with the reviewed shared entry.
+It is not a shared registry entry, and accepting it in a study does not promote
+it.
 
 The configuration carries the exact normalized geometry, source evidence
 locators and excerpts, source revision, source conflicts and chosen rationale,

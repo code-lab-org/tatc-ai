@@ -24,7 +24,10 @@ from src.conical_tatc import build_conical_satellite, collect_cell_events
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "amsr2_conical_reference.json"
 CONFIG = (
-    Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json"
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "configurations"
+    / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
 )
 GEOD = Geod(ellps="WGS84")
 

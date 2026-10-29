@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from eval.cases import Call, Clock, Trace, build_cases
+from eval.cases import CONICAL_CONFIG, Call, Clock, Trace, build_cases
 
 
 def _clock():
@@ -242,7 +242,7 @@ def _conical_trace(clock):
         "result_kind": "conical_study",
         "accounting_method": "conical_events_v1",
         "setup_revision": "sha256:abc",
-        "configuration_id": "amsr2-gcom-w1-conical-product-sector-eval",
+        "configuration_id": CONICAL_CONFIG["configuration_id"],
         "window_start_utc": clock.d0.isoformat().replace("+00:00", "Z"),
         "window_end_utc_exclusive": (clock.d0 + __import__("datetime").timedelta(hours=2))
         .isoformat()
