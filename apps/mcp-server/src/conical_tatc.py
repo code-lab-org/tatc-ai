@@ -160,6 +160,13 @@ def collect_cell_events(task: Dict[str, Any]) -> List[Dict[str, Any]]:
         raise ValueError(
             f"TAT-C conical analysis failed for cell {task['cell_id']}: {exc}"
         ) from exc
+    return event_rows_from_observations(observations, configuration, int(task["cell_id"]))
+
+
+def event_rows_from_observations(
+    observations: Any, configuration: Any, cell_id: int
+) -> List[Dict[str, Any]]:
+    """Normalize TAT-C observation rows shared by pointed and conical adapters."""
     events: List[Dict[str, Any]] = []
     for row in observations.itertuples(index=False):
         epoch = row.epoch
@@ -167,7 +174,7 @@ def collect_cell_events(task: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         events.append(
             {
-                "cell_id": int(task["cell_id"]),
+                "cell_id": cell_id,
                 "target_longitude_deg": float(row.geometry.x),
                 "target_latitude_deg": float(row.geometry.y),
                 "epoch": epoch.to_pydatetime(warn=False),

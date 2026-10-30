@@ -16,10 +16,15 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from .coverage_core import _utc_days
 
 ACCOUNTING_METHOD = "conical_events_v1"
+POINTED_ACCOUNTING_METHOD = "pointed_events_v1"
 
 EVENT_DEFINITION = (
     "A valid TAT-C conical viewing epoch at a grid-cell center: the time the "
     "cell center crosses the scanned cone within the accepted scan sector."
+)
+POINTED_EVENT_DEFINITION = (
+    "A valid TAT-C pointed-instrument viewing epoch at a grid-cell center under "
+    "the accepted roll, frame, and field-of-view configuration."
 )
 DAILY_DEFINITION = (
     "A cell is visited on a UTC day when at least one valid event epoch falls "
@@ -169,6 +174,9 @@ def summarize_events(
     events: Sequence[Dict[str, Any]],
     start: datetime,
     end: datetime,
+    *,
+    accounting_method: str = ACCOUNTING_METHOD,
+    event_definition: str = EVENT_DEFINITION,
 ) -> Dict[str, Any]:
     """Build daily rows, cell rows, spacing rows, and compact metrics."""
     start, end = _as_utc(start), _as_utc(end)
@@ -310,10 +318,10 @@ def summarize_events(
         **spacing_stats,
         "continuous_viewing_duration_available": False,
         "continuous_uncovered_duration_available": False,
-        "accounting_method": ACCOUNTING_METHOD,
+        "accounting_method": accounting_method,
     }
     definitions = {
-        "event": EVENT_DEFINITION,
+        "event": event_definition,
         "daily_cell": DAILY_DEFINITION,
         "event_spacing": SPACING_DEFINITION,
         "event_spacing_metrics": (

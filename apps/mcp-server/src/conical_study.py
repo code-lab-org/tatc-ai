@@ -1,11 +1,11 @@
-"""Staged single-configuration conical study through the temporary store.
+"""Staged single-configuration conical and pointed studies.
 
 The workflow mirrors the legacy staged access path: begin locks the
 spacecraft and window, region sets the bounds, prepare resolves a sourced
-conical configuration and returns an acceptance revision, and finish runs
-only the accepted proposal.  TAT-C does all propagation and viewing-event
-geometry; application code only validates inputs and applies the study's
-UTC-day and spacing accounting.
+instrument configuration and returns an acceptance revision, and finish runs
+only the accepted proposal. TAT-C does all propagation and viewing-event
+geometry; application code only validates inputs and applies UTC-day and
+spacing accounting.
 """
 
 from __future__ import annotations
@@ -16,12 +16,15 @@ import json
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from pydantic import ValidationError
 
 from .conical_accounting import (
     ACCOUNTING_METHOD,
+    EVENT_DEFINITION,
+    POINTED_ACCOUNTING_METHOD,
+    POINTED_EVENT_DEFINITION,
     normalize_events,
     summarize_events,
 )
@@ -29,11 +32,15 @@ from .configuration_registry import resolve_instrument_configuration
 from .conical_config import (
     SCHEMA_VERSION,
     ConicalConfiguration,
-    configuration_from_snapshot,
+    configuration_from_snapshot as conical_configuration_from_snapshot,
     iso_utc,
     source_choices_from_snapshot,
 )
-from .conical_tatc import collect_cell_events, resolved_snapshot
+from .instrument_tatc import collect_cell_events, resolved_snapshot
+from .pointed_config import (
+    PointedConfiguration,
+    configuration_from_snapshot as pointed_configuration_from_snapshot,
+)
 from .coverage_core import (
     MAX_GRID_CELLS,
     MAX_YEAR_CELL_CONFIGURATIONS,
@@ -49,8 +56,10 @@ from .result_store import (
     get_result as _get_saved,
     paginate as _paginate,
     save_result as _save_result,
-    set_draft_conical_proposal as _set_proposal,
+    set_draft_study_proposal as _set_proposal,
 )
+
+InstrumentConfiguration = Union[ConicalConfiguration, PointedConfiguration]
 
 MAX_EVALUATED_CONFIGURATIONS = 1
 # Below this many cell-days, starting worker processes costs more than it saves.
@@ -126,7 +135,7 @@ def _check_grid_size(
 
 
 def _validate_applicability(
-    configuration: ConicalConfiguration, start: datetime, end: datetime
+    configuration: InstrumentConfiguration, start: datetime, end: datetime
 ) -> Tuple[datetime, datetime]:
     app_start = _parse_utc(
         iso_utc(configuration.applicability.start_utc), "applicability.start_utc"
@@ -164,13 +173,18 @@ def _consequential_payload(
     grid_rows: int,
     grid_columns: int,
     registry_selection: Optional[Dict[str, Any]] = None,
+    study_kind: str = "conical",
 ) -> Dict[str, Any]:
     satellite = stage["satellites"][0]
     start, end = _parse_window(stage)
     return {
-        "study_kind": "single_conical_configuration",
-        "schema_version": SCHEMA_VERSION,
-        "accounting_method": ACCOUNTING_METHOD,
+        "study_kind": f"single_{study_kind}_configuration",
+        "schema_version": snapshot["schema_version"],
+        "accounting_method": (
+            POINTED_ACCOUNTING_METHOD
+            if study_kind == "pointed"
+            else ACCOUNTING_METHOD
+        ),
         "window_start_utc": iso_utc(start),
         "window_end_utc_exclusive": iso_utc(end),
         "roi_bbox": [float(value) for value in stage["roi_bbox"]],
@@ -210,9 +224,10 @@ def _setup_revision(
     grid_rows: int,
     grid_columns: int,
     registry_selection: Optional[Dict[str, Any]] = None,
+    study_kind: str = "conical",
 ) -> Tuple[str, Dict[str, Any]]:
     consequential = _consequential_payload(
-        stage, snapshot, cells, grid_rows, grid_columns, registry_selection
+        stage, snapshot, cells, grid_rows, grid_columns, registry_selection, study_kind
     )
     return "sha256:" + _sha256(consequential), consequential
 
@@ -225,27 +240,36 @@ def _configuration_error(exc: ValidationError) -> str:
     return "; ".join(parts)
 
 
-def _load_configuration(configuration: Any) -> ConicalConfiguration:
-    if isinstance(configuration, ConicalConfiguration):
+def _load_configuration(configuration: Any, study_kind: str) -> InstrumentConfiguration:
+    expected = PointedConfiguration if study_kind == "pointed" else ConicalConfiguration
+    if isinstance(configuration, expected):
         return configuration
     if not isinstance(configuration, dict):
+        if study_kind == "conical":
+            raise ValueError(
+                "configuration must be one conical configuration object; "
+                "multi-instrument and multi-configuration studies are not supported "
+                "in this increment"
+            )
         raise ValueError(
-            "configuration must be one conical configuration object; "
-            "multi-instrument and multi-configuration studies are not supported "
-            "in this increment"
+            f"configuration must be one {study_kind} configuration object; "
+            "multiple configured instruments are not supported in this increment"
         )
     try:
-        return ConicalConfiguration.model_validate(configuration)
+        return expected.model_validate(configuration)
     except ValidationError as exc:
         raise ValueError(f"Configuration rejected: {_configuration_error(exc)}") from exc
 
 
 def _check_staged_spacecraft(
-    stage: Dict[str, Any], configuration: ConicalConfiguration
+    stage: Dict[str, Any],
+    configuration: InstrumentConfiguration,
+    study_kind: str,
 ) -> Dict[str, Any]:
     if len(stage["satellites"]) != 1:
         raise ValueError(
-            "Conical studies support exactly one spacecraft in this increment. "
+            f"{study_kind.capitalize()} studies support exactly one spacecraft "
+            "in this increment. "
             "Start a new draft with one satellite identifier."
         )
     satellite = stage["satellites"][0]
@@ -270,7 +294,11 @@ def _check_staged_spacecraft(
     return satellite
 
 
-def _limits(stage: Dict[str, Any], configuration: ConicalConfiguration, long_window: bool) -> List[str]:
+def _limits(
+    stage: Dict[str, Any],
+    configuration: InstrumentConfiguration,
+    long_window: bool,
+) -> List[str]:
     start, end = _parse_window(stage)
     limits = [
         *BASE_LIMITS,
@@ -286,7 +314,7 @@ def _limits(stage: Dict[str, Any], configuration: ConicalConfiguration, long_win
 
 
 def _warnings(
-    configuration: ConicalConfiguration,
+    configuration: InstrumentConfiguration,
     proposal: Optional[bool] = False,
     registry_selection: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
@@ -341,7 +369,7 @@ def _warnings(
 
 def _proposal_payload(
     stage: Dict[str, Any],
-    configuration: ConicalConfiguration,
+    configuration: InstrumentConfiguration,
     snapshot: Dict[str, Any],
     cells: Sequence[Dict[str, Any]],
     grid_rows: int,
@@ -349,6 +377,7 @@ def _proposal_payload(
     setup_revision: str,
     consequential: Dict[str, Any],
     registry_selection: Optional[Dict[str, Any]] = None,
+    study_kind: str = "conical",
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     long_window = end - start > SHORT_WINDOW_MAX
@@ -473,29 +502,31 @@ def _proposal_payload(
             "instruction": (
                 "Present the chosen source options, approximations, warnings, "
                 "region, grid, and window to the researcher. If they accept, "
-                "call the conical finish tool with this exact setup revision and "
+                f"call the {study_kind} finish tool with this exact setup revision and "
                 "accept_setup=true. Any change to a consequential setting "
                 "requires a new preparation and acceptance."
             ),
         },
         "next_step": (
             "Ask the researcher to accept this proposal. If accepted, call the "
-            "conical finish tool with draft_id, accepted_setup_revision set to "
+            f"{study_kind} finish tool with draft_id, accepted_setup_revision set to "
             f"{setup_revision!r}, and accept_setup=true. Do not add legacy "
-            "geometry arguments to the conical finish call."
+            f"geometry arguments to the {study_kind} finish call."
         ),
     }
 
 
-def prepare_conical_study(
+def _prepare_study(
     draft_id: Any,
     grid_rows: Any,
     grid_columns: Any,
     configuration: Any = None,
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
+    *,
+    study_kind: str,
 ) -> Dict[str, Any]:
-    """Resolve a sourced conical configuration into an acceptance proposal."""
+    """Resolve one sourced instrument configuration into a proposal."""
     registry_selection = None
     if configuration_id is not None or configuration_revision is not None:
         if configuration is not None:
@@ -510,20 +541,26 @@ def prepare_conical_study(
         resolved_configuration, registry_selection = resolve_instrument_configuration(
             configuration_id, configuration_revision
         )
+        expected = PointedConfiguration if study_kind == "pointed" else ConicalConfiguration
+        if not isinstance(resolved_configuration, expected):
+            raise ValueError(
+                f"Registry ID {configuration_id!r} does not identify a {study_kind} "
+                "configuration. Choose an exact revision from the matching lookup."
+            )
     else:
         if configuration is None:
             raise ValueError(
                 "Supply a study-specific configuration or an exact registry "
                 "configuration_id and configuration_revision"
             )
-        resolved_configuration = _load_configuration(configuration)
+        resolved_configuration = _load_configuration(configuration, study_kind)
     stage = copy.deepcopy(_get_draft(draft_id))
     if stage.get("roi_bbox") is None:
         raise ValueError(
-            "This draft has no region yet. Call the region tool with four "
-            "separate numeric bounds before preparing a conical study"
+            f"This draft has no region yet. Call the region tool with four "
+            f"separate numeric bounds before preparing a {study_kind} study"
         )
-    _check_staged_spacecraft(stage, resolved_configuration)
+    _check_staged_spacecraft(stage, resolved_configuration, study_kind)
     start, end = _parse_window(stage)
     _validate_applicability(resolved_configuration, start, end)
     cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
@@ -535,9 +572,17 @@ def prepare_conical_study(
     except ValueError:
         raise
     except Exception as exc:  # TAT-C object construction failures
-        raise ValueError(f"Could not resolve the conical configuration: {exc}") from exc
+        raise ValueError(
+            f"Could not resolve the {study_kind} configuration: {exc}"
+        ) from exc
     setup_revision, consequential = _setup_revision(
-        stage, snapshot, cells, grid_rows, grid_columns, registry_selection
+        stage,
+        snapshot,
+        cells,
+        grid_rows,
+        grid_columns,
+        registry_selection,
+        study_kind,
     )
     proposal = _proposal_payload(
         stage,
@@ -549,10 +594,12 @@ def prepare_conical_study(
         setup_revision,
         consequential,
         registry_selection,
+        study_kind,
     )
     proposal["draft_id"] = str(draft_id).strip()
     _set_proposal(
         draft_id,
+        study_kind,
         {
             "setup_revision": setup_revision,
             "grid_rows": int(grid_rows),
@@ -567,9 +614,49 @@ def prepare_conical_study(
     return proposal
 
 
+def prepare_conical_study(
+    draft_id: Any,
+    grid_rows: Any,
+    grid_columns: Any,
+    configuration: Any = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resolve a sourced conical configuration into an acceptance proposal."""
+    return _prepare_study(
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configuration,
+        configuration_id,
+        configuration_revision,
+        study_kind="conical",
+    )
+
+
+def prepare_pointed_study(
+    draft_id: Any,
+    grid_rows: Any,
+    grid_columns: Any,
+    configuration: Any = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resolve a sourced pointed configuration into an acceptance proposal."""
+    return _prepare_study(
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configuration,
+        configuration_id,
+        configuration_revision,
+        study_kind="pointed",
+    )
+
+
 def _tasks_for_cells(
     stage: Dict[str, Any],
-    configuration: ConicalConfiguration,
+    configuration: InstrumentConfiguration,
     cells: Sequence[Dict[str, Any]],
     start: datetime,
     end: datetime,
@@ -624,13 +711,15 @@ def _storage_note() -> Dict[str, Any]:
 
 def _result_payload(
     stage: Dict[str, Any],
-    configuration: ConicalConfiguration,
+    configuration: InstrumentConfiguration,
     proposal: Dict[str, Any],
     cells: Sequence[Dict[str, Any]],
     events: Sequence[Dict[str, Any]],
     accounting: Dict[str, Any],
     accepted_setup_revision: str,
     accepted_at_utc: datetime,
+    study_kind: str,
+    accounting_method: str,
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     snapshot = proposal["configuration"]
@@ -649,6 +738,7 @@ def _result_payload(
         "event_count": accounting["metrics"]["event_count"],
         "envelope_period_count": accounting["metrics"]["envelope_period_count"],
     }
+    result_kind = f"{study_kind}_study"
     provenance = {
         "setup_revision": accepted_setup_revision,
         "accepted_setup_revision": accepted_setup_revision,
@@ -680,8 +770,8 @@ def _result_payload(
         },
     }
     return {
-        "result_kind": "conical_study",
-        "accounting_method": ACCOUNTING_METHOD,
+        "result_kind": result_kind,
+        "accounting_method": accounting_method,
         "setup_revision": accepted_setup_revision,
         "accepted_setup_revision": accepted_setup_revision,
         "satellite": stage["satellite"],
@@ -738,6 +828,9 @@ def _result_payload(
             "observation_source": (
                 "TAT-C 3.6.0 collect_observations with one ConicalInstrument and "
                 "one satellite attitude velocity frame per grid-cell center."
+                if study_kind == "conical"
+                else "TAT-C 3.6.0 collect_observations with one PointedInstrument "
+                "using the accepted frame and attitude assumptions per grid-cell center."
             ),
             "event_source": (
                 "One row per valid TAT-C viewing epoch; the row's field-of-regard "
@@ -805,29 +898,40 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "storage": full["storage"],
         "evidence_note": full["evidence_note"],
         "fetch": (
-            "Use the viewing-event fetch tool for paged events, the daily fetch "
-            "for half-open UTC daily areas, the cell fetch for GeoJSON cells and "
-            "per-cell event counts, the revisit fetch for event-spacing metrics, "
-            "and the event-spacing fetch for paged per-cell spacing values. Do "
-            "not describe envelope periods as continuous viewing. Results expire "
-            "after 24 hours."
+            (
+                "Use the viewing-event fetch tool for paged events, the daily fetch "
+                "for half-open UTC daily areas, the cell fetch for GeoJSON cells and "
+                "per-cell event counts, the revisit fetch for event-spacing metrics, "
+                "and the event-spacing fetch for paged per-cell spacing values. "
+            )
+            if full["result_kind"] == "conical_study"
+            else (
+                "Use get_pointed_events, get_pointed_daily, get_pointed_cells, "
+                "get_pointed_revisit and get_pointed_event_spacing to page through "
+                "the saved pointed result. "
+            )
+        )
+        + (
+            "Do not describe field-of-regard periods as continuous viewing. Results "
+            "expire after 24 hours."
         ),
     }
 
 
-def finish_conical_study(
+def _finish_study(
     draft_id: Any,
     accepted_setup_revision: Any,
     accept_setup: Any,
     *,
+    study_kind: str,
     _max_workers: int = MAX_YEAR_WORKERS,
 ) -> Dict[str, Any]:
-    """Run only a fully accepted, current conical proposal."""
+    """Run only the current accepted proposal for one instrument family."""
     if not isinstance(accept_setup, bool):
         raise ValueError("accept_setup must be true or false")
     if accept_setup is not True:
         raise ValueError(
-            "The conical setup must be explicitly accepted before calculation. "
+            f"The {study_kind} setup must be explicitly accepted before calculation. "
             "Present the proposal to the researcher and call again with "
             "accept_setup=true only after they accept it."
         )
@@ -837,7 +941,7 @@ def finish_conical_study(
     ):
         raise ValueError(
             "accepted_setup_revision must be the setup_revision returned by the "
-            "conical preparation tool"
+            f"{study_kind} preparation tool"
         )
     if (
         isinstance(_max_workers, bool)
@@ -851,11 +955,11 @@ def finish_conical_study(
     # by concurrent tool calls, so later edits must not change the evidence
     # saved beside this result.
     stage = copy.deepcopy(_get_draft(draft_id))
-    proposal = stage.get("conical_proposal")
+    proposal = stage.get(f"{study_kind}_proposal")
     if not proposal:
         raise ValueError(
-            "This draft has no prepared conical proposal. Call the conical "
-            "preparation tool with the region, grid, and sourced configuration "
+            f"This draft has no prepared {study_kind} proposal. Call the "
+            f"{study_kind} preparation tool with the region, grid, and sourced configuration "
             "first."
         )
     proposed_revision = proposal["setup_revision"]
@@ -866,7 +970,15 @@ def finish_conical_study(
             f"proposal {proposed_revision!r}. If any consequential setting "
             "changed, prepare the study again and obtain a new acceptance."
         )
-    configuration = configuration_from_snapshot(proposal["configuration"])
+    if proposal["configuration"]["schema_version"] == "pointed-configuration-v1":
+        configuration = pointed_configuration_from_snapshot(proposal["configuration"])
+    elif proposal["configuration"]["schema_version"] == SCHEMA_VERSION:
+        configuration = conical_configuration_from_snapshot(proposal["configuration"])
+    else:
+        raise ValueError("Prepared proposal has an unsupported configuration schema")
+    expected = PointedConfiguration if study_kind == "pointed" else ConicalConfiguration
+    if not isinstance(configuration, expected):
+        raise ValueError("Prepared proposal does not match its instrument study kind")
     registry_selection = proposal.get("registry_selection")
     if registry_selection is not None:
         _, current_selection = resolve_instrument_configuration(
@@ -906,10 +1018,11 @@ def finish_conical_study(
         proposal["grid_rows"],
         proposal["grid_columns"],
         registry_selection,
+        study_kind,
     )
     if current_revision != proposed_revision:
         raise ValueError(
-            "The prepared conical setup is stale: a consequential draft setting "
+            f"The prepared {study_kind} setup is stale: a consequential draft setting "
             "(region, window, orbit, grid, configuration, or software version) "
             "changed after preparation. Prepare the study again and obtain a new "
             "acceptance. No calculation was run."
@@ -917,6 +1030,9 @@ def finish_conical_study(
     tasks = _tasks_for_cells(stage, configuration, cells, start, end)
     work = len(tasks) * (end - start).total_seconds() / 86400
     raw_events = _collect_tasks(tasks, _max_workers, work)
+    accounting_method = (
+        POINTED_ACCOUNTING_METHOD if study_kind == "pointed" else ACCOUNTING_METHOD
+    )
     events = normalize_events(
         raw_events,
         start,
@@ -924,7 +1040,16 @@ def finish_conical_study(
         applicability_start=configuration.applicability.start_utc,
         applicability_end=configuration.applicability.end_utc_exclusive,
     )
-    accounting = summarize_events(cells, events, start, end)
+    accounting = summarize_events(
+        cells,
+        events,
+        start,
+        end,
+        accounting_method=accounting_method,
+        event_definition=(
+            POINTED_EVENT_DEFINITION if study_kind == "pointed" else EVENT_DEFINITION
+        ),
+    )
     full = _result_payload(
         stage,
         configuration,
@@ -934,18 +1059,61 @@ def finish_conical_study(
         accounting,
         proposed_revision,
         _utcnow(),
+        study_kind,
+        accounting_method,
     )
     result_id = _save_result(full)
     return _compact_summary(full, result_id)
 
 
-def _conical_payload(result_id: Any) -> Tuple[str, Dict[str, Any]]:
+def finish_conical_study(
+    draft_id: Any,
+    accepted_setup_revision: Any,
+    accept_setup: Any,
+    *,
+    _max_workers: int = MAX_YEAR_WORKERS,
+) -> Dict[str, Any]:
+    """Run only a fully accepted, current conical proposal."""
+    return _finish_study(
+        draft_id,
+        accepted_setup_revision,
+        accept_setup,
+        study_kind="conical",
+        _max_workers=_max_workers,
+    )
+
+
+def finish_pointed_study(
+    draft_id: Any,
+    accepted_setup_revision: Any,
+    accept_setup: Any,
+    *,
+    _max_workers: int = MAX_YEAR_WORKERS,
+) -> Dict[str, Any]:
+    """Run only a fully accepted, current pointed proposal."""
+    return _finish_study(
+        draft_id,
+        accepted_setup_revision,
+        accept_setup,
+        study_kind="pointed",
+        _max_workers=_max_workers,
+    )
+
+
+def _study_payload(
+    result_id: Any, expected_result_kind: str
+) -> Tuple[str, Dict[str, Any]]:
     payload = _get_saved(result_id)
-    if payload.get("result_kind") != "conical_study":
+    if payload.get("result_kind") != expected_result_kind:
+        if expected_result_kind == "conical_study":
+            raise ValueError(
+                "This result is a legacy interval-based access run, not a conical "
+                "event study. Use the legacy daily, cell, and revisit fetches; "
+                "there is no viewing-event table for it."
+            )
         raise ValueError(
-            "This result is a legacy interval-based access run, not a conical "
-            "event study. Use the legacy daily, cell, and revisit fetches; there "
-            "is no viewing-event table for it."
+            f"This result is not a {expected_result_kind.replace('_', ' ')}. "
+            "Use the fetch tools that match the saved result kind."
         )
     return str(result_id).strip(), payload
 
@@ -977,9 +1145,15 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_conical_daily(result_id: Any, offset: Any = 0, limit: Any = 31) -> Dict[str, Any]:
+def get_conical_daily(
+    result_id: Any,
+    offset: Any = 0,
+    limit: Any = 31,
+    *,
+    _expected_result_kind: str = "conical_study",
+) -> Dict[str, Any]:
     _paginate([], offset, limit, "daily")
-    result_id, payload = _conical_payload(result_id)
+    result_id, payload = _study_payload(result_id, _expected_result_kind)
     page = _paginate(payload["daily"], offset, limit, "daily")
     return {
         **_header(result_id, payload),
@@ -991,7 +1165,12 @@ def get_conical_daily(result_id: Any, offset: Any = 0, limit: Any = 31) -> Dict[
 
 
 def get_conical_cells(
-    result_id: Any, include: Any = "all", offset: Any = 0, limit: Any = 144
+    result_id: Any,
+    include: Any = "all",
+    offset: Any = 0,
+    limit: Any = 144,
+    *,
+    _expected_result_kind: str = "conical_study",
 ) -> Dict[str, Any]:
     _paginate([], offset, limit, "cell")
     if not isinstance(include, str) or include.strip().lower() not in (
@@ -1002,7 +1181,7 @@ def get_conical_cells(
         raise ValueError(
             "include must be one of all, observed, or gaps, " f"got {include!r}"
         )
-    result_id, payload = _conical_payload(result_id)
+    result_id, payload = _study_payload(result_id, _expected_result_kind)
     wanted = include.strip().lower()
     features = []
     for cell in payload["grid_cells"]:
@@ -1057,8 +1236,10 @@ def get_conical_cells(
     }
 
 
-def get_conical_revisit(result_id: Any) -> Dict[str, Any]:
-    result_id, payload = _conical_payload(result_id)
+def get_conical_revisit(
+    result_id: Any, *, _expected_result_kind: str = "conical_study"
+) -> Dict[str, Any]:
+    result_id, payload = _study_payload(result_id, _expected_result_kind)
     return {
         **_header(result_id, payload),
         "instrument": payload["instrument"],
@@ -1080,10 +1261,14 @@ def get_conical_revisit(result_id: Any) -> Dict[str, Any]:
 
 
 def get_conical_events(
-    result_id: Any, offset: Any = 0, limit: Any = 100
+    result_id: Any,
+    offset: Any = 0,
+    limit: Any = 100,
+    *,
+    _expected_result_kind: str = "conical_study",
 ) -> Dict[str, Any]:
     _paginate([], offset, limit, "event")
-    result_id, payload = _conical_payload(result_id)
+    result_id, payload = _study_payload(result_id, _expected_result_kind)
     page = _paginate(payload["events"], offset, limit, "event")
     return {
         **_header(result_id, payload),
@@ -1095,10 +1280,14 @@ def get_conical_events(
 
 
 def get_conical_event_spacing(
-    result_id: Any, offset: Any = 0, limit: Any = 50
+    result_id: Any,
+    offset: Any = 0,
+    limit: Any = 50,
+    *,
+    _expected_result_kind: str = "conical_study",
 ) -> Dict[str, Any]:
     _paginate([], offset, limit, "event_spacing")
-    result_id, payload = _conical_payload(result_id)
+    result_id, payload = _study_payload(result_id, _expected_result_kind)
     page = _paginate(payload["event_spacing"], offset, limit, "event_spacing")
     return {
         **_header(result_id, payload),
@@ -1107,3 +1296,46 @@ def get_conical_event_spacing(
         "total_cells": page["total"],
         "event_spacing": page["items"],
     }
+
+
+def get_pointed_daily(result_id: Any, offset: Any = 0, limit: Any = 31) -> Dict[str, Any]:
+    """Fetch half-open UTC-day accounting for a pointed result."""
+    return get_conical_daily(
+        result_id, offset, limit, _expected_result_kind="pointed_study"
+    )
+
+
+def get_pointed_cells(
+    result_id: Any, include: Any = "all", offset: Any = 0, limit: Any = 144
+) -> Dict[str, Any]:
+    """Fetch paged GeoJSON cells for a pointed result."""
+    return get_conical_cells(
+        result_id,
+        include,
+        offset,
+        limit,
+        _expected_result_kind="pointed_study",
+    )
+
+
+def get_pointed_revisit(result_id: Any) -> Dict[str, Any]:
+    """Fetch summary event-spacing metrics for a pointed result."""
+    return get_conical_revisit(result_id, _expected_result_kind="pointed_study")
+
+
+def get_pointed_events(
+    result_id: Any, offset: Any = 0, limit: Any = 100
+) -> Dict[str, Any]:
+    """Fetch paged pointed-instrument viewing epochs."""
+    return get_conical_events(
+        result_id, offset, limit, _expected_result_kind="pointed_study"
+    )
+
+
+def get_pointed_event_spacing(
+    result_id: Any, offset: Any = 0, limit: Any = 50
+) -> Dict[str, Any]:
+    """Fetch per-cell event-spacing values for a pointed result."""
+    return get_conical_event_spacing(
+        result_id, offset, limit, _expected_result_kind="pointed_study"
+    )

@@ -20,6 +20,14 @@ from .conical_study import finish_conical_study as _finish_conical
 from .conical_study import get_conical_event_spacing as _conical_event_spacing
 from .conical_study import get_conical_events as _conical_events
 from .conical_study import prepare_conical_study as _prepare_conical
+from .conical_study import finish_pointed_study as _finish_pointed
+from .conical_study import get_pointed_cells as _pointed_cells
+from .conical_study import get_pointed_daily as _pointed_daily
+from .conical_study import get_pointed_event_spacing as _pointed_event_spacing
+from .conical_study import get_pointed_events as _pointed_events
+from .conical_study import get_pointed_revisit as _pointed_revisit
+from .conical_study import prepare_pointed_study as _prepare_pointed
+from .pointed_config import PointedConfiguration
 from .generic_coverage import get_access_cells as _access_cells
 from .generic_coverage import get_access_daily as _access_daily
 from .generic_coverage import get_access_revisit as _access_revisit
@@ -164,6 +172,16 @@ SERVER_INSTRUCTIONS = (
     "drafts expire after 24 hours and can be lost earlier on restart or "
     "capacity eviction. Study-specific settings are not promoted to a shared "
     "registry. "
+    "For a side-looking radar, use the pointed preparation and finish workflow. "
+    "Inspect the spacecraft-specific registry record, choose an exact revision, "
+    "and keep off-nadir look angles separate from ground incidence angles. "
+    "Preserve look direction, velocity and nadir frames, roll and pitch "
+    "assumptions, applicability, subswath ranges by altitude, evidence, measured "
+    "residuals, tolerances, and approximation warnings. A limited pointed record "
+    "requires researcher acceptance and does not establish an acquisition "
+    "schedule or mission capability. Use its pointed event, daily, cell, and "
+    "revisit fetches. Field-of-regard envelopes remain metadata; count access "
+    "only at valid TAT-C event epochs. "
     "Coverage is modeled access at each grid-cell center only: never claim "
     "every point of the region was scanned or that an acquisition occurred. "
     "A daily gap_area_km2 of 0 means every cell center had access that UTC "
@@ -958,6 +976,97 @@ def finish_conical_study(
         saved for paged retrieval, not returned in full.
     """
     return _finish_conical(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def prepare_pointed_study(
+    draft_id: str,
+    grid_rows: int,
+    grid_columns: int,
+    configuration: Optional[PointedConfiguration] = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Prepare one sourced pointed-instrument study without calculating.
+
+    Supply one complete typed pointed configuration or select an exact shared
+    configuration ID and revision returned by the lookup tool. Geometry must
+    state spacecraft, mode, look direction, off-nadir and incidence references
+    separately, cross-track and along-track angles, nadir and velocity frames,
+    roll and pitch assumptions, applicability, evidence, measured checks,
+    tolerances, and approximations. Multiple configured instruments are
+    rejected. No TAT-C analysis runs until the proposal is accepted.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Equal latitude partitions, 1 through 12.
+        grid_columns: Equal longitude partitions, 1 through 12.
+        configuration: One complete study-specific pointed configuration.
+        configuration_id: Exact shared registry ID, used with configuration_revision.
+        configuration_revision: Exact immutable shared registry revision.
+
+    Returns:
+        Proposal, source evidence, measured checks, warnings, and acceptance revision.
+    """
+    return _prepare_pointed(
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configuration,
+        configuration_id,
+        configuration_revision,
+    )
+
+
+@mcp.tool
+def finish_pointed_study(
+    draft_id: str,
+    accepted_setup_revision: str,
+    accept_setup: bool,
+) -> Dict[str, Any]:
+    """Run only the current accepted pointed study proposal."""
+    return _finish_pointed(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def get_pointed_events(
+    result_id: str, offset: int = 0, limit: int = 100
+) -> Dict[str, Any]:
+    """Fetch paged TAT-C pointed viewing epochs and envelope metadata."""
+    return _pointed_events(result_id, offset, limit)
+
+
+@mcp.tool
+def get_pointed_daily(
+    result_id: str, offset: int = 0, limit: int = 31
+) -> Dict[str, Any]:
+    """Fetch half-open UTC-day event accounting for a pointed study."""
+    return _pointed_daily(result_id, offset, limit)
+
+
+@mcp.tool
+def get_pointed_cells(
+    result_id: str,
+    include: str = "all",
+    offset: int = 0,
+    limit: int = 144,
+) -> Dict[str, Any]:
+    """Fetch paged GeoJSON cells and event counts for a pointed study."""
+    return _pointed_cells(result_id, include, offset, limit)
+
+
+@mcp.tool
+def get_pointed_revisit(result_id: str) -> Dict[str, Any]:
+    """Fetch event-spacing metrics for a pointed study."""
+    return _pointed_revisit(result_id)
+
+
+@mcp.tool
+def get_pointed_event_spacing(
+    result_id: str, offset: int = 0, limit: int = 50
+) -> Dict[str, Any]:
+    """Fetch paged per-cell event-spacing values for a pointed study."""
+    return _pointed_event_spacing(result_id, offset, limit)
 
 
 @mcp.tool

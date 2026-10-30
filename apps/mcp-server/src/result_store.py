@@ -105,9 +105,18 @@ def set_draft_region(draft_id: Any, roi_bbox: Any) -> Dict[str, Any]:
 
 def set_draft_conical_proposal(draft_id: Any, proposal: Dict[str, Any]) -> Dict[str, Any]:
     """Attach the latest conical proposal to a staged draft."""
+    return set_draft_study_proposal(draft_id, "conical", proposal)
+
+
+def set_draft_study_proposal(
+    draft_id: Any, study_kind: str, proposal: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Attach the latest instrument-study proposal to a staged draft."""
+    if study_kind not in ("conical", "pointed"):
+        raise ValueError(f"Unsupported study kind {study_kind!r}")
     with _lock:
         payload = _lookup_locked(_drafts, _DRAFT, draft_id)
-        payload["conical_proposal"] = proposal
+        payload[f"{study_kind}_proposal"] = proposal
         return payload
 
 

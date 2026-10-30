@@ -23,9 +23,11 @@ from pydantic import (
 )
 
 from .conical_config import ConicalConfiguration, SourceEvidence
+from .pointed_config import PointedConfiguration
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 REGISTRY_PATH = DATA_DIR / "instrument_configuration_registry.json"
+POINTED_REGISTRY_PATH = DATA_DIR / "pointed_instrument_configuration_registry.json"
 MAX_REFRESH_RECORDS = 256
 MAX_REFRESH_CANDIDATES = 32
 MAX_REFRESH_STATE_BYTES = 1_048_576
@@ -193,15 +195,18 @@ def _serialized_refresh_state_bytes(
     return len(_canonical_payload_bytes({"checks": checks, "candidates": candidates}))
 
 
-def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
+def _load_registry_entries(
+    registry_path: Path, schema_version: str, configuration_type: Any
+) -> List[Tuple[Any, Dict[str, Any]]]:
+    """Validate manifest paths, identities, and source checks for either model."""
     try:
-        manifest = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+        manifest = json.loads(registry_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read the instrument configuration registry: {exc}") from exc
-    if manifest.get("schema_version") != "instrument-configuration-registry-v1":
+    if manifest.get("schema_version") != schema_version:
         raise ValueError("Unsupported instrument configuration registry schema_version")
 
-    entries: List[Tuple[ConicalConfiguration, Dict[str, Any]]] = []
+    entries: List[Tuple[Any, Dict[str, Any]]] = []
     seen: set[Tuple[str, str]] = set()
     for raw_entry in manifest.get("entries", []):
         try:
@@ -212,7 +217,7 @@ def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
         if not config_path.is_relative_to(DATA_DIR.resolve()):
             raise ValueError("Registry configuration_path must remain inside the data directory")
         try:
-            configuration = ConicalConfiguration.model_validate_json(
+            configuration = configuration_type.model_validate_json(
                 config_path.read_text(encoding="utf-8")
             )
         except (OSError, ValidationError) as exc:
@@ -256,6 +261,30 @@ def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
             )
         )
     return entries
+
+
+def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
+    return _load_registry_entries(
+        REGISTRY_PATH, "instrument-configuration-registry-v1", ConicalConfiguration
+    )
+
+
+def _load_pointed_entries() -> List[Tuple[PointedConfiguration, Dict[str, Any]]]:
+    """Load pointed entries with the same source-state metadata as conical entries."""
+    entries = _load_registry_entries(
+        POINTED_REGISTRY_PATH,
+        "pointed-instrument-configuration-registry-v1",
+        PointedConfiguration,
+    )
+    for _configuration, metadata in entries:
+        metadata.update(_current_source_state(metadata["source_change_checks"]))
+        metadata["base_revision"] = None
+    return entries
+
+
+def _all_entries_with_refreshes() -> List[Tuple[Any, Dict[str, Any]]]:
+    """Return conical refresh candidates plus reviewed pointed base revisions."""
+    return [*_entries_with_refreshes(), *_load_pointed_entries()]
 
 
 def _current_source_state(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -872,7 +901,7 @@ def lookup_instrument_configurations(
         )
 
     candidates: List[Dict[str, Any]] = []
-    for configuration, registry_metadata in _entries_with_refreshes():
+    for configuration, registry_metadata in _all_entries_with_refreshes():
         if not _matches(instrument, [configuration.instrument]):
             continue
         if not _matches(
@@ -887,32 +916,39 @@ def lookup_instrument_configurations(
         if not _matches_exact(revision, configuration.revision):
             continue
 
-        candidates.append(
-            {
-                "configuration_id": configuration.configuration_id,
-                "revision": configuration.revision,
-                "instrument": configuration.instrument,
-                "spacecraft": configuration.spacecraft.model_dump(mode="json"),
-                "operating_mode": configuration.operating_mode,
-                "channel": configuration.channel.model_dump(mode="json"),
-                "applicability": configuration.applicability.model_dump(mode="json"),
-                "geometry": configuration.geometry.model_dump(mode="json"),
-                "evidence": [item.model_dump(mode="json") for item in configuration.evidence],
-                "geometry_checks": [
-                    item.model_dump(mode="json") for item in configuration.geometry_checks
-                ],
-                "source_revision": configuration.source_revision.model_dump(mode="json"),
-                "interpretation": configuration.interpretation.model_dump(mode="json"),
-                "approximation_status": configuration.approximation_status,
-                "approximations": [
-                    item.model_dump(mode="json") for item in configuration.approximations
-                ],
-                "source_conflicts": [
-                    item.model_dump(mode="json") for item in configuration.source_conflicts
-                ],
-                **registry_metadata,
-            }
-        )
+        candidate = {
+            "configuration_id": configuration.configuration_id,
+            "revision": configuration.revision,
+            "instrument": configuration.instrument,
+            "spacecraft": configuration.spacecraft.model_dump(mode="json"),
+            "operating_mode": configuration.operating_mode,
+            "channel": configuration.channel.model_dump(mode="json"),
+            "applicability": configuration.applicability.model_dump(mode="json"),
+            "geometry": configuration.geometry.model_dump(mode="json"),
+            "evidence": [item.model_dump(mode="json") for item in configuration.evidence],
+            "geometry_checks": [
+                item.model_dump(mode="json") for item in configuration.geometry_checks
+            ],
+            "source_revision": configuration.source_revision.model_dump(mode="json"),
+            "interpretation": configuration.interpretation.model_dump(mode="json"),
+            "approximation_status": configuration.approximation_status,
+            "approximations": [
+                item.model_dump(mode="json") for item in configuration.approximations
+            ],
+            "source_conflicts": [
+                item.model_dump(mode="json") for item in configuration.source_conflicts
+            ],
+            **registry_metadata,
+        }
+        if isinstance(configuration, PointedConfiguration):
+            candidate["reference_cases"] = [
+                item.model_dump(mode="json") for item in configuration.reference_cases
+            ]
+            candidate["mission_reference_checks"] = [
+                item.model_dump(mode="json")
+                for item in configuration.mission_reference_checks
+            ]
+        candidates.append(candidate)
 
     candidates.sort(key=lambda item: (item["configuration_id"], item["revision"]))
     count = len(candidates)
@@ -934,14 +970,14 @@ def lookup_instrument_configurations(
 
 def resolve_instrument_configuration(
     configuration_id: str, revision: Optional[str]
-) -> Tuple[ConicalConfiguration, Dict[str, Any]]:
+) -> Tuple[Any, Dict[str, Any]]:
     """Resolve an exact revision; never infer a latest revision."""
     if not configuration_id or not configuration_id.strip():
         raise ValueError("configuration_id must be a non-empty registry ID")
     if not revision or not revision.strip():
         matches = [
             configuration.revision
-            for configuration, _ in _entries_with_refreshes()
+            for configuration, _ in _all_entries_with_refreshes()
             if configuration.configuration_id == configuration_id.strip()
         ]
         raise ValueError(
@@ -949,7 +985,7 @@ def resolve_instrument_configuration(
             "Choose one exact revision returned by the configuration lookup tool. "
             f"Available revisions: {', '.join(matches) or 'none'}"
         )
-    for configuration, metadata in _entries_with_refreshes():
+    for configuration, metadata in _all_entries_with_refreshes():
         if (
             configuration.configuration_id == configuration_id.strip()
             and configuration.revision == revision.strip()

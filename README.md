@@ -32,7 +32,7 @@ To build the image locally instead (e.g. to test before pushing):
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
 
-See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical-scanning studies.
+See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical and pointed-instrument studies.
 
 ### Tool-calling eval
 

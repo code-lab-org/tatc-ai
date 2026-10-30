@@ -2,7 +2,13 @@
 
 from datetime import datetime, timezone
 
-from eval.cases import CONICAL_CONFIG, Call, Clock, Trace, build_cases
+from eval.cases import (
+    CONICAL_CONFIG,
+    Call,
+    Clock,
+    Trace,
+    build_cases,
+)
 
 
 def _clock():
@@ -654,3 +660,104 @@ def test_conical_rejection_eval_rejects_legacy_calculations():
             final="The applicability interval and source evidence are insufficient.",
         )
         assert not case.checks(trace, clock)["did_not_finish"]
+
+
+def test_pointed_eval_region_check_uses_latitude_longitude_order():
+    clock = Clock(datetime(2026, 10, 9, 18, 56, 47, tzinfo=timezone.utc))
+    case = next(
+        case for case in build_cases(clock) if case.id == "pointed_s1c_iw_complete"
+    )
+    summary = {
+        "result_id": "result-1",
+        "window_start_utc": "2026-10-10T00:00:00Z",
+        "window_end_utc_exclusive": "2026-10-10T02:00:00Z",
+        "roi_bbox": [80.435, 17.482, 80.440, 17.488],
+    }
+    trace = Trace(
+        prompt=case.prompt,
+        calls=[Call("finish_pointed_study", {}, False, "{}", parsed=summary)],
+    )
+
+    assert case.checks(trace, clock)["window_and_region"]
+
+
+def test_pointed_eval_requires_choices_before_any_study_setup():
+    clock = _clock()
+    case = next(
+        case
+        for case in build_cases(clock)
+        if case.id == "pointed_registry_choices_before_acceptance"
+    )
+    configuration_id = "sentinel-1c-c-sar-iw-fixed-view"
+    candidate = {
+        "configuration_id": configuration_id,
+        "revision": "2026-10-30.1",
+        "spacecraft": {"name": "Sentinel-1C", "norad_id": 62261},
+        "operating_mode": "IW",
+        "approximation_status": "limited",
+    }
+    trace = Trace(
+        prompt=case.prompt,
+        calls=[
+            Call(
+                "lookup_instrument_configurations",
+                {"instrument": "C-SAR", "spacecraft": "Sentinel-1"},
+                False,
+                "{}",
+                parsed={
+                    "candidate_count": 1,
+                    "selection_required": True,
+                    "selection": None,
+                    "candidates": [candidate],
+                },
+            )
+        ],
+        final=(
+            "Exactly one supported option is in the registry: Sentinel-1C C-SAR in IW: "
+            f"{configuration_id}, revision 2026-10-30.1. It is limited: a fixed "
+            "roll approximates steering, one rectangular view represents the IW "
+            "subswaths, and the along-track view uses the antenna beam width. "
+            "Would you like me to proceed with this exact spacecraft and mode "
+            "and accept these approximations?"
+        ),
+    )
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace.calls.insert(
+        0,
+        Call(
+            "lookup_instrument_configurations",
+            {"instrument": "C-SAR"},
+            False,
+            "{}",
+            parsed={
+                "candidate_count": 0,
+                "selection_required": False,
+                "selection": None,
+                "candidates": [],
+            },
+        ),
+    )
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    prematurely_prepared = Trace(
+        prompt=case.prompt,
+        calls=[
+            *trace.calls,
+            Call(
+                "prepare_pointed_study",
+                {"configuration_id": configuration_id},
+                False,
+                "{}",
+                parsed={"configuration_id": configuration_id},
+            ),
+        ],
+        final=trace.final,
+    )
+    checks = case.checks(prematurely_prepared, clock)
+    assert checks["looked_up_supported_options"]
+    assert checks["identified_spacecraft_and_mode"]
+    assert checks["presented_modeling_choices"]
+    assert not checks["asked_before_study_setup"]

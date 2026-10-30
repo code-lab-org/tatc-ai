@@ -1,0 +1,26 @@
+{
+  "schema_version": "pointed-instrument-configuration-registry-v1",
+  "entries": [
+    {
+      "configuration_path": "configurations/sentinel-1c-c-sar-iw-fixed-view-2026-10-30.1.json",
+      "registry_status": "reviewed_shared",
+      "source_change_checks": [
+        {
+          "check_id": "s1c-iw-initial-inclusion-2026-10-30",
+          "kind": "initial_inclusion",
+          "status": "checked",
+          "checked_at_utc": "2026-10-30T16:17:10Z",
+          "checked_source_revision_id": "s1c-iw-evidence-2026-10-30",
+          "reported_by": "assistant",
+          "summary": "Checked the source-backed geometry and applicability against Product Definition v2.13, TAT-C 3.6.0 Sentinel-1C product references, current Copernicus mission status and the fixed CelesTrak OMM. Fixed-roll model remains limited.",
+          "evidence_ids": [
+            "tatc-s1c-iw-validation",
+            "sentinel1-product-definition-v213",
+            "copernicus-s1-mission-status",
+            "celestrak-s1c-omm"
+          ]
+        }
+      ]
+    }
+  ]
+}
