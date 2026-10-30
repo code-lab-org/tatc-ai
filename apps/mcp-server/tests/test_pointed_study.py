@@ -230,6 +230,10 @@ def test_ambiguous_spacecraft_lookup_returns_candidates_without_selecting_one(mo
         (lambda data: data["geometry"].update(cross_track_field_of_view={"value": 0, "unit": "degree"}), "cross_track_field_of_view"),
         (lambda data: data["evidence"].pop(), "evidence"),
         (lambda data: data.update(operating_mode="EW"), "IW"),
+        (lambda data: data["geometry"].update(off_nadir_source_precision_deg=True), "off_nadir_source_precision_deg"),
+        (lambda data: data["geometry"].update(maximum_roll_steering_delta_deg=True), "maximum_roll_steering_delta_deg"),
+        (lambda data: data["reference_cases"][0].update(epoch_tolerance_ms=True), "epoch_tolerance_ms"),
+        (lambda data: data.update(approximation_status="supported"), "approximation_status"),
     ],
 )
 def test_pointed_configuration_rejects_incompatible_or_unsupported_inputs(mutation, message):

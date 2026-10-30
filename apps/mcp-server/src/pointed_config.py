@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError, model_validator
 
 from .conical_config import (
     Angle,
@@ -72,7 +72,7 @@ class SubswathAngleReference(_StrictModel):
 
     subswath: Literal["IW1", "IW2", "IW3"]
     altitude_reference: Literal["minimum", "maximum"]
-    satellite_altitude_km: float = Field(gt=0)
+    satellite_altitude_km: StrictFloat = Field(gt=0)
     off_nadir: AngleRange
     incidence: AngleRange
     evidence_ids: List[str] = Field(min_length=1)
@@ -114,7 +114,7 @@ class PointedGeometry(_StrictModel):
             "before doubling it into a total field of regard."
         )
     )
-    off_nadir_source_precision_deg: float = Field(gt=0, le=1)
+    off_nadir_source_precision_deg: StrictFloat = Field(gt=0, le=1)
     cross_track_field_of_view: Angle
     along_track_field_of_view: Angle
     roll_angle: Angle
@@ -125,14 +125,14 @@ class PointedGeometry(_StrictModel):
     is_rectangular: Literal[True]
     along_track_view_definition: Literal["full_azimuth_antenna_beam_width"]
     attitude: AttitudeAssumptions
-    source_altitude_minimum_km: float = Field(gt=0)
-    source_altitude_maximum_km: float = Field(gt=0)
+    source_altitude_minimum_km: StrictFloat = Field(gt=0)
+    source_altitude_maximum_km: StrictFloat = Field(gt=0)
     observed_roll_range: AngleRange
-    minimum_ground_swath_width_km: float = Field(gt=0)
+    minimum_ground_swath_width_km: StrictFloat = Field(gt=0)
     azimuth_beam_width: Angle
     azimuth_steering_range: AngleRange
-    roll_steering_reference_altitude_km: float = Field(gt=0)
-    maximum_roll_steering_delta_deg: float = Field(gt=0)
+    roll_steering_reference_altitude_km: StrictFloat = Field(gt=0)
+    maximum_roll_steering_delta_deg: StrictFloat = Field(gt=0)
     source_subswath_angles: List[SubswathAngleReference] = Field(min_length=6)
     geometry_evidence_ids: List[str] = Field(min_length=1)
 
@@ -276,10 +276,10 @@ class PointedReferenceCase(_StrictModel):
     fixture_case_id: str = Field(min_length=1)
     orbit_direction: Literal["ascending", "descending"]
     expected_event_count: Literal[0, 1]
-    measured_epoch_residual_ms: Optional[float] = Field(default=None, ge=0)
-    measured_position_residual_m: Optional[float] = Field(default=None, ge=0)
-    epoch_tolerance_ms: float = Field(gt=0)
-    position_tolerance_m: float = Field(gt=0)
+    measured_epoch_residual_ms: Optional[StrictFloat] = Field(default=None, ge=0)
+    measured_position_residual_m: Optional[StrictFloat] = Field(default=None, ge=0)
+    epoch_tolerance_ms: StrictFloat = Field(gt=0)
+    position_tolerance_m: StrictFloat = Field(gt=0)
     tolerance_basis: str = Field(min_length=1)
     evidence_ids: List[str] = Field(min_length=1)
 
@@ -306,9 +306,9 @@ class MissionReferenceCheck(_StrictModel):
     check_id: str = Field(min_length=1)
     source_evidence_id: str = Field(min_length=1)
     comparison_target: str = Field(min_length=1)
-    sample_sizes: Dict[str, int] = Field(min_length=1)
-    measured_residuals: Dict[str, float] = Field(min_length=1)
-    tolerance_limits: Dict[str, float] = Field(min_length=1)
+    sample_sizes: Dict[str, StrictInt] = Field(min_length=1)
+    measured_residuals: Dict[str, StrictFloat] = Field(min_length=1)
+    tolerance_limits: Dict[str, StrictFloat] = Field(min_length=1)
     tolerance_directions: Dict[str, Literal["at_most", "at_least"]] = Field(min_length=1)
     tolerance_basis: str = Field(min_length=1)
     status: Literal["reference_only"] = "reference_only"
@@ -342,9 +342,9 @@ class PointedGeometryCheck(_StrictModel):
     check_id: str = Field(min_length=1)
     description: str = Field(min_length=1)
     method: str = Field(min_length=1)
-    measured_value: float
+    measured_value: StrictFloat
     unit: str = Field(min_length=1)
-    tolerance: float = Field(gt=0)
+    tolerance: StrictFloat = Field(gt=0)
     tolerance_basis: str = Field(min_length=1)
     relation: Literal["at_most", "at_least"] = "at_most"
     status: Literal["passed", "limited"]
@@ -380,7 +380,7 @@ class PointedConfiguration(_StrictModel):
     evidence: List[SourceEvidence] = Field(min_length=1)
     source_revision: SourceRevision
     interpretation: Interpretation
-    approximation_status: Literal["supported", "approximate", "limited"]
+    approximation_status: Literal["approximate", "limited"]
     approximations: List[Approximation] = Field(min_length=1)
     source_conflicts: List[SourceConflict] = Field(default_factory=list)
     reference_cases: List[PointedReferenceCase] = Field(min_length=4)
@@ -436,8 +436,6 @@ class PointedConfiguration(_StrictModel):
 
         if self.interpretation.selected_mode != self.operating_mode:
             raise ValueError("interpretation.selected_mode must match operating_mode 'IW'")
-        if self.approximation_status == "supported":
-            raise ValueError("the fixed IW view requires an accepted approximation status")
         if not any(
             case.expected_event_count == 1 and case.orbit_direction == "ascending"
             for case in self.reference_cases
@@ -456,12 +454,6 @@ class PointedConfiguration(_StrictModel):
             raise ValueError(
                 "mission product residuals must state that they do not validate "
                 "the TAT-C access geometry"
-            )
-        if any(check.status == "limited" for check in self.geometry_checks) and (
-            self.approximation_status == "supported"
-        ):
-            raise ValueError(
-                "a configuration with limited geometry checks cannot be marked supported"
             )
         return self
 

@@ -195,15 +195,18 @@ def _serialized_refresh_state_bytes(
     return len(_canonical_payload_bytes({"checks": checks, "candidates": candidates}))
 
 
-def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
+def _load_registry_entries(
+    registry_path: Path, schema_version: str, configuration_type: Any
+) -> List[Tuple[Any, Dict[str, Any]]]:
+    """Validate manifest paths, identities, and source checks for either model."""
     try:
-        manifest = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+        manifest = json.loads(registry_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read the instrument configuration registry: {exc}") from exc
-    if manifest.get("schema_version") != "instrument-configuration-registry-v1":
+    if manifest.get("schema_version") != schema_version:
         raise ValueError("Unsupported instrument configuration registry schema_version")
 
-    entries: List[Tuple[ConicalConfiguration, Dict[str, Any]]] = []
+    entries: List[Tuple[Any, Dict[str, Any]]] = []
     seen: set[Tuple[str, str]] = set()
     for raw_entry in manifest.get("entries", []):
         try:
@@ -214,7 +217,7 @@ def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
         if not config_path.is_relative_to(DATA_DIR.resolve()):
             raise ValueError("Registry configuration_path must remain inside the data directory")
         try:
-            configuration = ConicalConfiguration.model_validate_json(
+            configuration = configuration_type.model_validate_json(
                 config_path.read_text(encoding="utf-8")
             )
         except (OSError, ValidationError) as exc:
@@ -260,72 +263,22 @@ def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
     return entries
 
 
-def _load_pointed_entries() -> List[Tuple[PointedConfiguration, Dict[str, Any]]]:
-    """Load the immutable, independently reviewed pointed configuration set."""
-    try:
-        manifest = json.loads(POINTED_REGISTRY_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"Could not read the pointed instrument configuration registry: {exc}"
-        ) from exc
-    if manifest.get("schema_version") != "pointed-instrument-configuration-registry-v1":
-        raise ValueError("Unsupported pointed instrument registry schema_version")
+def _load_entries() -> List[Tuple[ConicalConfiguration, Dict[str, Any]]]:
+    return _load_registry_entries(
+        REGISTRY_PATH, "instrument-configuration-registry-v1", ConicalConfiguration
+    )
 
-    entries: List[Tuple[PointedConfiguration, Dict[str, Any]]] = []
-    seen: set[Tuple[str, str]] = set()
-    for raw_entry in manifest.get("entries", []):
-        try:
-            entry = RegistryEntry.model_validate(raw_entry)
-        except ValidationError as exc:
-            raise ValueError(f"Invalid pointed registry entry: {exc}") from exc
-        config_path = (DATA_DIR / entry.configuration_path).resolve()
-        if not config_path.is_relative_to(DATA_DIR.resolve()):
-            raise ValueError(
-                "Registry configuration_path must remain inside the data directory"
-            )
-        try:
-            configuration = PointedConfiguration.model_validate_json(
-                config_path.read_text(encoding="utf-8")
-            )
-        except (OSError, ValidationError) as exc:
-            raise ValueError(
-                f"Invalid pointed configuration in {entry.configuration_path}: {exc}"
-            ) from exc
-        key = (configuration.configuration_id, configuration.revision)
-        if key in seen:
-            raise ValueError(
-                "Registry configuration IDs and revisions must be unique; "
-                f"duplicate {key[0]!r} revision {key[1]!r}"
-            )
-        seen.add(key)
-        evidence_ids = {item.evidence_id for item in configuration.evidence}
-        for check in entry.source_change_checks:
-            if (
-                check.kind == "initial_inclusion"
-                and check.checked_source_revision_id
-                != configuration.source_revision.revision_id
-            ):
-                raise ValueError(
-                    f"Source check {check.check_id!r} does not match the pointed "
-                    "configuration's source_revision"
-                )
-            missing_evidence = set(check.evidence_ids) - evidence_ids
-            if missing_evidence:
-                raise ValueError(
-                    f"Source check {check.check_id!r} references unknown evidence: "
-                    + ", ".join(sorted(missing_evidence))
-                )
-        checks = [check.model_dump(mode="json") for check in entry.source_change_checks]
-        metadata = {
-            "registry_status": entry.registry_status,
-            "source_change_checks": checks,
-            "current_source_status": checks[-1]["status"] if checks else "unchecked",
-            "source_change_notices": [],
-            "refresh_uncertainty": [],
-            "superseded_refresh_failures": [],
-            "base_revision": None,
-        }
-        entries.append((configuration, metadata))
+
+def _load_pointed_entries() -> List[Tuple[PointedConfiguration, Dict[str, Any]]]:
+    """Load pointed entries with the same source-state metadata as conical entries."""
+    entries = _load_registry_entries(
+        POINTED_REGISTRY_PATH,
+        "pointed-instrument-configuration-registry-v1",
+        PointedConfiguration,
+    )
+    for _configuration, metadata in entries:
+        metadata.update(_current_source_state(metadata["source_change_checks"]))
+        metadata["base_revision"] = None
     return entries
 
 
