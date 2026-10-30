@@ -1,0 +1,638 @@
+{
+  "schema_version": "pointed-configuration-v1",
+  "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+  "revision": "2026-10-30.1",
+  "instrument": "C-SAR",
+  "spacecraft": {
+    "name": "Sentinel-1C",
+    "aliases": [
+      "S1C",
+      "SENTINEL-1C"
+    ],
+    "norad_id": 62261,
+    "orbit_provider": "celestrak",
+    "orbit_provider_identifier": "62261"
+  },
+  "operating_mode": "IW",
+  "channel": {
+    "name": "C-band",
+    "center_frequency_ghz": 5.405,
+    "polarization": "VV/VH/HH/HV",
+    "notes": "C-SAR carrier frequency; polarization is selected per acquisition and is not modeled by access geometry."
+  },
+  "applicability": {
+    "start_utc": "2026-10-02T00:00:00Z",
+    "end_utc_exclusive": "2026-10-31T00:00:00Z",
+    "evidence_ids": [
+      "tatc-s1c-iw-validation",
+      "copernicus-s1-mission-status",
+      "sentinel1-product-definition-v213"
+    ],
+    "basis": "The modeled record is limited to the evidence window beginning with the exact Sentinel-1C Level-1 product day used by the TAT-C reference and ending at the 2026-10-30 source-check cutoff (exclusive at the next UTC day). This is an evidence boundary, not a claimed mission end date or acquisition schedule. Earlier and later dates are not established by this registry revision."
+  },
+  "geometry": {
+    "model_family": "pointed",
+    "look_direction": "right",
+    "reference_frame": "earth_fixed_velocity_frame",
+    "off_nadir_reference": "geodetic_nadir",
+    "incidence_reference": "ellipsoid_surface_normal",
+    "off_nadir_view_range": {
+      "minimum": {
+        "value": 27.1,
+        "unit": "degree"
+      },
+      "maximum": {
+        "value": 40.4,
+        "unit": "degree"
+      }
+    },
+    "incidence_view_range": {
+      "minimum": {
+        "value": 30.4,
+        "unit": "degree"
+      },
+      "maximum": {
+        "value": 46.0,
+        "unit": "degree"
+      }
+    },
+    "field_of_regard": {
+      "value": 82.8,
+      "unit": "degree"
+    },
+    "field_of_regard_margin": {
+      "value": 1.0,
+      "unit": "degree"
+    },
+    "off_nadir_source_precision_deg": 0.1,
+    "cross_track_field_of_view": {
+      "value": 13.3,
+      "unit": "degree"
+    },
+    "along_track_field_of_view": {
+      "value": 0.23,
+      "unit": "degree"
+    },
+    "roll_angle": {
+      "value": -33.8,
+      "unit": "degree"
+    },
+    "pitch_angle": {
+      "value": 0.0,
+      "unit": "degree"
+    },
+    "nadir_reference": "geodetic",
+    "velocity_frame": "earth_fixed",
+    "view_geometry": "frame",
+    "is_rectangular": true,
+    "along_track_view_definition": "full_azimuth_antenna_beam_width",
+    "attitude": {
+      "yaw_reference": "zero_doppler",
+      "roll_profile": "fixed",
+      "roll_assumption": "Use the measured IW median roll of 33.76 degrees, rounded to 33.8 degrees and signed negative for TAT-C right-looking geometry. This fixed profile does not represent orbit-dependent roll steering; the source reports roll/look-angle variation up to about 2.5 degrees.",
+      "pitch_assumption": "Zero pitch is the explicit TAT-C mapping assumption; the cited Sentinel-1C geometry reference does not provide a pitch telemetry profile.",
+      "roll_angle": {
+        "value": -33.8,
+        "unit": "degree"
+      },
+      "pitch_angle": {
+        "value": 0.0,
+        "unit": "degree"
+      }
+    },
+    "source_altitude_minimum_km": 698.0,
+    "source_altitude_maximum_km": 726.0,
+    "observed_roll_range": {
+      "minimum": {
+        "value": 32.4,
+        "unit": "degree"
+      },
+      "maximum": {
+        "value": 34.3,
+        "unit": "degree"
+      }
+    },
+    "minimum_ground_swath_width_km": 250.0,
+    "azimuth_beam_width": {
+      "value": 0.23,
+      "unit": "degree"
+    },
+    "azimuth_steering_range": {
+      "minimum": {
+        "value": -0.6,
+        "unit": "degree"
+      },
+      "maximum": {
+        "value": 0.6,
+        "unit": "degree"
+      }
+    },
+    "roll_steering_reference_altitude_km": 711.7,
+    "maximum_roll_steering_delta_deg": 0.8,
+    "source_subswath_angles": [
+      {
+        "subswath": "IW1",
+        "altitude_reference": "minimum",
+        "satellite_altitude_km": 698.0,
+        "off_nadir": {
+          "minimum": {
+            "value": 27.53,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 32.48,
+            "unit": "degree"
+          }
+        },
+        "incidence": {
+          "minimum": {
+            "value": 30.86,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 36.59,
+            "unit": "degree"
+          }
+        },
+        "evidence_ids": [
+          "sentinel1-product-definition-v213"
+        ]
+      },
+      {
+        "subswath": "IW2",
+        "altitude_reference": "minimum",
+        "satellite_altitude_km": 698.0,
+        "off_nadir": {
+          "minimum": {
+            "value": 32.38,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 36.96,
+            "unit": "degree"
+          }
+        },
+        "incidence": {
+          "minimum": {
+            "value": 36.47,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 41.85,
+            "unit": "degree"
+          }
+        },
+        "evidence_ids": [
+          "sentinel1-product-definition-v213"
+        ]
+      },
+      {
+        "subswath": "IW3",
+        "altitude_reference": "minimum",
+        "satellite_altitude_km": 698.0,
+        "off_nadir": {
+          "minimum": {
+            "value": 36.87,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 40.4,
+            "unit": "degree"
+          }
+        },
+        "incidence": {
+          "minimum": {
+            "value": 41.75,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 46.0,
+            "unit": "degree"
+          }
+        },
+        "evidence_ids": [
+          "sentinel1-product-definition-v213"
+        ]
+      },
+      {
+        "subswath": "IW1",
+        "altitude_reference": "maximum",
+        "satellite_altitude_km": 726.0,
+        "off_nadir": {
+          "minimum": {
+            "value": 26.0,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 30.96,
+            "unit": "degree"
+          }
+        },
+        "incidence": {
+          "minimum": {
+            "value": 29.16,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 34.89,
+            "unit": "degree"
+          }
+        },
+        "evidence_ids": [
+          "sentinel1-product-definition-v213"
+        ]
+      },
+      {
+        "subswath": "IW2",
+        "altitude_reference": "maximum",
+        "satellite_altitude_km": 726.0,
+        "off_nadir": {
+          "minimum": {
+            "value": 30.86,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 35.43,
+            "unit": "degree"
+          }
+        },
+        "incidence": {
+          "minimum": {
+            "value": 34.77,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 40.15,
+            "unit": "degree"
+          }
+        },
+        "evidence_ids": [
+          "sentinel1-product-definition-v213"
+        ]
+      },
+      {
+        "subswath": "IW3",
+        "altitude_reference": "maximum",
+        "satellite_altitude_km": 726.0,
+        "off_nadir": {
+          "minimum": {
+            "value": 35.35,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 38.88,
+            "unit": "degree"
+          }
+        },
+        "incidence": {
+          "minimum": {
+            "value": 40.04,
+            "unit": "degree"
+          },
+          "maximum": {
+            "value": 44.28,
+            "unit": "degree"
+          }
+        },
+        "evidence_ids": [
+          "sentinel1-product-definition-v213"
+        ]
+      }
+    ],
+    "geometry_evidence_ids": [
+      "tatc-s1c-iw-validation",
+      "sentinel1-product-definition-v213"
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_id": "tatc-s1c-iw-validation",
+      "authority": "TAT-C project (Arizona State University)",
+      "title": "Side-Looking SAR Validation: Sentinel-1C",
+      "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateSARSentinel1.html",
+      "document_revision": "TAT-C 3.6.0 validation notebook; product analysis day 2026-10-02",
+      "locator": "Reference Data; Tests 2\u20136; notebook Summary",
+      "excerpt": "For Sentinel-1C products on 2026-10-02, all 402 IW products are right-looking; IW median near/far geodetic look angles are 27.13/40.39 degrees, incidence angles 30.41/45.98 degrees, roll 33.76 degrees, and cross-track field of view 13.26 degrees. Zero-Doppler geometry matches Earth-fixed velocity within 0.00150 degrees. Look angles vary smoothly by up to about 2.5 degrees over the orbit. Fixed-roll Test 6 uses 2,990 edge comparisons and reports near/far cross-track p95 residuals 14.29/20.58 km and maxima 23.83/37.04 km. Fixed-roll IW footprint IoU is median 0.925 and fifth percentile 0.865 over 402 products. Earth-fixed observation-time test reports 750 points, zero missed, absolute p95 0.439 s, maximum 0.495 s. The notebook's along-track field of view is tailored to a roughly 5-second footprint step; that value is not the 0.23-degree physical antenna beam width mapped by this configuration.",
+      "retrieved_at_utc": "2026-10-30T16:17:10Z",
+      "interpretation": "This is the spacecraft-specific reference data and TAT-C mapping context. It reports mission-product comparisons but does not validate this repository's exact adapter or prove any acquisition schedule.",
+      "supports": [
+        "identity.spacecraft",
+        "identity.operating_mode",
+        "geometry.look_direction",
+        "geometry.off_nadir_ranges",
+        "geometry.incidence_ranges",
+        "geometry.field_of_regard",
+        "geometry.cross_track_field_of_view",
+        "geometry.roll_attitude",
+        "geometry.reference_frame",
+        "geometry.nadir_reference",
+        "geometry.velocity_frame",
+        "geometry.view_geometry",
+        "geometry.pitch_attitude",
+        "applicability.start"
+      ]
+    },
+    {
+      "evidence_id": "sentinel1-product-definition-v213",
+      "authority": "European Space Agency / Copernicus Sentinel-1 Mission",
+      "title": "Sentinel-1 Product Definition",
+      "url": "https://sentiwiki.copernicus.eu/__attachments/a_343020cd67157ee306363c81c9963d6e0ed60b436ea1d5e9bace1595d8ab40b9/S1-RS-MDA-52-7440_Sentinel-1-Product-Definition-v2.13.pdf?cb=9d5ad6f78060502a54f924a898f08f45",
+      "document_revision": "S1-RS-MDA-52-7440, revision 2.13, 2026-07-30",
+      "locator": "Tables 3-1, 3-4 and 3-5",
+      "excerpt": "C-SAR operates at 5.405 GHz, looks right, and has a 0.23-degree azimuth antenna beam width. IW has at least 250 km ground swath, three TOPSAR subswaths and azimuth steering of plus or minus 0.6 degrees. The product gives separate off-nadir and incidence ranges for IW1/IW2/IW3 at reference altitudes near 698 km and 726 km. The attitude section specifies zero-Doppler orientation and roll steering around a 711.7 km reference altitude.",
+      "retrieved_at_utc": "2026-10-30T16:17:10Z",
+      "interpretation": "Use the measured Sentinel-1C IW look and incidence summary for the fixed-view envelope, retain all six altitude/subswath ranges separately, and use the physical azimuth antenna beam width only as the TAT-C along-track field-of-view approximation. It is not a SAR integration or burst-duration model.",
+      "supports": [
+        "identity.instrument",
+        "identity.operating_mode",
+        "identity.channel",
+        "geometry.look_direction",
+        "geometry.along_track_field_of_view",
+        "geometry.source_altitude_range",
+        "geometry.azimuth_beam_width",
+        "geometry.azimuth_steering_range",
+        "geometry.roll_steering",
+        "geometry.iw_subswath_angles",
+        "applicability.end"
+      ]
+    },
+    {
+      "evidence_id": "copernicus-s1-mission-status",
+      "authority": "European Space Agency / Copernicus Sentinel-1 Mission",
+      "title": "Sentinel-1 Mission Status",
+      "url": "https://sentiwiki.copernicus.eu/web/s1-mission",
+      "document_revision": "Mission status page retrieved 2026-10-30",
+      "locator": "Current mission status and operations",
+      "excerpt": "The current Sentinel-1 constellation includes Sentinel-1C and Sentinel-1D; Sentinel-1C resumed nominal operations on 2026-06-24. Sentinel-1A ceased operations on 2026-06-29.",
+      "retrieved_at_utc": "2026-10-30T16:17:10Z",
+      "interpretation": "This is spacecraft and operational-context evidence only. It does not establish local acquisition opportunities or schedules.",
+      "supports": [
+        "identity.spacecraft",
+        "applicability.start",
+        "applicability.end"
+      ]
+    },
+    {
+      "evidence_id": "celestrak-s1c-omm",
+      "authority": "CelesTrak",
+      "title": "Sentinel-1C GP OMM",
+      "url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=62261&FORMAT=json",
+      "document_revision": "OMM element set 999 retrieved 2026-10-30",
+      "locator": "SENTINEL-1C / NORAD_CAT_ID 62261 / EPOCH 2026-10-30T00:18:10.900224",
+      "excerpt": "OBJECT_NAME SENTINEL-1C; OBJECT_ID 2024-235A; NORAD_CAT_ID 62261; EPOCH 2026-10-30T00:18:10.900224; MEAN_MOTION 14.59200753 revolutions/day; INCLINATION 98.1821 degrees.",
+      "retrieved_at_utc": "2026-10-30T16:17:10Z",
+      "interpretation": "The immutable test fixture retains this retrieved OMM record for reproducible TAT-C regression cases. Operational studies still retrieve current OMM data through CelesTrak.",
+      "supports": [
+        "identity.spacecraft"
+      ]
+    }
+  ],
+  "source_revision": {
+    "revision_id": "s1c-iw-evidence-2026-10-30",
+    "checked_at_utc": "2026-10-30T16:17:10Z",
+    "authority": "European Space Agency / Copernicus Sentinel-1 Mission and TAT-C project",
+    "summary": "Pinned Product Definition v2.13, TAT-C 3.6.0 Sentinel-1C IW product reference, current mission-status page and CelesTrak OMM evidence checked 2026-10-30.",
+    "evidence_ids": [
+      "tatc-s1c-iw-validation",
+      "sentinel1-product-definition-v213",
+      "copernicus-s1-mission-status",
+      "celestrak-s1c-omm"
+    ]
+  },
+  "interpretation": {
+    "summary": "Sentinel-1C C-SAR IW is a right-looking, zero-Doppler side-looking mode. Map the measured median 33.76-degree geodetic look direction and 13.26-degree cross-track field to a fixed rectangular PointedInstrument in TAT-C's Earth-fixed velocity frame. Preserve incidence angles as ground-normal angles, separate from spacecraft off-nadir look angles.",
+    "selected_mode": "IW",
+    "limitations": [
+      "This fixed median view is an accepted approximation to orbit-dependent roll steering and three electronic TOPSAR subswaths; it does not model steering, subswath transitions, bursts, gaps, or acquisition plans.",
+      "The 0.23-degree antenna azimuth beam width is used as the TAT-C along-track angular view. It does not model synthetic-aperture integration, burst timing, azimuth steering, or SAR image formation.",
+      "The published TAT-C product residuals use a different along-track field chosen for approximately five-second footprint sampling. They are context only and do not validate this exact mapping.",
+      "The fixed evidence interval is not spacecraft lifetime or proof of acquisition availability.",
+      "Zero pitch is a TAT-C model assumption, not a sourced spacecraft telemetry value."
+    ]
+  },
+  "approximation_status": "limited",
+  "approximations": [
+    {
+      "approximation_id": "fixed-roll-iw-median-view",
+      "description": "A fixed roll of -33.8 degrees and a 13.3-degree rectangular cross-track view approximate the median Sentinel-1C IW geometry. The source reports orbit-dependent roll/look variation up to about 2.5 degrees; the fixed-roll TAT-C reference has 14.29 km near-edge and 20.58 km far-edge cross-track p95 residuals.",
+      "affected_parameters": [
+        "geometry.roll_angle",
+        "geometry.cross_track_field_of_view",
+        "geometry.field_of_regard"
+      ],
+      "impact": "Access opportunities can miss or add points near the real swath edges, especially where roll steering moves the swath. This geometry does not confirm a real IW acquisition.",
+      "evidence_ids": [
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "approximation_id": "iw-unioned-subswath-frame",
+      "description": "One continuous rectangular view spans three electronic TOPSAR IW subswaths and the source's 1-degree field-of-regard guard. It does not model per-subswath pointing, burst timing, inter-subswath gaps, or the selected product plan.",
+      "affected_parameters": [
+        "geometry.cross_track_field_of_view",
+        "geometry.field_of_regard",
+        "geometry.view_geometry"
+      ],
+      "impact": "The envelope may count access through areas or times that an individual subswath or actual acquisition plan does not use.",
+      "evidence_ids": [
+        "sentinel1-product-definition-v213",
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "approximation_id": "antenna-azimuth-beam-as-along-track-view",
+      "description": "The 0.23-degree physical azimuth antenna beam width is supplied as TAT-C's along-track field of view.",
+      "affected_parameters": [
+        "geometry.along_track_field_of_view"
+      ],
+      "impact": "This is not SAR synthetic-aperture integration time, an image-line duration, burst length, or a continuous viewing interval.",
+      "evidence_ids": [
+        "sentinel1-product-definition-v213"
+      ]
+    }
+  ],
+  "source_conflicts": [],
+  "reference_cases": [
+    {
+      "case_id": "s1c-iw-ascending-right-direct-tatc",
+      "fixture_case_id": "ascending-right-looking",
+      "orbit_direction": "ascending",
+      "expected_event_count": 1,
+      "measured_epoch_residual_ms": 0.000798,
+      "measured_position_residual_m": 0.0,
+      "epoch_tolerance_ms": 1.0,
+      "position_tolerance_m": 1.0,
+      "tolerance_basis": "For these direct software regression cases, 1 ms allows for epoch serialization and floating-point conversion while remaining much tighter than mission-reference timing residuals; 1 m bounds WGS84 grid-center and coordinate serialization differences. The measured adapter-to-direct TAT-C residuals are 0.000798 ms and 0 m. These are adapter integration tolerances, not mission-accuracy limits.",
+      "evidence_ids": [
+        "celestrak-s1c-omm",
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "case_id": "s1c-iw-ascending-opposite-direct-tatc",
+      "fixture_case_id": "ascending-opposite-side",
+      "orbit_direction": "ascending",
+      "expected_event_count": 0,
+      "epoch_tolerance_ms": 1.0,
+      "position_tolerance_m": 1.0,
+      "tolerance_basis": "This opposite-side direct TAT-C case returns zero valid pointed events, so no event epoch or position residual applies. The 1 ms and 1 m tolerances are retained for the included-event software regression cases and are not mission-accuracy limits.",
+      "evidence_ids": [
+        "celestrak-s1c-omm",
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "case_id": "s1c-iw-descending-right-direct-tatc",
+      "fixture_case_id": "descending-right-looking",
+      "orbit_direction": "descending",
+      "expected_event_count": 1,
+      "measured_epoch_residual_ms": 0.000745,
+      "measured_position_residual_m": 0.0,
+      "epoch_tolerance_ms": 1.0,
+      "position_tolerance_m": 1.0,
+      "tolerance_basis": "For these direct software regression cases, 1 ms allows for epoch serialization and floating-point conversion while remaining much tighter than mission-reference timing residuals; 1 m bounds WGS84 grid-center and coordinate serialization differences. The measured adapter-to-direct TAT-C residuals are 0.000745 ms and 0 m. These are adapter integration tolerances, not mission-accuracy limits.",
+      "evidence_ids": [
+        "celestrak-s1c-omm",
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "case_id": "s1c-iw-descending-opposite-direct-tatc",
+      "fixture_case_id": "descending-opposite-side",
+      "orbit_direction": "descending",
+      "expected_event_count": 0,
+      "epoch_tolerance_ms": 1.0,
+      "position_tolerance_m": 1.0,
+      "tolerance_basis": "This opposite-side direct TAT-C case returns zero valid pointed events, so no event epoch or position residual applies. The 1 ms and 1 m tolerances are retained for the included-event software regression cases and are not mission-accuracy limits.",
+      "evidence_ids": [
+        "celestrak-s1c-omm",
+        "tatc-s1c-iw-validation"
+      ]
+    }
+  ],
+  "mission_reference_checks": [
+    {
+      "check_id": "tatc-3.6-s1c-iw-fixed-roll-product-reference",
+      "source_evidence_id": "tatc-s1c-iw-validation",
+      "comparison_target": "Sentinel-1C Level-1 GRD product annotations from 2026-10-02, compared with TAT-C's published fixed-roll IW references",
+      "sample_sizes": {
+        "iw_products": 402,
+        "iw_ascending_products": 169,
+        "iw_descending_products": 233,
+        "fixed_roll_iw_edge_points": 2990,
+        "fixed_roll_iw_footprints": 402,
+        "earth_fixed_zero_doppler_point_observations": 750
+      },
+      "measured_residuals": {
+        "fixed_roll_near_edge_cross_track_p95_km": 14.29,
+        "fixed_roll_far_edge_cross_track_p95_km": 20.58,
+        "fixed_roll_near_edge_cross_track_max_km": 23.83,
+        "fixed_roll_far_edge_cross_track_max_km": 37.04,
+        "fixed_roll_iw_footprint_iou_p05": 0.865,
+        "fixed_roll_iw_footprint_iou_median": 0.925,
+        "earth_fixed_zero_doppler_missed_points": 0.0,
+        "earth_fixed_epoch_abs_p95_s": 0.439,
+        "earth_fixed_epoch_abs_max_s": 0.495,
+        "roll_profile_near_edge_cross_track_p95_km": 6.32,
+        "roll_profile_far_edge_cross_track_p95_km": 7.02,
+        "roll_profile_iw_footprint_iou_p05": 0.917,
+        "roll_profile_iw_footprint_iou_median": 0.936
+      },
+      "tolerance_limits": {
+        "fixed_roll_near_edge_cross_track_p95_km": 15.0,
+        "fixed_roll_far_edge_cross_track_p95_km": 21.0,
+        "fixed_roll_near_edge_cross_track_max_km": 24.0,
+        "fixed_roll_far_edge_cross_track_max_km": 38.0,
+        "fixed_roll_iw_footprint_iou_p05": 0.865,
+        "fixed_roll_iw_footprint_iou_median": 0.925,
+        "earth_fixed_zero_doppler_missed_points": 0.0,
+        "earth_fixed_epoch_abs_p95_s": 0.439,
+        "earth_fixed_epoch_abs_max_s": 0.495,
+        "roll_profile_near_edge_cross_track_p95_km": 6.32,
+        "roll_profile_far_edge_cross_track_p95_km": 7.02,
+        "roll_profile_iw_footprint_iou_p05": 0.917,
+        "roll_profile_iw_footprint_iou_median": 0.936
+      },
+      "tolerance_directions": {
+        "fixed_roll_near_edge_cross_track_p95_km": "at_most",
+        "fixed_roll_far_edge_cross_track_p95_km": "at_most",
+        "fixed_roll_near_edge_cross_track_max_km": "at_most",
+        "fixed_roll_far_edge_cross_track_max_km": "at_most",
+        "fixed_roll_iw_footprint_iou_p05": "at_least",
+        "fixed_roll_iw_footprint_iou_median": "at_least",
+        "earth_fixed_zero_doppler_missed_points": "at_most",
+        "earth_fixed_epoch_abs_p95_s": "at_most",
+        "earth_fixed_epoch_abs_max_s": "at_most",
+        "roll_profile_near_edge_cross_track_p95_km": "at_most",
+        "roll_profile_far_edge_cross_track_p95_km": "at_most",
+        "roll_profile_iw_footprint_iou_p05": "at_least",
+        "roll_profile_iw_footprint_iou_median": "at_least"
+      },
+      "tolerance_basis": "For fixed-roll edge errors and maxima, limits are rounded upward to the next whole kilometre above the published p95/max. Footprint tolerances equal the published rounded quantiles. Time limits equal the published three-decimal p95/max; the limit is not an application-specific validation threshold. These record the external TAT-C reference performance and its limitations, not an acceptance claim for this mapping.",
+      "status": "reference_only",
+      "limitation": "This published comparison does not validate the repository's exact access adapter or acquisition capability. The notebook uses an along-track field of view tailored to approximately five-second footprint sampling, while this registry configuration uses the sourced 0.23-degree physical azimuth antenna beam width; the fixed roll also does not follow measured orbit-dependent roll steering. Keep its residuals as reference context only."
+    }
+  ],
+  "geometry_checks": [
+    {
+      "check_id": "iw-fixed-roll-near-edge-p95",
+      "description": "Published fixed-roll IW near-range cross-track edge residual.",
+      "method": "TAT-C 3.6.0 Sentinel-1C validation Test 6 against odd-numbered product annotations.",
+      "measured_value": 14.29,
+      "unit": "km",
+      "tolerance": 15.0,
+      "tolerance_basis": "Round the published 14.29 km p95 upward to 15 km, allowing less than 5 percent margin for a limited fixed-view approximation.",
+      "relation": "at_most",
+      "status": "limited",
+      "evidence_ids": [
+        "tatc-s1c-iw-validation"
+      ],
+      "limitation": "The fixed median roll residual is dominated by orbit-dependent steering and does not validate this exact access mapping."
+    },
+    {
+      "check_id": "iw-fixed-roll-far-edge-p95",
+      "description": "Published fixed-roll IW far-range cross-track edge residual.",
+      "method": "TAT-C 3.6.0 Sentinel-1C validation Test 6 against odd-numbered product annotations.",
+      "measured_value": 20.58,
+      "unit": "km",
+      "tolerance": 21.0,
+      "tolerance_basis": "Round the published 20.58 km p95 upward to 21 km, a 0.42 km tolerance margin.",
+      "relation": "at_most",
+      "status": "limited",
+      "evidence_ids": [
+        "tatc-s1c-iw-validation"
+      ],
+      "limitation": "The source's roll profile reduces the far-edge p95 to 7.02 km; the fixed approximation retains the larger reported residual."
+    },
+    {
+      "check_id": "iw-fixed-roll-footprint-iou-p05",
+      "description": "Fifth-percentile intersection-over-union of fixed-roll predicted IW product frames and Sentinel-1C annotation footprints.",
+      "method": "TAT-C 3.6.0 Sentinel-1C validation Test 4, IW subset of 402 product footprints.",
+      "measured_value": 0.865,
+      "unit": "IoU",
+      "tolerance": 0.865,
+      "tolerance_basis": "Use the published rounded fifth percentile as the reference floor, with no additional margin.",
+      "relation": "at_least",
+      "status": "limited",
+      "evidence_ids": [
+        "tatc-s1c-iw-validation"
+      ],
+      "limitation": "The notebook's along-track field of view differs from this mapping; this statistic is reference context, not a local adapter test."
+    },
+    {
+      "check_id": "iw-fixed-roll-zero-doppler-epoch-p95",
+      "description": "Published absolute p95 event-epoch residual against Sentinel-1C zero-Doppler point truth.",
+      "method": "TAT-C 3.6.0 Sentinel-1C validation Test 5: 750 interior points from every tenth product, Earth-fixed frame.",
+      "measured_value": 0.439,
+      "unit": "s",
+      "tolerance": 0.5,
+      "tolerance_basis": "Round the published 0.439 s p95 upward to the nearest half-second; this is a reference threshold, not an app accuracy claim.",
+      "relation": "at_most",
+      "status": "limited",
+      "evidence_ids": [
+        "tatc-s1c-iw-validation"
+      ],
+      "limitation": "The source uses its approximately five-second along-track sampling approximation and does not validate this exact adapter."
+    }
+  ]
+}

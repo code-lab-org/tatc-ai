@@ -654,3 +654,22 @@ def test_conical_rejection_eval_rejects_legacy_calculations():
             final="The applicability interval and source evidence are insufficient.",
         )
         assert not case.checks(trace, clock)["did_not_finish"]
+
+
+def test_pointed_eval_region_check_uses_latitude_longitude_order():
+    clock = Clock(datetime(2026, 10, 9, 18, 56, 47, tzinfo=timezone.utc))
+    case = next(
+        case for case in build_cases(clock) if case.id == "pointed_s1c_iw_complete"
+    )
+    summary = {
+        "result_id": "result-1",
+        "window_start_utc": "2026-10-10T00:00:00Z",
+        "window_end_utc_exclusive": "2026-10-10T02:00:00Z",
+        "roi_bbox": [80.435, 17.482, 80.440, 17.488],
+    }
+    trace = Trace(
+        prompt=case.prompt,
+        calls=[Call("finish_pointed_study", {}, False, "{}", parsed=summary)],
+    )
+
+    assert case.checks(trace, clock)["window_and_region"]
