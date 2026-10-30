@@ -17,26 +17,18 @@ from src import configuration_registry, conical_study, generic_coverage, result_
 from src import server as server_module
 from src import coverage_core
 from src.conical_config import ConicalConfiguration
+from tests.conical_fixtures import load_shared_config, load_study_config
 
-CONFIG_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json"
-)
-REGISTRY_CONFIG_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "data"
-    / "configurations"
-    / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
-)
 REFERENCE_PATH = Path(__file__).resolve().parent / "fixtures" / "amsr2_conical_reference.json"
 NOW = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
 
 
 def _config():
-    return json.loads(CONFIG_PATH.read_text())
+    return load_study_config()
 
 
 def _registry_config():
-    return json.loads(REGISTRY_CONFIG_PATH.read_text())
+    return load_shared_config()
 
 
 def _refresh_fixture_configuration():
@@ -227,27 +219,32 @@ def test_configuration_lookup_returns_reviewed_amsr2_without_selecting_it():
     assert lookup["candidate_count"] == 1
 
     candidate = lookup["candidates"][0]
-    configuration = candidate["configuration"]
     assert candidate["registry_status"] == "reviewed_shared"
-    assert configuration["configuration_id"] == "amsr2-gcom-w1-conical-product-sector"
-    assert configuration["revision"] == "2026-10-27.1"
-    assert configuration["geometry"]["cone_angle"] == {
+    assert candidate["configuration_id"] == "amsr2-gcom-w1-conical-product-sector"
+    assert candidate["revision"] == "2026-10-27.1"
+    assert candidate["geometry"]["cone_angle"] == {
         "value": 47.564,
         "unit": "degree",
     }
-    assert configuration["geometry"]["scan_half_width"] == {
+    assert candidate["geometry"]["scan_half_width"] == {
         "value": 75.332,
         "unit": "degree",
     }
     assert "tatc-amsr2-validation" in {
-        evidence["evidence_id"] for evidence in configuration["evidence"]
+        evidence["evidence_id"] for evidence in candidate["evidence"]
     }
     assert any(
         check["check_id"] == "observation-timing"
         and check["reported_value"] == 0.27
         and check["tolerance"] == 1.0
-        for check in configuration["geometry_checks"]
+        for check in candidate["geometry_checks"]
     )
+    assert candidate["channel"]["name"] == "S1"
+    assert candidate["source_revision"]["revision_id"]
+    assert candidate["interpretation"]["limitations"]
+    assert candidate["approximations"]
+    assert candidate["source_conflicts"]
+    assert "configuration" not in candidate
     assert candidate["source_change_checks"][0]["kind"] == "initial_inclusion"
     assert candidate["source_change_checks"][0]["status"] == "checked"
 
@@ -321,19 +318,28 @@ def test_lookup_exposes_mode_ambiguity_and_prepare_requires_exact_revision(monke
     assert "configuration_revision is required" in text
 
 
+def _record_refresh(status, *, configuration=None, **overrides):
+    configuration = configuration or _registry_config()
+    arguments = {
+        "configuration_id": configuration["configuration_id"],
+        "base_revision": configuration["revision"],
+        "status": status,
+        "checked_at_utc": "2026-10-29T00:00:00Z",
+        "checked_source_revision_id": f"fixture-{status}-source",
+        "reported_by": "assistant",
+        "summary": f"Fixture source check: {status}.",
+    }
+    arguments.update(overrides)
+    return _call("record_instrument_configuration_refresh", arguments)
+
+
 def _record_failed_refresh(source_revision_id, checked_at="2026-10-28T00:00:00Z", summary=None):
-    return _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": _registry_config()["configuration_id"],
-            "base_revision": _registry_config()["revision"],
-            "status": "failed",
-            "checked_at_utc": checked_at,
-            "checked_source_revision_id": source_revision_id,
-            "reported_by": "assistant",
-            "summary": summary or f"Failed check {source_revision_id}.",
-            "failure_reason": "The source page was unavailable.",
-        },
+    return _record_refresh(
+        "failed",
+        checked_at_utc=checked_at,
+        checked_source_revision_id=source_revision_id,
+        summary=summary or f"Failed check {source_revision_id}.",
+        failure_reason="The source page was unavailable.",
     )
 
 
@@ -388,18 +394,12 @@ def test_later_successful_check_supersedes_failed_refresh_uncertainty(successful
     )
     assert not error, text
 
-    error, text, unchanged = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": _registry_config()["configuration_id"],
-            "base_revision": _registry_config()["revision"],
-            "status": "unchanged",
-            "checked_at_utc": successful_at,
-            "checked_source_revision_id": "resolved-source-check",
-            "reported_by": "assistant",
-            "summary": "A later check found the same source content.",
-            "evidence_ids": ["jaxa-gcom-w-status"],
-        },
+    error, text, unchanged = _record_refresh(
+        "unchanged",
+        checked_at_utc=successful_at,
+        checked_source_revision_id="resolved-source-check",
+        summary="A later check found the same source content.",
+        evidence_ids=["jaxa-gcom-w-status"],
     )
     assert not error, text
     assert unchanged["status"] == "unchanged"
@@ -428,20 +428,14 @@ def test_candidate_does_not_report_a_superseded_failure_as_current_uncertainty()
     assert not error, text
 
     updated = _refresh_fixture_configuration()
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": _registry_config()["configuration_id"],
-            "base_revision": _registry_config()["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-28T01:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "A later check found and documented changed geometry.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, refresh = _record_refresh(
+        "geometry_changed",
+        checked_at_utc="2026-10-28T01:00:00Z",
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="A later check found and documented changed geometry.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert not error, text
 
@@ -476,20 +470,14 @@ def test_candidate_does_not_report_a_superseded_failure_as_current_uncertainty()
 def test_candidate_capacity_rejects_geometry_refresh_without_mutation(monkeypatch):
     monkeypatch.setattr(configuration_registry, "MAX_REFRESH_CANDIDATES", 0)
     updated = _refresh_fixture_configuration()
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": _registry_config()["configuration_id"],
-            "base_revision": _registry_config()["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-28T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture refresh found a changed sector.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        checked_at_utc="2026-10-28T00:00:00Z",
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture refresh found a changed sector.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert error
     assert "candidate capacity" in text.lower()
@@ -521,20 +509,14 @@ def test_changed_geometry_source_evidence_must_match_retained_content():
     updated = _refresh_fixture_configuration()
     mismatched_evidence = copy.deepcopy(updated["evidence"][-1])
     mismatched_evidence["excerpt"] += " Altered content with the same evidence ID."
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": _registry_config()["configuration_id"],
-            "base_revision": _registry_config()["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-28T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture refresh found a changed sector.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [mismatched_evidence],
-            "updated_configuration": updated,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        checked_at_utc="2026-10-28T00:00:00Z",
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture refresh found a changed sector.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[mismatched_evidence],
+        updated_configuration=updated,
     )
     assert error
     assert "exact source evidence" in text.lower()
@@ -577,20 +559,14 @@ def test_concurrent_mcp_conversations_have_isolated_refresh_state():
 
 def test_explicit_geometry_refresh_adds_a_revision_and_leaves_both_candidates():
     updated = _refresh_fixture_configuration()
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": _registry_config()["configuration_id"],
-            "base_revision": _registry_config()["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-28T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture refresh found a changed product-sector half width.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, refresh = _record_refresh(
+        "geometry_changed",
+        checked_at_utc="2026-10-28T00:00:00Z",
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture refresh found a changed product-sector half width.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert not error, text
     assert refresh["status"] == "geometry_changed"
@@ -624,7 +600,7 @@ def test_explicit_geometry_refresh_adds_a_revision_and_leaves_both_candidates():
     )
     assert old["source_change_notices"][0]["new_revision"] == "2026-10-28-fixture-2"
     assert new["registry_status"] == "source_refresh_candidate"
-    assert new["configuration"]["geometry"]["scan_half_width"]["value"] == 72.0
+    assert new["geometry"]["scan_half_width"]["value"] == 72.0
 
 
 def _finish(draft_id, revision, accept=True):
@@ -672,20 +648,15 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
     old_result_id = old_summary["result_id"]
 
     refreshed = _refresh_fixture_configuration()
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base_id,
-            "base_revision": base_revision,
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-28T00:00:00Z",
-            "checked_source_revision_id": refreshed["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture refresh found a changed product-sector half width.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [refreshed["evidence"][-1]],
-            "updated_configuration": refreshed,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_at_utc="2026-10-28T00:00:00Z",
+        checked_source_revision_id=refreshed["source_revision"]["revision_id"],
+        summary="Fixture refresh found a changed product-sector half width.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[refreshed["evidence"][-1]],
+        updated_configuration=refreshed,
     )
     assert not error, text
 
@@ -772,19 +743,13 @@ def test_geometry_refresh_can_remove_optional_beam_width():
     updated = _refresh_fixture_configuration()
     updated["geometry"]["beam_width"] = None
     updated["evidence"][-1]["supports"].append("geometry.beam_width")
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "A sourced revision removes optional beam metadata.",
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, refresh = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="A sourced revision removes optional beam metadata.",
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert not error, text
     assert any(
@@ -804,20 +769,14 @@ def test_geometry_refresh_rejects_a_stale_passing_geometry_check():
     )
     updated["geometry_checks"].append(copy.deepcopy(stale_check))
 
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture changes geometry but keeps the prior check.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture changes geometry but keeps the prior check.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert error
     assert "scan-sector-consistency" in text
@@ -840,20 +799,14 @@ def test_geometry_refresh_allows_an_unbound_unrelated_coincident_angle_check():
         }
     )
 
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture changes the sector and keeps an unrelated reference angle.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, refresh = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture changes the sector and keeps an unrelated reference angle.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert not error, text
     assert refresh["new_revision_candidate"]["revision"] == updated["revision"]
@@ -877,20 +830,14 @@ def test_geometry_refresh_rejects_a_bound_check_for_removed_optional_parameter()
         }
     )
 
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture removes an optional parameter but keeps its bound check.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture removes an optional parameter but keeps its bound check.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert error
     assert "beam-width-check" in text
@@ -903,20 +850,14 @@ def test_geometry_refresh_rejects_silently_cleared_approximations():
     updated["approximations"] = []
     updated["approximation_status"] = "supported"
 
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture changes geometry and clears its limitations.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture changes geometry and clears its limitations.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert error
     assert "removes declared approximations" in text
@@ -925,20 +866,14 @@ def test_geometry_refresh_rejects_silently_cleared_approximations():
 def test_applicability_refresh_creates_a_sourced_revision_without_mutating_base():
     base = _registry_config()
     updated = _applicability_refresh_fixture_configuration()
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "applicability_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture refresh extends the established applicability.",
-            "evidence_ids": ["fixture-applicability-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, refresh = _record_refresh(
+        "applicability_changed",
+        configuration=base,
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture refresh extends the established applicability.",
+        evidence_ids=["fixture-applicability-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert not error, text
     assert refresh["geometry_changes"] == []
@@ -1009,19 +944,13 @@ def test_applicability_refresh_requires_changed_dates_and_supporting_evidence():
         **unchanged["source_revision"],
         "revision_id": "amsr2-applicability-unchanged-fixture",
     }
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "applicability_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": unchanged["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture reports no applicability change.",
-            "evidence_ids": ["jaxa-gcom-w-status"],
-            "updated_configuration": unchanged,
-        },
+    error, text, _ = _record_refresh(
+        "applicability_changed",
+        configuration=base,
+        checked_source_revision_id=unchanged["source_revision"]["revision_id"],
+        summary="Fixture reports no applicability change.",
+        evidence_ids=["jaxa-gcom-w-status"],
+        updated_configuration=unchanged,
     )
     assert error
     assert "no applicability parameter changed" in text
@@ -1032,20 +961,14 @@ def test_applicability_refresh_requires_changed_dates_and_supporting_evidence():
         "amsr2-applicability-unsupported-fixture"
     )
     unsupported["evidence"][-1]["supports"] = ["geometry.scan_half_width"]
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "applicability_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": unsupported["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture changes dates without applicability evidence.",
-            "evidence_ids": ["fixture-applicability-refresh"],
-            "source_evidence": [unsupported["evidence"][-1]],
-            "updated_configuration": unsupported,
-        },
+    error, text, _ = _record_refresh(
+        "applicability_changed",
+        configuration=base,
+        checked_source_revision_id=unsupported["source_revision"]["revision_id"],
+        summary="Fixture changes dates without applicability evidence.",
+        evidence_ids=["fixture-applicability-refresh"],
+        source_evidence=[unsupported["evidence"][-1]],
+        updated_configuration=unsupported,
     )
     assert error
     assert "support changed applicability" in text
@@ -1068,20 +991,14 @@ def test_geometry_refresh_may_recheck_the_same_source_document_revision():
         if evidence["evidence_id"] == "tatc-amsr2-validation"
     )
 
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": base["configuration_id"],
-            "base_revision": base["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-29T00:00:00Z",
-            "checked_source_revision_id": base["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "A recheck of the same document found a revised sector width.",
-            "evidence_ids": ["fixture-geometry-refresh"],
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, refresh = _record_refresh(
+        "geometry_changed",
+        configuration=base,
+        checked_source_revision_id=base["source_revision"]["revision_id"],
+        summary="A recheck of the same document found a revised sector width.",
+        evidence_ids=["fixture-geometry-refresh"],
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert not error, text
     assert refresh["status"] == "geometry_changed"
@@ -1092,19 +1009,14 @@ def test_source_refresh_cannot_reuse_an_immutable_registry_revision():
     configuration = _registry_config()
     updated = _refresh_fixture_configuration()
     updated["revision"] = configuration["revision"]
-    error, text, _ = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": configuration["configuration_id"],
-            "base_revision": configuration["revision"],
-            "status": "geometry_changed",
-            "checked_at_utc": "2026-10-28T00:00:00Z",
-            "checked_source_revision_id": updated["source_revision"]["revision_id"],
-            "reported_by": "assistant",
-            "summary": "Fixture refresh attempts to reuse an existing revision.",
-            "source_evidence": [updated["evidence"][-1]],
-            "updated_configuration": updated,
-        },
+    error, text, _ = _record_refresh(
+        "geometry_changed",
+        configuration=configuration,
+        checked_at_utc="2026-10-28T00:00:00Z",
+        checked_source_revision_id=updated["source_revision"]["revision_id"],
+        summary="Fixture refresh attempts to reuse an existing revision.",
+        source_evidence=[updated["evidence"][-1]],
+        updated_configuration=updated,
     )
     assert error
     assert "new immutable revision" in text
@@ -1125,18 +1037,13 @@ def test_failed_source_refresh_is_disclosed_and_stales_an_older_proposal():
     )
     assert not error, text
 
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": configuration["configuration_id"],
-            "base_revision": configuration["revision"],
-            "status": "failed",
-            "checked_at_utc": "2026-10-28T00:00:00Z",
-            "checked_source_revision_id": "failed-source-check-2026-10-28",
-            "reported_by": "assistant",
-            "summary": "The requested source refresh could not be completed.",
-            "failure_reason": "The source page was unavailable during this check.",
-        },
+    error, text, refresh = _record_refresh(
+        "failed",
+        configuration=configuration,
+        checked_at_utc="2026-10-28T00:00:00Z",
+        checked_source_revision_id="failed-source-check-2026-10-28",
+        summary="The requested source refresh could not be completed.",
+        failure_reason="The source page was unavailable during this check.",
     )
     assert not error, text
     assert refresh["status"] == "failed"
@@ -1177,18 +1084,13 @@ def test_unchanged_refresh_does_not_stale_a_prepared_registry_setup():
     )
     assert not error, text
 
-    error, text, refresh = _call(
-        "record_instrument_configuration_refresh",
-        {
-            "configuration_id": configuration["configuration_id"],
-            "base_revision": configuration["revision"],
-            "status": "unchanged",
-            "checked_at_utc": "2026-10-28T01:00:00Z",
-            "checked_source_revision_id": "amsr2-unchanged-check-2026-10-28",
-            "reported_by": "assistant",
-            "summary": "A later check found the same source content.",
-            "evidence_ids": ["jaxa-gcom-w-status"],
-        },
+    error, text, refresh = _record_refresh(
+        "unchanged",
+        configuration=configuration,
+        checked_at_utc="2026-10-28T01:00:00Z",
+        checked_source_revision_id="amsr2-unchanged-check-2026-10-28",
+        summary="A later check found the same source content.",
+        evidence_ids=["jaxa-gcom-w-status"],
     )
     assert not error, text
     assert refresh["status"] == "unchanged"

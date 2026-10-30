@@ -28,7 +28,7 @@ Windows of three days or less allow 144 cells. Longer windows allow 36 cells and
 
 ## Shared instrument configuration lookup
 
-`lookup_instrument_configurations` searches reviewed revisions by instrument, spacecraft name or alias, operating mode, configuration ID, and exact revision. Revision filters use equality. Each candidate includes its applicability, normalized geometry, source evidence, geometry checks, limitations, and recorded source checks. A lookup never selects a configuration. Pass the exact `configuration_id` and `configuration_revision` to `prepare_conical_study`; preparation rejects a missing revision instead of choosing the newest one.
+`lookup_instrument_configurations` searches reviewed revisions by instrument, spacecraft name or alias, operating mode, configuration ID, and exact revision. Revision filters use equality. Each candidate includes identity, channel, applicability, normalized geometry, source evidence, geometry checks, source revision, interpretation, approximation status, approximations, source conflicts, and recorded source checks. A lookup never selects a configuration. Pass the exact `configuration_id` and `configuration_revision` to `prepare_conical_study`; preparation rejects a missing revision instead of choosing the newest one.
 
 The reviewed registry currently contains one AMSR2 conical-scan revision for GCOM-W1, `2026-10-27.1`. Its normalized settings and source evidence are stored in `apps/mcp-server/data/configurations/amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json`. The independent TAT-C reference, expected event and position values, and mission residuals are in `apps/mcp-server/tests/fixtures/amsr2_conical_reference.json`. The entry records the source check documented by the issue #49 evidence bundle on 2026-10-27. It does not claim a later refresh. The applicability interval ends at 2026-10-27, so a request after that date needs a newly sourced revision.
 
@@ -66,7 +66,7 @@ The server validates structure, ranges, units, evidence presence and references,
 
 ### Source-backed AMSR2 example
 
-`apps/mcp-server/data/amsr2_conical_configuration.json` remains a study-specific AMSR2 input used by tests and tool-calling eval, with its own configuration ID and revision (`amsr2-gcom-w1-conical-product-sector-study` at `2026-10-27.1-study`). The shared AMSR2 entry is a separate data file and independent reference target. A study-specific configuration is not promoted when accepted.
+The conical tests and tool-calling eval derive a study-specific AMSR2 example from the shared configuration by overriding its ID and revision to `amsr2-gcom-w1-conical-product-sector-study` at `2026-10-27.1-study` and removing the shared check bindings. This keeps the legacy unbound input path covered without a duplicate data file. Researchers can still supply a complete study-specific configuration directly. The shared AMSR2 entry remains the independent reference target, and a study-specific configuration is not promoted when accepted.
 
 | Item | Value | Source |
 | --- | --- | --- |

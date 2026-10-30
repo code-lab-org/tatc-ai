@@ -11,12 +11,13 @@ first reviewed shared configuration. Its source evidence and reported geometry
 checks are retained in the file. The independent TAT-C reference and mission
 residual record are in `../tests/fixtures/amsr2_conical_reference.json`.
 
-`amsr2_conical_configuration.json` is one study-specific, sourced AMSR2
-configuration used by the conical-study tests and documentation. It has its own
-configuration ID and revision (`amsr2-gcom-w1-conical-product-sector-study` at
-`2026-10-27.1-study`) so it cannot be confused with the reviewed shared entry.
-It is not a shared registry entry, and accepting it in a study does not promote
-it.
+The conical-study tests and evaluation derive a study-specific example from the
+shared file at runtime. They override the identity to
+`amsr2-gcom-w1-conical-product-sector-study` at `2026-10-27.1-study` and remove
+the shared check bindings so the legacy unbound path stays covered. This derived
+example is not a shared registry entry, and accepting it in a study does not
+promote it. Researchers can still supply a complete study-specific configuration
+directly without a maintainer queue.
 
 The configuration carries the exact normalized geometry, source evidence
 locators and excerpts, source revision, source conflicts and chosen rationale,

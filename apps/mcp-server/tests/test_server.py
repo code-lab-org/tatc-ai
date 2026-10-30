@@ -10,6 +10,8 @@ from unittest import mock
 from fastmcp import Client
 from shapely.geometry import Polygon
 
+from tests.conical_fixtures import load_study_config
+
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
@@ -761,13 +763,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn("evidence", configuration_model["properties"])
         self.assertIn("source_conflicts", configuration_model["properties"])
         expected = {"status": "awaiting_acceptance", "setup_revision": "sha256:abc"}
-        configuration = json.loads(
-            (
-                Path(__file__).resolve().parents[1]
-                / "data"
-                / "amsr2_conical_configuration.json"
-            ).read_text()
-        )
+        configuration = load_study_config()
         with mock.patch.object(
             self.server, "_prepare_conical", return_value=expected
         ) as prepare:

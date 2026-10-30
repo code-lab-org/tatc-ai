@@ -596,48 +596,13 @@ def record_instrument_configuration_refresh(
             raise ValueError("A failed source refresh cannot include an updated configuration")
         if not failure_reason or not failure_reason.strip():
             raise ValueError("A failed source refresh must record failure_reason")
-    elif status == "geometry_changed":
+    elif status in ("geometry_changed", "applicability_changed"):
         if updated_configuration is None:
-            raise ValueError(
-                "A geometry-changing refresh must include the complete new sourced configuration"
-            )
-        _validate_changed_identity(
-            base_configuration,
-            updated_configuration,
-            base_revision,
-            checked_source_revision_id,
-        )
-        changes = _geometry_changes(base_configuration, updated_configuration)
-        if not changes:
-            raise ValueError(
-                "The source check says geometry_changed but no geometry parameter changed"
-            )
-        applicability_changes = _applicability_changes(
-            base_configuration, updated_configuration
-        )
-        _validate_applicability_refresh(
-            applicability_changes, source_evidence, updated_configuration
-        )
-        supported_by_refresh = {
-            parameter
-            for item in source_evidence
-            for parameter in item.supports
-        }
-        unsupported_changes = sorted(
-            change["parameter"]
-            for change in changes
-            if change["parameter"] not in supported_by_refresh
-        )
-        if unsupported_changes:
-            raise ValueError(
-                "Refresh evidence must support every changed parameter: "
-                + ", ".join(unsupported_changes)
-            )
-        _validate_revised_assessment(
-            base_configuration, updated_configuration, changes, source_evidence
-        )
-    elif status == "applicability_changed":
-        if updated_configuration is None:
+            if status == "geometry_changed":
+                raise ValueError(
+                    "A geometry-changing refresh must include the complete new "
+                    "sourced configuration"
+                )
             raise ValueError(
                 "An applicability-changing refresh must include the complete new "
                 "sourced configuration"
@@ -649,22 +614,47 @@ def record_instrument_configuration_refresh(
             checked_source_revision_id,
         )
         changes = _geometry_changes(base_configuration, updated_configuration)
-        if changes:
-            raise ValueError(
-                "The source check says applicability_changed but geometry also "
-                "changed; use geometry_changed"
-            )
         applicability_changes = _applicability_changes(
             base_configuration, updated_configuration
         )
-        if not applicability_changes:
-            raise ValueError(
-                "The source check says applicability_changed but no applicability "
-                "parameter changed"
+        if status == "geometry_changed":
+            if not changes:
+                raise ValueError(
+                    "The source check says geometry_changed but no geometry "
+                    "parameter changed"
+                )
+            _validate_applicability_refresh(
+                applicability_changes, source_evidence, updated_configuration
             )
-        _validate_applicability_refresh(
-            applicability_changes, source_evidence, updated_configuration
-        )
+            supported_by_refresh = {
+                parameter
+                for item in source_evidence
+                for parameter in item.supports
+            }
+            unsupported_changes = sorted(
+                change["parameter"]
+                for change in changes
+                if change["parameter"] not in supported_by_refresh
+            )
+            if unsupported_changes:
+                raise ValueError(
+                    "Refresh evidence must support every changed parameter: "
+                    + ", ".join(unsupported_changes)
+                )
+        else:
+            if changes:
+                raise ValueError(
+                    "The source check says applicability_changed but geometry also "
+                    "changed; use geometry_changed"
+                )
+            if not applicability_changes:
+                raise ValueError(
+                    "The source check says applicability_changed but no "
+                    "applicability parameter changed"
+                )
+            _validate_applicability_refresh(
+                applicability_changes, source_evidence, updated_configuration
+            )
         _validate_revised_assessment(
             base_configuration, updated_configuration, changes, source_evidence
         )
@@ -904,14 +894,22 @@ def lookup_instrument_configurations(
                 "instrument": configuration.instrument,
                 "spacecraft": configuration.spacecraft.model_dump(mode="json"),
                 "operating_mode": configuration.operating_mode,
+                "channel": configuration.channel.model_dump(mode="json"),
                 "applicability": configuration.applicability.model_dump(mode="json"),
                 "geometry": configuration.geometry.model_dump(mode="json"),
                 "evidence": [item.model_dump(mode="json") for item in configuration.evidence],
                 "geometry_checks": [
                     item.model_dump(mode="json") for item in configuration.geometry_checks
                 ],
-                "limitations": list(configuration.interpretation.limitations),
-                "configuration": configuration.portable(),
+                "source_revision": configuration.source_revision.model_dump(mode="json"),
+                "interpretation": configuration.interpretation.model_dump(mode="json"),
+                "approximation_status": configuration.approximation_status,
+                "approximations": [
+                    item.model_dump(mode="json") for item in configuration.approximations
+                ],
+                "source_conflicts": [
+                    item.model_dump(mode="json") for item in configuration.source_conflicts
+                ],
                 **registry_metadata,
             }
         )

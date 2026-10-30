@@ -20,9 +20,25 @@ FINISH_TOOLS = {
     "finish_year_access_run",
     "run_satellite_access",
 }
-CONICAL_CONFIG = json.loads(
-    (Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json").read_text()
-)
+
+
+def _load_study_config():
+    configuration = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text()
+    )
+    configuration["configuration_id"] = "amsr2-gcom-w1-conical-product-sector-study"
+    configuration["revision"] = "2026-10-27.1-study"
+    for check in configuration["geometry_checks"]:
+        check.pop("geometry_parameter", None)
+    return configuration
+
+
+CONICAL_CONFIG = _load_study_config()
 CONICAL_CONFIG["configuration_id"] += "-eval"
 CONICAL_SHARED_ID = "amsr2-gcom-w1-conical-product-sector"
 CONICAL_SHARED_REVISION = "2026-10-27.1"

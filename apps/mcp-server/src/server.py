@@ -774,8 +774,9 @@ def lookup_instrument_configurations(
     """Find reviewed shared instrument configuration revisions.
 
     The lookup matches instrument, spacecraft name or alias, operating mode,
-    configuration ID, and revision. It returns source evidence, applicability,
-    geometry checks, limitations, and recorded source checks for each match.
+    configuration ID, and revision. It returns identity, channel, applicability,
+    geometry, source evidence, geometry checks, source revision, interpretation,
+    approximations, source conflicts, and recorded source checks for each match.
     It never chooses a configuration for a study. Pass the exact configuration
     ID and revision returned here to the preparation tool.
 
