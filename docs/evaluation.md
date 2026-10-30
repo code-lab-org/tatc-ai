@@ -37,7 +37,9 @@ The baseline and full issue #51 comparison each used one repeat per model and ca
 
 Two cases regressed by one response each: `needs_clarification` went from 4/5 to 3/5, and `long_given` went from 5/5 to 4/5. The baseline had one model timeout and one result-parsing infrastructure error. The full issue run had three timeouts: `glm-5-3-flash` on the complete conical case, and `mimo-v2-6-flash` on the failed-refresh conical and complete pointed cases.
 
-The scoped review run requested ten conversations, five models across the two pointed cases. After rescoring, all five choice-before-acceptance cases passed; four complete-study cases passed, and Mimo timed out on the remaining complete study after 883.7 seconds. The full run repeated neither the baseline nor the 70-conversation issue set.
+The scoped review run requested ten conversations, five models across the two pointed cases. After rescoring, all five choice-before-acceptance cases passed; four complete-study cases passed, and Mimo timed out on the remaining complete study after 883.7 seconds. The scoped run repeated neither the baseline nor the 70-conversation issue set. Three of the five choice replies also made Sentinel-1A or Sentinel-1D status claims absent from the lookup results; the checker does not score those extra claims.
+
+The raw JSONL traces, comparison report under `eval/results/`, and `/tmp` test logs cited by the audit trail are local-only artifacts excluded from the PR. The counts and limitations above are the retained summary.
 
 The complete conical and pointed cases check for cell-center sampling and the limits of envelope durations, and reject common claims of continuous or whole-cell viewing. These text checks are conservative heuristics. The rejection cases fail if either the legacy or conical workflow completes a calculation.
 
