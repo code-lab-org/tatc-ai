@@ -38,6 +38,8 @@ from typing import Any, Dict, List, Optional, Sequence
 import yaml
 from fastmcp import Client
 
+from src.configuration_registry import isolated_refresh_state
+
 from .cases import Call, Clock, Trace, build_cases
 from .http_replay import HttpReplay
 
@@ -239,6 +241,12 @@ def probe_streams(harness: Harness, models: Sequence[str]) -> List[str]:
     ]
 
 
+def _converse_with_case_state(harness: Harness, model: str, case) -> Trace:
+    """Keep mutable registry refreshes local to each concurrent eval conversation."""
+    with isolated_refresh_state():
+        return harness.converse(model, case.prompt)
+
+
 def run(args: argparse.Namespace) -> None:
     env = load_env(ENV_FILE)
     replay = HttpReplay(offline=args.offline)
@@ -265,7 +273,7 @@ def run(args: argparse.Namespace) -> None:
         record = {"label": args.label, "model": model,
                   "case": case.id, "tags": case.tags, "repeat": repeat}
         try:
-            trace = harness.converse(model, case.prompt)
+            trace = _converse_with_case_state(harness, model, case)
             checks = case.checks(trace, clock)
             summary_id = next(
                 (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),

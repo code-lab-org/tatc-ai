@@ -20,10 +20,29 @@ FINISH_TOOLS = {
     "finish_year_access_run",
     "run_satellite_access",
 }
-CONICAL_CONFIG = json.loads(
-    (Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json").read_text()
-)
+
+
+def _load_study_config():
+    # Keep this derivation consistent with tests/conical_fixtures.py.
+    configuration = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text()
+    )
+    configuration["configuration_id"] = "amsr2-gcom-w1-conical-product-sector-study"
+    configuration["revision"] = "2026-10-27.1-study"
+    for check in configuration["geometry_checks"]:
+        check.pop("geometry_parameter", None)
+    return configuration
+
+
+CONICAL_CONFIG = _load_study_config()
 CONICAL_CONFIG["configuration_id"] += "-eval"
+CONICAL_SHARED_ID = "amsr2-gcom-w1-conical-product-sector"
+CONICAL_SHARED_REVISION = "2026-10-27.1"
 
 PHOENIX = (33.45, -112.07)
 TEMPE = (33.42, -111.94)
@@ -115,12 +134,14 @@ def _contains(summary: Dict[str, Any], points, max_span: float, slack: float = 0
 
 
 def _geometry(summary: Dict[str, Any], kind: str, value: float) -> bool:
-    geometry = summary["geometry_model"]
-    if geometry["geometry_input_kind"] == kind:
-        return abs(float(geometry["geometry_input_value"]) - value) <= 0.005 * value
+    geometry = summary.get("geometry_model") or {}
+    if geometry.get("geometry_input_kind") == kind:
+        reported = geometry.get("geometry_input_value")
+        return reported is not None and abs(float(reported) - value) <= 0.005 * value
     if kind == "swath_width_km":
         # A field of regard the converter produced from the right swath is fine.
-        return abs(geometry["modeled_swath_width_km_at_omm_mean_altitude"] - value) <= 0.01 * value
+        modeled = geometry.get("modeled_swath_width_km_at_omm_mean_altitude")
+        return modeled is not None and abs(float(modeled) - value) <= 0.01 * value
     return False
 
 
@@ -135,16 +156,19 @@ def _base_checks(summary, seen, points, max_span, window_ok, kind, value, status
             "assessment": False,
         }
     start, duration = _window(summary)
-    geometry = summary["geometry_model"]
+    geometry = summary.get("geometry_model") or {}
     assessment = summary.get("geometry_assessment", {})
     return {
         "completed": True,
         "window": window_ok(start, duration),
         "region": _contains(summary, points, max_span),
         "geometry": _geometry(summary, kind, value),
-        "sourced": _sourced(geometry["geometry_input_value"], seen),
+        "sourced": _sourced(geometry.get("geometry_input_value"), seen),
         "assessment": assessment.get("status") == status
-        and _sourced(geometry["geometry_input_value"], [assessment.get("source_text", "")]),
+        and _sourced(
+            geometry.get("geometry_input_value"),
+            [assessment.get("source_text", "")],
+        ),
     }
 
 
@@ -311,7 +335,11 @@ def _conical_reporting_is_limited(final: str) -> bool:
     These text checks are conservative heuristics, not a semantic assessment
     of every possible explanation.
     """
-    negation = r"\b(?:not|never|no|cannot|can't|doesn't|isn't|aren't|don't)\b"
+    negation = (
+        r"\b(?:not|never|no|cannot|can't|couldn't|wouldn't|shouldn't|doesn't|"
+        r"didn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|don't|"
+        r"does not|do not|did not|is not|are not|was not|were not|no longer)\b"
+    )
     continuous = r"\b(?:continuous|continuously|uninterrupted)\b"
     sampling = re.search(
         r"\bcell[- ]cent(?:er|re)s?\b|"
@@ -319,7 +347,8 @@ def _conical_reporting_is_limited(final: str) -> bool:
     )
     continuous_limit = (
         negation + r".{0,80}" + continuous + "|" + continuous
-        + r".{0,120}\b(?:unavailable|not available|not provided|not computed)\b"
+        + r".{0,120}\b(?:unavailable|not available|not provided|not computed|"
+        + r"(?:isn't|aren't|wasn't|weren't)\s+available)\b"
     )
     for clause in re.split(r"[.!?;\n]|\b(?:but|however|yet|although|whereas)\b", final):
         if re.search(continuous, clause) and not re.search(continuous_limit, clause):
@@ -328,9 +357,18 @@ def _conical_reporting_is_limited(final: str) -> bool:
             r"\b(?:every|all) (?:point|pixel|location)s?\b.*\bcell\w*\b|"
             r"\b(?:whole|entire|full) (?:grid[- ])?cells?\b", clause
         )
-        if whole_cell and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause):
-            if not re.search(negation, clause):
-                return False
+        classification = re.search(
+            r"\b(?:classif\w*|counted|counts? as|based on|described as|"
+            r"labell?ed|marked as)\b",
+            clause,
+        )
+        if (
+            whole_cell
+            and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause)
+            and not classification
+            and not re.search(negation, clause)
+        ):
+            return False
     return bool(sampling and "envelope" in final and re.search(continuous_limit, final))
 
 
@@ -395,6 +433,151 @@ def _conical_complete(expected_config_id: str):
         result["reported"] = (
             str(event_count) in re.findall(r"\d+", final)
             and _conical_reporting_is_limited(final)
+        )
+        return result
+
+    return checks
+
+
+def _conical_registry_complete(expected_config_id: str, expected_revision: str):
+    base_checks = _conical_complete(expected_config_id)
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        result = base_checks(trace, clock)
+        lookup_calls = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "lookup_instrument_configurations"
+            and not call.error
+            and call.parsed
+        ]
+        prepare_calls = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "prepare_conical_study" and not call.error and call.parsed
+        ]
+        finish = successful_conical_finish(trace)
+        matching_lookup = any(
+            index < prepare_index
+            and call.parsed.get("selection_required") is True
+            and call.parsed.get("selection") is None
+            and any(
+                candidate.get("configuration_id") == expected_config_id
+                and candidate.get("revision") == expected_revision
+                and candidate.get("registry_status") == "reviewed_shared"
+                for candidate in call.parsed.get("candidates", [])
+            )
+            for index, call in lookup_calls
+            for prepare_index, _ in prepare_calls
+        )
+        explicit_prepare = any(
+            call.args.get("configuration_id") == expected_config_id
+            and call.args.get("configuration_revision") == expected_revision
+            and call.args.get("configuration") is None
+            and call.parsed.get("registry_selection", {}).get("selection")
+            == "explicit_exact_revision"
+            for _, call in prepare_calls
+        )
+        result["looked_up_candidate_without_selection"] = matching_lookup
+        result["prepared_exact_registry_revision"] = explicit_prepare
+        result["result_keeps_registry_revision"] = bool(
+            finish
+            and finish.parsed.get("registry_selection", {}).get("configuration_id")
+            == expected_config_id
+            and finish.parsed.get("registry_selection", {}).get("revision")
+            == expected_revision
+        )
+        return result
+
+    return checks
+
+
+def _conical_registry_failed_refresh(expected_config_id: str, expected_revision: str):
+    base_checks = _conical_registry_complete(expected_config_id, expected_revision)
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        result = base_checks(trace, clock)
+        failure_calls = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "record_instrument_configuration_refresh"
+            and not call.error
+            and call.parsed
+            and call.parsed.get("status") == "failed"
+        ]
+        prepares = [
+            (index, call)
+            for index, call in enumerate(trace.calls)
+            if call.name == "prepare_conical_study"
+            and not call.error
+            and call.parsed
+        ]
+        finish = successful_conical_finish(trace)
+        uncertainty = (
+            finish.parsed.get("registry_selection", {}).get("refresh_uncertainty", [])
+            if finish and finish.parsed
+            else []
+        )
+        result["recorded_failed_refresh_before_prepare"] = any(
+            failure_index < prepare_index
+            for failure_index, _ in failure_calls
+            for prepare_index, _ in prepares
+        )
+        result["result_retains_refresh_uncertainty"] = bool(
+            uncertainty
+            and uncertainty[0].get("status") == "failed"
+            and uncertainty[0].get("failure_reason")
+        )
+        final = trace.final.lower()
+        reports_uncertainty = any(
+            term in final
+            for term in ("unknown", "could not be checked", "source status is uncertain")
+        )
+        affirmative_unchanged = False
+        clauses = re.split(r"[.!?;]|\b(?:but|however|yet)\b|,\s*and\b", final)
+        for clause in clauses:
+            source_subject = (
+                r"\b(?:source(?: status| state)?|sources?|source evidence|geometry)\b"
+            )
+            explicit_no_change = re.search(
+                source_subject
+                + r"[^.!?]{0,100}\b(?:has|have|had|did|does|is|are|was|were|remain|remains)"
+                + r"(?:\s+(?:not|never)|n't)\s+change(?:d)?\b",
+                clause,
+            )
+            unchanged = re.search(
+                source_subject + r"[^.!?]{0,100}\b(unchanged|no changes?)\b",
+                clause,
+            )
+            if explicit_no_change:
+                affirmative_unchanged = True
+                break
+            if unchanged:
+                before = clause[: unchanged.start(1)]
+                negated_claim = re.search(
+                    r"\b(?:no|without)\s+claim\b[^.!?]{0,120}$"
+                    r"|\bnot\s+an?\s+claim\b[^.!?]{0,120}$"
+                    r"|\b(?:no|without)\s+(?:evidence|indication|proof|sign)"
+                    r"\s+that\b[^.!?]{0,120}$"
+                    r"|\b(?:does|do|did|is|are|was|were|has|have|had)\s+not\s+"
+                    r"(?:claim|confirm|establish|show|prove|mean|indicate|say|"
+                    r"state)\b[^.!?]{0,120}$"
+                    r"|\b(?:cannot|can't|couldn't)\s+(?:claim|confirm|establish|"
+                    r"show|prove|mean|indicate|say|state)\b[^.!?]{0,120}$",
+                    before,
+                )
+                local_negation = re.search(
+                    r"\b(?:not|no|never|nothing|none|nobody|neither|cannot|can't|"
+                    r"couldn't|wouldn't|shouldn't|doesn't|didn't|isn't|aren't|"
+                    r"wasn't|weren't|hasn't|haven't|hadn't|no longer)\b"
+                    r"[^.!?]{0,40}$",
+                    before,
+                )
+                if not (negated_claim or local_negation):
+                    affirmative_unchanged = True
+                    break
+        result["reported_source_uncertainty"] = (
+            reports_uncertainty and not affirmative_unchanged
         )
         return result
 
@@ -558,6 +741,42 @@ def build_cases(clock: Clock) -> List[Case]:
             "envelopes are not continuous viewing time. "
             f"Configuration JSON: {json.dumps(CONICAL_CONFIG, separators=(',', ':'))}",
             _conical_complete(CONICAL_CONFIG["configuration_id"]),
+        ),
+        Case(
+            "conical_amsr2_registry_selection",
+            ("conical", "registry", "lookup", "revision", "complete"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. Use "
+            "the shared configuration lookup tool. I explicitly select the "
+            f"reviewed configuration revision {CONICAL_SHARED_REVISION} for the "
+            "product scan sector and accept its stated approximations and source "
+            "choices. Use the exact ID and revision returned by lookup. Prepare "
+            "the study, show me its warnings and settings, run it with the exact "
+            "accepted setup revision, then fetch the viewing events. Explain "
+            "cell-center sampling and that field-of-regard envelopes are not "
+            "continuous viewing time.",
+            _conical_registry_complete(CONICAL_SHARED_ID, CONICAL_SHARED_REVISION),
+        ),
+        Case(
+            "conical_amsr2_failed_refresh",
+            ("conical", "registry", "refresh", "uncertainty"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. "
+            "I tried to refresh the JAXA source page on 2026-10-28, but it was "
+            "unavailable. Record a failed source refresh for the reviewed AMSR2 "
+            f"configuration at revision {CONICAL_SHARED_REVISION}, with source "
+            "check ID jaxa-page-attempt-2026-10-28 and failure reason that the "
+            "page was unavailable. You may look up the configuration first to "
+            "discover its exact ID. Record the failed refresh before preparing, "
+            "then use the exact "
+            f"revision {CONICAL_SHARED_REVISION}, which I explicitly select for "
+            "this historical window and accept with the source-status warning. "
+            "Prepare, run with the accepted setup revision, and fetch the events. "
+            "State that the failed check leaves current source status unknown. "
+            "Report the event count, say that daily area is cell-center sampled, "
+            "and explain that the field-of-regard envelope is not continuous "
+            "viewing time.",
+            _conical_registry_failed_refresh(CONICAL_SHARED_ID, CONICAL_SHARED_REVISION),
         ),
         Case(
             "conical_applicability_rejected",

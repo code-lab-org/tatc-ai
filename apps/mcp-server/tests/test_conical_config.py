@@ -1,17 +1,11 @@
 """Typed conical configuration: source evidence, conflicts, and rejection."""
 
-import copy
-import json
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
 from src.conical_config import ConicalConfiguration, configuration_from_snapshot
 from src.conical_tatc import resolved_snapshot
-
-
-FIXTURE = Path(__file__).resolve().parents[1] / "data" / "amsr2_conical_configuration.json"
+from tests.conical_fixtures import load_study_config
 OMM = {
     "OBJECT_NAME": "GCOM-W1 (SHIZUKU)",
     "OBJECT_ID": "2012-025A",
@@ -34,7 +28,7 @@ OMM = {
 
 
 def _fixture():
-    return json.loads(FIXTURE.read_text())
+    return load_study_config()
 
 
 def _valid():
@@ -43,7 +37,8 @@ def _valid():
 
 def test_amsr2_fixture_is_typed_and_source_backed():
     configuration = _valid()
-    assert configuration.configuration_id == "amsr2-gcom-w1-conical-product-sector"
+    assert configuration.configuration_id == "amsr2-gcom-w1-conical-product-sector-study"
+    assert configuration.revision == "2026-10-27.1-study"
     assert configuration.spacecraft.norad_id == 38337
     assert configuration.operating_mode == "conical_scan_40_rpm_product_sector"
     assert configuration.channel.center_frequency_ghz == 10.65
@@ -66,6 +61,7 @@ def test_amsr2_fixture_is_typed_and_source_backed():
     assert len(configuration.evidence) >= 8
     assert all(item.locator and item.excerpt for item in configuration.evidence)
     assert all(check.status in {"passed", "limited"} for check in configuration.geometry_checks)
+    assert all(check.geometry_parameter is None for check in configuration.geometry_checks)
     assert any(check.check_id == "orbit-reference-residual" for check in configuration.geometry_checks)
 
 

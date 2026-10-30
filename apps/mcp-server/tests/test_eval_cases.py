@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from eval.cases import Call, Clock, Trace, build_cases
+from eval.cases import CONICAL_CONFIG, Call, Clock, Trace, build_cases
 
 
 def _clock():
@@ -242,7 +242,7 @@ def _conical_trace(clock):
         "result_kind": "conical_study",
         "accounting_method": "conical_events_v1",
         "setup_revision": "sha256:abc",
-        "configuration_id": "amsr2-gcom-w1-conical-product-sector-eval",
+        "configuration_id": CONICAL_CONFIG["configuration_id"],
         "window_start_utc": clock.d0.isoformat().replace("+00:00", "Z"),
         "window_end_utc_exclusive": (clock.d0 + __import__("datetime").timedelta(hours=2))
         .isoformat()
@@ -285,6 +285,75 @@ def _conical_trace(clock):
     )
 
 
+def _registry_conical_trace(clock, failed_refresh=False):
+    from eval.cases import CONICAL_SHARED_ID, CONICAL_SHARED_REVISION
+
+    trace = _conical_trace(clock)
+    selection = {
+        "configuration_id": CONICAL_SHARED_ID,
+        "revision": CONICAL_SHARED_REVISION,
+        "source": "reviewed_shared",
+        "selection": "explicit_exact_revision",
+        "source_change_checks": [],
+        "source_change_notices": [],
+        "refresh_uncertainty": [],
+    }
+    prepare = trace.calls[0]
+    prepare.args = {
+        "grid_rows": 2,
+        "grid_columns": 2,
+        "configuration_id": CONICAL_SHARED_ID,
+        "configuration_revision": CONICAL_SHARED_REVISION,
+    }
+    prepare.parsed["registry_selection"] = selection
+    finish = trace.calls[1]
+    finish.parsed["configuration_id"] = CONICAL_SHARED_ID
+    finish.parsed["configuration_revision"] = CONICAL_SHARED_REVISION
+    finish.parsed["registry_selection"] = selection
+
+    calls = []
+    if failed_refresh:
+        failed_check = {
+            "status": "failed",
+            "failure_reason": "The source page was unavailable during this check.",
+        }
+        selection["refresh_uncertainty"] = [failed_check]
+        calls.append(
+            Call(
+                "record_instrument_configuration_refresh",
+                {"status": "failed"},
+                False,
+                "{}",
+                parsed={"status": "failed", "source_change_check": failed_check},
+            )
+        )
+    calls.append(
+        Call(
+            "lookup_instrument_configurations",
+            {"instrument": "AMSR2", "spacecraft": "GCOM-W1"},
+            False,
+            "{}",
+            parsed={
+                "selection_required": True,
+                "selection": None,
+                "candidates": [
+                    {
+                        "configuration_id": CONICAL_SHARED_ID,
+                        "revision": CONICAL_SHARED_REVISION,
+                        "registry_status": "reviewed_shared",
+                        "refresh_uncertainty": selection["refresh_uncertainty"],
+                    }
+                ],
+            },
+        )
+    )
+    calls.extend(trace.calls)
+    trace.calls = calls
+    if failed_refresh:
+        trace.final += " The failed refresh leaves current source status unknown."
+    return trace
+
+
 def test_conical_eval_requires_prepared_accepted_revision_and_event_semantics():
     clock = _clock()
     case = next(
@@ -322,6 +391,179 @@ def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
         trace = _conical_trace(clock)
         trace.final = final
         assert not case.checks(trace, clock)["reported"], final
+
+
+def test_conical_reporting_accepts_negated_continuous_claims():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_complete"
+    )
+    for final in (
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing. A gap area of zero wouldn't mean continuous observation.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing. Continuous viewing and uncovered durations aren't available.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing. Each whole cell is classified observed or gap based on the "
+        "event at its center.",
+    ):
+        trace = _conical_trace(clock)
+        trace.final = final
+        assert case.checks(trace, clock)["reported"], final
+
+
+def test_eval_geometry_check_handles_missing_converted_swath_value():
+    clock = _clock()
+    case = next(
+        case
+        for case in build_cases(clock)
+        if case.id == "resolver_lookup_supported"
+    )
+    start = clock.d0
+    end = start.replace(day=start.day + 1)
+    summary = {
+        "result_id": "result-1",
+        "window_start_utc": start.isoformat(),
+        "window_end_utc_exclusive": end.isoformat(),
+        "roi_bbox": [-113.0, 32.0, -111.0, 35.0],
+        "geometry_model": {
+            "geometry_input_kind": "field_of_regard_deg",
+            "geometry_input_value": 110.0,
+        },
+        "geometry_assessment": {
+            "status": "supported",
+            "source_text": "A 110 degree field of regard.",
+        },
+    }
+    trace = Trace(
+        prompt=case.prompt,
+        calls=[Call("finish_access_run", {}, False, "{}", parsed=summary)],
+        final="The study completed.",
+    )
+    checks = case.checks(trace, clock)
+    assert checks["completed"]
+    assert checks["geometry"] is False
+
+
+def test_registry_eval_requires_lookup_and_explicit_revision_selection():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_registry_selection"
+    )
+    trace = _registry_conical_trace(clock)
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace.calls.pop(0)
+    checks = case.checks(trace, clock)
+    assert not checks["looked_up_candidate_without_selection"]
+    assert not all(checks.values())
+
+    trace = _registry_conical_trace(clock)
+    trace.calls[1].args["configuration_revision"] = "latest"
+    checks = case.checks(trace, clock)
+    assert not checks["prepared_exact_registry_revision"]
+    assert not all(checks.values())
+
+    trace = _registry_conical_trace(clock)
+    trace.calls[1].args["configuration"] = None
+    checks = case.checks(trace, clock)
+    assert checks["prepared_exact_registry_revision"]
+
+
+def test_failed_refresh_eval_requires_uncertainty_in_the_saved_result_and_reply():
+    clock = _clock()
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_failed_refresh"
+    )
+    trace = _registry_conical_trace(clock, failed_refresh=True)
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    refresh = trace.calls.pop(0)
+    lookup = trace.calls.pop(0)
+    trace.calls[0:0] = [lookup, refresh]
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    trace = _registry_conical_trace(clock, failed_refresh=True)
+    refresh = trace.calls.pop(0)
+    lookup = trace.calls.pop(0)
+    prepare = trace.calls.pop(0)
+    trace.calls[0:0] = [lookup, prepare, refresh]
+    checks = case.checks(trace, clock)
+    assert not checks["recorded_failed_refresh_before_prepare"]
+
+    trace = _registry_conical_trace(clock, failed_refresh=True)
+    trace.final = (
+        "The failed refresh leaves source status unknown; the source cannot be "
+        "considered unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown, but the sources are unchanged."
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown, but the source page has not changed."
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; there is no claim that the sources are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; it is not a claim that the sources and "
+        "geometry are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown; nothing was verified as unchanged."
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; the failed check does not claim that the "
+        "sources remain unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; the failed check does not confirm the sources "
+        "are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown; the source was not verified, and the sources "
+        "are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = "Source status is unknown, but the source was never changed."
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = (
+        "Source status is unknown. No fresh evidence was available and the "
+        "sources are unchanged."
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["reported_source_uncertainty"]
+
+    trace.final = trace.final.replace("unknown", "unchanged")
+    checks = case.checks(trace, clock)
+    assert checks["recorded_failed_refresh_before_prepare"]
+    assert checks["result_retains_refresh_uncertainty"]
+    assert not checks["reported_source_uncertainty"]
 
 
 def test_conical_unresolved_sector_requires_a_choice_before_running():

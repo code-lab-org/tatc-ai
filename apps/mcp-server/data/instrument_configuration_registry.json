@@ -1,0 +1,33 @@
+{
+  "schema_version": "instrument-configuration-registry-v1",
+  "entries": [
+    {
+      "configuration_path": "configurations/amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json",
+      "registry_status": "reviewed_shared",
+      "source_change_checks": [
+        {
+          "check_id": "amsr2-initial-inclusion-2026-10-27",
+          "kind": "initial_inclusion",
+          "status": "checked",
+          "checked_at_utc": "2026-10-27T00:00:00Z",
+          "checked_source_revision_id": "tatc-3.6.0-jaxa-amsr2-2026-10-27",
+          "reported_by": "assistant",
+          "summary": "The issue #49 evidence bundle records this source set as checked on 2026-10-27. This initial inclusion uses that check and does not claim a later refresh.",
+          "evidence_ids": [
+            "tatc-amsr2-validation",
+            "tatc-amsr2-nadir-reference",
+            "tatc-amsr2-along-track-view",
+            "tatc-amsr2-geometry-check",
+            "tatc-amsr2-observations",
+            "tatc-amsr2-orbit-residual",
+            "tatc-amsr2-channel-geometry",
+            "jaxa-amsr2-specs",
+            "jaxa-gcom-w-status",
+            "jaxa-gcom-w-regular-observation",
+            "jaxa-amsr2-passive-microwave"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # MCP tools
 
-The MCP server provides satellite ground-track maps, legacy interval-based coverage estimates, and event-based conical-scanning access studies through LibreChat.
+The MCP server provides satellite ground-track maps, legacy interval-based coverage estimates, shared instrument-configuration lookup, and event-based conical-scanning access studies through LibreChat.
 
 ## Ground-track maps
 
@@ -26,6 +26,16 @@ Windows of three days or less allow 144 cells. Longer windows allow 36 cells and
 
 `get_access_daily` pages through daily observed and gap areas. `get_access_cells` returns the grid as GeoJSON with per-cell access counts and revisit, filtered to all, observed, or gaps. `get_access_revisit` returns revisit numbers. Results and drafts expire after 24 hours. Coverage estimates model satellite access. They do not include actual acquisitions or cloud cover.
 
+## Shared instrument configuration lookup
+
+`lookup_instrument_configurations` searches reviewed revisions by instrument, spacecraft name or alias, operating mode, configuration ID, and exact revision. Revision filters use equality. Each candidate includes identity, channel, applicability, normalized geometry, source evidence, geometry checks, source revision, interpretation, approximation status, approximations, source conflicts, and recorded source checks. A lookup never selects a configuration. Pass the exact `configuration_id` and `configuration_revision` to `prepare_conical_study`; preparation rejects a missing revision instead of choosing the newest one.
+
+The reviewed registry currently contains one AMSR2 conical-scan revision for GCOM-W1, `2026-10-27.1`. Its normalized settings and source evidence are stored in `apps/mcp-server/data/configurations/amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json`. The independent TAT-C reference, expected event and position values, and mission residuals are in `apps/mcp-server/tests/fixtures/amsr2_conical_reference.json`. The entry records the source check documented by the issue #49 evidence bundle on 2026-10-27. It does not claim a later refresh. The applicability interval ends at 2026-10-27, so a request after that date needs a newly sourced revision.
+
+`record_instrument_configuration_refresh` records a source check supplied by the assistant or a maintainer. The server does not retrieve source documents. Replaying an identical check is idempotent, including when its timestamp uses another offset for the same UTC instant. An unchanged check records no change. A documentation-only change adds a review notice without a new revision. A changed-geometry finding must include a complete configuration with a new revision and exact copies of the supplied evidence for each changed parameter. A changed-applicability finding must include a complete new revision whose interval retains evidence supporting `applicability.start` or `applicability.end` when those dates change. A geometry check may bind its reported value to a geometry parameter with `geometry_parameter`; a bound value must match the configured geometry within the check tolerance, and an unbound check remains an independent reference. A revised assessment cannot carry a bound geometry check that still reports the prior value of a changed parameter, must include a check that cites the refresh evidence, and cannot silently drop or narrow a declared approximation; an intentional removal needs supplied evidence supporting `approximation.<id>.removed`. The lookup then returns the prior revision with a change notice and the new revision as a source-refresh candidate. It reports the latest source status separately from superseded failed checks, so a successful later check resolves current uncertainty while the history remains in `source_change_checks`. An unchanged check recorded after preparation does not invalidate the accepted setup revision; a new material notice or current failure does. The candidate remains in memory for the current server process; a durable shared revision requires a reviewed repository change. The server rejects a refresh before changing state when it reaches 256 records, 32 candidate revisions, or 1 MiB of serialized refresh data. It never removes an earlier notice to make room. A failed check records why the source state remains unknown. The previous revision remains available within its recorded applicability and carries that uncertainty into a new proposal and saved result. A refresh never changes an earlier result snapshot.
+
+Researchers can still supply a complete study-specific configuration directly. It does not enter the shared registry or require a maintainer queue.
+
 ## Conical-scanning studies
 
 A conical study models one sourced conical instrument on one spacecraft. It keeps every valid TAT-C viewing epoch instead of merging the broader field-of-regard period into an access interval.
@@ -34,7 +44,7 @@ A study takes four calls:
 
 1. `begin_access_run` with exactly one satellite and an explicit UTC window.
 2. `set_access_region` with four numeric bounds.
-3. `prepare_conical_study` with draft ID, grid rows and columns, and one complete conical configuration. It validates and resolves the configuration but runs no calculation. It returns the region, grid, window, chosen source options, approximations, warnings, limits, and a `setup_revision`.
+3. `prepare_conical_study` with draft ID and grid rows and columns, plus either one complete conical configuration or an exact registry `configuration_id` and `configuration_revision`. It validates and resolves the configuration but runs no calculation. It returns the region, grid, window, chosen source options, approximations, warnings, limits, and a `setup_revision`.
 4. `finish_conical_study` with the draft ID, the exact `setup_revision`, and `accept_setup=true` only after the researcher accepts the proposal.
 
 The preparation step is a separate request form from legacy geometry. Do not pass `field_of_regard_deg` or `swath_width_km` to a conical study; do not pass a conical configuration to the legacy finish tool. A stale revision, changed region, changed grid, changed orbit, changed configuration, changed source choice, changed approximation, or changed software version fails before calculation. Preparing the same draft again replaces its proposal, so an older acceptance no longer applies.
@@ -56,7 +66,7 @@ The server validates structure, ranges, units, evidence presence and references,
 
 ### Source-backed AMSR2 example
 
-`apps/mcp-server/data/amsr2_conical_configuration.json` is the study-specific AMSR2 configuration used by the tests and tool-calling eval. It is not a shared registry entry and acceptance does not promote it.
+The conical tests and tool-calling eval derive a study-specific AMSR2 example from the shared configuration by overriding its ID and revision to `amsr2-gcom-w1-conical-product-sector-study` at `2026-10-27.1-study` and removing the shared check bindings. This keeps the legacy unbound input path covered without a duplicate data file. Researchers can still supply a complete study-specific configuration directly. The shared AMSR2 entry remains the independent reference target, and a study-specific configuration is not promoted when accepted.
 
 | Item | Value | Source |
 | --- | --- | --- |
@@ -94,7 +104,7 @@ The result uses `accounting_method: "conical_events_v1"`:
 
 ### Result fetches
 
-All conical fetches return the same accepted setup snapshot, provenance, warnings, limits, and accounting definitions, plus `accounting_method`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
+All conical fetches return the same accepted setup snapshot, selected registry ID and revision when applicable, source-change records, provenance, warnings, limits, and accounting definitions, plus `accounting_method`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
 
 Cell replies carry provenance, warnings, and definitions once at the response level. Their GeoJSON metadata keeps the configuration and setup identity without repeating those records.
 
@@ -110,4 +120,4 @@ The integration test compares the mapped instrument with an independently constr
 
 Those are software-integration tolerances, not mission-accuracy claims. The recorded mission reference is the TAT-C 3.6.0 AMSR2 validation for one analysis day: about 1.662 km along-track p95 orbit residual, 0.399 km cross-track p95, 0.555 km radial p95, 0.27 s p95 event-time residual, and 2.83 km swath-width difference. The per-case engineering tolerances are 2 km, 1 s, and 5 km, each a rounded margin above the recorded residual. They describe that one reference day and do not establish general mission accuracy for other dates or channels.
 
-This workflow does not include a shared registry, registry lookup, additional instrument families, partial or disjoint applicability studies, acquisition schedules, clouds, terrain, retrieval quality, or a browser coverage explorer. Study-specific settings are not promoted into a shared registry.
+The registry currently contains only the reviewed AMSR2 configuration. It does not include additional instrument families, partial or disjoint applicability studies, acquisition schedules, clouds, terrain, retrieval quality, or a browser coverage explorer. Source-document search, downloading, and monitoring remain outside the MCP server. Study-specific settings are not promoted into the shared registry.

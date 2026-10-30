@@ -9,7 +9,7 @@
     "nadir_reference": "geodetic"
   },
   "source_evidence": {
-    "configuration": "data/amsr2_conical_configuration.json",
+    "configuration": "data/configurations/amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json",
     "tatc_validation_url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
     "jaxa_url": "https://www.eorc.jaxa.jp/AMSR/satellite/gcom-w_en.html"
   },

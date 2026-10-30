@@ -2,15 +2,20 @@
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from dateutil import parser as date_parser
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
 from mcp.types import EmbeddedResource, TextContent, TextResourceContents
+from pydantic import AwareDatetime
 
 from . import celestrak_client, oscar_client
-from .conical_config import ConicalConfiguration
+from .configuration_registry import (
+    lookup_instrument_configurations as _lookup_instrument_configurations,
+    record_instrument_configuration_refresh as _record_instrument_configuration_refresh,
+)
+from .conical_config import ConicalConfiguration, SourceEvidence
 from .conical_study import finish_conical_study as _finish_conical
 from .conical_study import get_conical_event_spacing as _conical_event_spacing
 from .conical_study import get_conical_events as _conical_events
@@ -116,8 +121,12 @@ SERVER_INSTRUCTIONS = (
     "commas to model a constellation. Set daylight_only on the finish tool for "
     "optical imagers. "
     "For a conical scanner, use the separate conical preparation and finish "
-    "workflow instead of legacy field_of_regard_deg or swath_width_km. The "
-    "researcher or calling assistant must supply one complete sourced conical "
+    "workflow instead of legacy field_of_regard_deg or swath_width_km. First "
+    "use the shared configuration lookup tool to inspect matching revisions. "
+    "It returns candidates but does not select one. Pass the researcher's "
+    "explicit configuration_id and revision to preparation; never choose the "
+    "latest revision implicitly. A researcher may instead supply one complete "
+    "study-specific sourced conical configuration. The "
     "configuration: identity, spacecraft and orbit-provider identity, mode, "
     "channel, applicability interval, typed angles with units and frames, "
     "evidence excerpts with locators, source revision, interpretation, source "
@@ -132,7 +141,14 @@ SERVER_INSTRUCTIONS = (
     "accept_setup=true. Never set accept_setup true without the researcher's "
     "acceptance. If region, grid, window, orbit, configuration, source choice, "
     "approximation, or software changed, prepare again for a new revision. The "
-    "finish tool rejects stale revisions and runs no calculation for them. The "
+    "finish tool rejects stale revisions and runs no calculation for them. "
+    "Use the instrument configuration refresh tool only when the assistant or maintainer has "
+    "checked source evidence. It records unchanged, documentation-only, "
+    "changed-geometry, changed-applicability, or failed checks. A "
+    "documentation-only change adds a review notice without a new revision. A "
+    "geometry or applicability change creates a separate selectable immutable "
+    "revision and a notice on the prior one. A failed check means the source "
+    "status is unknown. The "
     "established applicability interval must contain the full window; this "
     "increment rejects uncovered dates and additional configurations. "
     "Conical results preserve each valid TAT-C viewing epoch. The broader "
@@ -748,24 +764,136 @@ def finish_access_run(
 
 
 @mcp.tool
+def lookup_instrument_configurations(
+    instrument: Optional[str] = None,
+    spacecraft: Optional[str] = None,
+    operating_mode: Optional[str] = None,
+    configuration_id: Optional[str] = None,
+    revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Find reviewed shared instrument configuration revisions.
+
+    The lookup matches instrument, spacecraft name or alias, operating mode,
+    configuration ID, and revision. It returns identity, channel, applicability,
+    geometry, source evidence, geometry checks, source revision, interpretation,
+    approximations, source conflicts, and recorded source checks for each match.
+    It never chooses a configuration for a study. Pass the exact configuration
+    ID and revision returned here to the preparation tool.
+
+    Args:
+        instrument: Instrument name or part of its name.
+        spacecraft: Spacecraft name or alias.
+        operating_mode: Operating mode or part of its name.
+        configuration_id: Stable configuration identifier.
+        revision: Exact immutable configuration revision, matched by equality.
+
+    Returns:
+        Matching revision candidates and an explicit-selection requirement.
+    """
+    return _lookup_instrument_configurations(
+        instrument, spacecraft, operating_mode, configuration_id, revision
+    )
+
+
+@mcp.tool
+def record_instrument_configuration_refresh(
+    configuration_id: str,
+    base_revision: str,
+    status: Literal[
+        "unchanged",
+        "documentation_changed",
+        "geometry_changed",
+        "applicability_changed",
+        "failed",
+    ],
+    checked_at_utc: AwareDatetime,
+    checked_source_revision_id: str,
+    reported_by: Literal["assistant", "maintainer"],
+    summary: str,
+    evidence_ids: Optional[List[str]] = None,
+    source_evidence: Optional[List[SourceEvidence]] = None,
+    updated_configuration: Optional[ConicalConfiguration] = None,
+    failure_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record a source check supplied by the assistant or a maintainer.
+
+    This tool does not fetch source documents or edit the repository registry.
+    A changed geometry or applicability interval requires a complete sourced
+    configuration with a new immutable revision. The refresh record and candidate
+    remain in memory for this server process; a shared registry update requires a
+    reviewed repository change. A failed check records uncertainty and does not
+    claim that sources or geometry remain unchanged. Refresh state is capped at
+    256 records, 32 candidate revisions, and 1 MiB of serialized data. New checks
+    are rejected at capacity; existing notices are never evicted. Repeating an
+    identical check is idempotent, including equivalent UTC instants written with
+    other offsets. Source evidence for changed geometry or applicability must
+    exactly match the evidence retained in the updated configuration. A geometry
+    check may bind its reported value to a geometry parameter with
+    geometry_parameter. A revised geometry cannot keep a bound check that reports
+    the prior value, must cite the refresh evidence, and cannot silently remove
+    or narrow an approximation; removal requires evidence supporting
+    approximation.<id>.removed.
+
+    Args:
+        configuration_id: Stable ID of the reviewed shared configuration.
+        base_revision: Exact shared revision against which the source was checked.
+        status: Whether evidence was unchanged, changed without geometry or
+            applicability impact, changed the geometry or applicability, or could
+            not be checked.
+        checked_at_utc: UTC time when the source check was performed.
+        checked_source_revision_id: Source document revision or attempted check ID.
+        reported_by: Whether the supplied finding came from the assistant or maintainer.
+        summary: Short account of the source check and its findings.
+        evidence_ids: Existing evidence IDs supporting this check.
+        source_evidence: New source evidence retained with the check.
+        updated_configuration: Complete new configuration for a changed geometry
+            or applicability interval.
+        failure_reason: Required explanation when status is failed.
+
+    Returns:
+        The recorded check, any measured geometry or applicability differences,
+        and a new revision candidate when the supplied source reports changed
+        geometry or applicability.
+    """
+    return _record_instrument_configuration_refresh(
+        configuration_id=configuration_id,
+        base_revision=base_revision,
+        status=status,
+        checked_at_utc=checked_at_utc,
+        checked_source_revision_id=checked_source_revision_id,
+        reported_by=reported_by,
+        summary=summary,
+        evidence_ids=evidence_ids,
+        source_evidence=source_evidence,
+        updated_configuration=updated_configuration,
+        failure_reason=failure_reason,
+    )
+
+
+@mcp.tool
 def prepare_conical_study(
     draft_id: str,
     grid_rows: int,
     grid_columns: int,
-    configuration: ConicalConfiguration,
+    configuration: Optional[ConicalConfiguration] = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Prepare one sourced conical-scanning study without calculating.
 
     Use this separate path for a conical scanner. Supply one complete
     configuration with explicit units and reference frames, source evidence,
     source revision, source conflicts and a chosen rationale, reported
-    geometry checks, applicability dates, and approximations. The server
-    validates the structure and values but does not authenticate source text.
+    geometry checks, applicability dates, and approximations, or select an
+    exact shared configuration ID and revision returned by the lookup tool.
+    The server validates the structure and values but does not authenticate
+    source text.
     It returns the normalized proposal, region, grid, window, consequential
     settings, warnings, and a setup revision. No TAT-C analysis runs yet.
 
-    The configuration describes one instrument on one spacecraft. Multi-
-    instrument and registry studies are not supported in this increment.
+    The configuration describes one instrument on one spacecraft. Registry
+    lookup and explicit revision selection are supported, but multi-instrument
+    studies are not supported in this increment.
     Cone angles, scan sector, velocity frame, nadir reference, and along-track
     view are distinct from ground incidence and nominal swath width; do not
     invent or silently convert them. Missing evidence, invalid units or
@@ -777,17 +905,28 @@ def prepare_conical_study(
         draft_id: Draft ID from the begin tool.
         grid_rows: Equal latitude partitions, 1 through 12.
         grid_columns: Equal longitude partitions, 1 through 12.
-        configuration: One conical configuration with identity, spacecraft,
+        configuration: One study-specific conical configuration with identity, spacecraft,
             mode, channel, applicability, typed geometry, evidence, source
             revision, interpretation, approximation status and approximations,
             source conflicts with chosen options, and geometry checks.
+        configuration_id: Exact shared registry ID, used together with
+            configuration_revision and instead of configuration.
+        configuration_revision: Exact immutable shared registry revision. The
+            latest revision is never selected implicitly.
 
     Returns:
         Proposal with setup_revision, region, grid, window, configuration
         snapshot, consequential settings, conflicts, approximations, warnings,
         limits, and the explicit acceptance requirement. No result ID yet.
     """
-    return _prepare_conical(draft_id, grid_rows, grid_columns, configuration)
+    return _prepare_conical(
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configuration,
+        configuration_id,
+        configuration_revision,
+    )
 
 
 @mcp.tool

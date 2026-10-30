@@ -10,6 +10,8 @@ from unittest import mock
 from fastmcp import Client
 from shapely.geometry import Polygon
 
+from tests.conical_fixtures import load_study_config
+
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
@@ -57,6 +59,8 @@ class ServerTests(unittest.TestCase):
                 "get_satellite_instruments",
                 "resolve_instrument_geometry",
                 "convert_swath_to_field_of_regard",
+                "lookup_instrument_configurations",
+                "record_instrument_configuration_refresh",
                 "begin_access_run",
                 "set_access_region",
                 "finish_access_run",
@@ -84,6 +88,9 @@ class ServerTests(unittest.TestCase):
         self.assertIn("without confirmation", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("conical preparation", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("conical finish", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("shared configuration lookup tool", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("never choose the latest revision implicitly", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("instrument configuration refresh tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("viewing-event fetch", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("event-spacing fetch", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("field-of-regard period", self.server.SERVER_INSTRUCTIONS)
@@ -742,24 +749,21 @@ class ServerTests(unittest.TestCase):
         )
         required = set(tool.inputSchema["required"])
         self.assertEqual(
-            required, {"draft_id", "grid_rows", "grid_columns", "configuration"}
+            required, {"draft_id", "grid_rows", "grid_columns"}
         )
         properties = tool.inputSchema["properties"]
         self.assertNotIn("field_of_regard_deg", properties)
         self.assertNotIn("swath_width_km", properties)
+        self.assertIn("configuration_id", properties)
+        self.assertIn("configuration_revision", properties)
         configuration = properties["configuration"]
-        self.assertEqual(configuration["type"], "object")
-        self.assertIn("geometry", configuration["properties"])
-        self.assertIn("evidence", configuration["properties"])
-        self.assertIn("source_conflicts", configuration["properties"])
+        configuration_model = configuration["anyOf"][0]
+        self.assertEqual(configuration_model["type"], "object")
+        self.assertIn("geometry", configuration_model["properties"])
+        self.assertIn("evidence", configuration_model["properties"])
+        self.assertIn("source_conflicts", configuration_model["properties"])
         expected = {"status": "awaiting_acceptance", "setup_revision": "sha256:abc"}
-        configuration = json.loads(
-            (
-                Path(__file__).resolve().parents[1]
-                / "data"
-                / "amsr2_conical_configuration.json"
-            ).read_text()
-        )
+        configuration = load_study_config()
         with mock.patch.object(
             self.server, "_prepare_conical", return_value=expected
         ) as prepare:
@@ -774,7 +778,35 @@ class ServerTests(unittest.TestCase):
             )
         self.assertFalse(result.is_error)
         self.assertEqual(json.loads(result.content[0].text), expected)
-        prepare.assert_called_once_with("draft_abc", 2, 2, mock.ANY)
+        prepare.assert_called_once_with("draft_abc", 2, 2, mock.ANY, None, None)
+
+    def test_registry_tools_expose_revision_and_source_check_fields(self):
+        tools = {tool.name: tool for tool in self.list_tools()}
+        lookup = tools["lookup_instrument_configurations"].inputSchema
+        self.assertTrue(
+            {
+                "instrument",
+                "spacecraft",
+                "operating_mode",
+                "configuration_id",
+                "revision",
+            }.issubset(lookup["properties"])
+        )
+
+        refresh = tools["record_instrument_configuration_refresh"].inputSchema
+        self.assertTrue(
+            {
+                "configuration_id",
+                "base_revision",
+                "status",
+                "checked_at_utc",
+                "checked_source_revision_id",
+                "reported_by",
+                "summary",
+            }.issubset(set(refresh["required"]))
+        )
+        self.assertIn("source_evidence", refresh["properties"])
+        self.assertIn("updated_configuration", refresh["properties"])
 
     def test_finish_conical_requires_revision_and_acceptance_only(self):
         tool = next(

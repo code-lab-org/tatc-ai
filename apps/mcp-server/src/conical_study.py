@@ -25,6 +25,7 @@ from .conical_accounting import (
     normalize_events,
     summarize_events,
 )
+from .configuration_registry import resolve_instrument_configuration
 from .conical_config import (
     SCHEMA_VERSION,
     ConicalConfiguration,
@@ -162,6 +163,7 @@ def _consequential_payload(
     cells: Sequence[Dict[str, Any]],
     grid_rows: int,
     grid_columns: int,
+    registry_selection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     satellite = stage["satellites"][0]
     start, end = _parse_window(stage)
@@ -186,6 +188,7 @@ def _consequential_payload(
         },
         "configuration_digest": _sha256(snapshot),
         "configuration": snapshot,
+        "registry_selection": registry_selection,
         "source_choices": source_choices_from_snapshot(snapshot),
         "approximation_ids": [
             approximation["approximation_id"]
@@ -206,9 +209,10 @@ def _setup_revision(
     cells: Sequence[Dict[str, Any]],
     grid_rows: int,
     grid_columns: int,
+    registry_selection: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     consequential = _consequential_payload(
-        stage, snapshot, cells, grid_rows, grid_columns
+        stage, snapshot, cells, grid_rows, grid_columns, registry_selection
     )
     return "sha256:" + _sha256(consequential), consequential
 
@@ -282,9 +286,51 @@ def _limits(stage: Dict[str, Any], configuration: ConicalConfiguration, long_win
 
 
 def _warnings(
-    configuration: ConicalConfiguration, proposal: Optional[bool] = False
+    configuration: ConicalConfiguration,
+    proposal: Optional[bool] = False,
+    registry_selection: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     warnings = configuration.warnings()
+    registry_selection = registry_selection or {}
+    if registry_selection.get("source") == "source_refresh_candidate":
+        warnings.append(
+            "This configuration is a source-refresh candidate supplied for this "
+            "server session. A shared registry revision requires a reviewed "
+            "repository change."
+        )
+    for check in registry_selection.get("source_change_notices", []):
+        if check.get("status") == "geometry_changed":
+            changes = ", ".join(
+                f"{item['parameter']}: {item['previous_value']} -> {item['new_value']}"
+                for item in check.get("geometry_changes", [])
+            )
+            warnings.append(
+                f"An explicit source refresh reports changed geometry in revision "
+                f"{check.get('new_revision')}: {changes}. Choose and accept one "
+                "exact configuration revision for this study."
+            )
+        elif check.get("status") == "applicability_changed":
+            changes = ", ".join(
+                f"{item['parameter']}: {item['previous_value']} -> "
+                f"{item['new_value']}"
+                for item in check.get("applicability_changes", [])
+            )
+            warnings.append(
+                "An explicit source refresh reports changed applicability in "
+                f"revision {check.get('new_revision')}: {changes}. Choose and "
+                "accept one exact configuration revision for this study."
+            )
+        elif check.get("status") == "documentation_changed":
+            warnings.append(
+                "An explicit source refresh reports a documentation change without "
+                "a recorded geometry change. Review its source evidence before use."
+            )
+    for check in registry_selection.get("refresh_uncertainty", []):
+        warnings.append(
+            "An explicit source refresh failed; the current source state is unknown. "
+            f"Failure: {check.get('failure_reason')}. The selected revision remains "
+            "limited to its recorded applicability and evidence."
+        )
     if proposal:
         warnings.append(
             "No calculation has run. The proposal is awaiting the researcher's "
@@ -302,6 +348,7 @@ def _proposal_payload(
     grid_columns: int,
     setup_revision: str,
     consequential: Dict[str, Any],
+    registry_selection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     long_window = end - start > SHORT_WINDOW_MAX
@@ -360,6 +407,22 @@ def _proposal_payload(
             "why": "A TAT-C or Python change can change numerical results.",
         },
     ]
+    if registry_selection is not None:
+        consequential_settings.append(
+            {
+                "setting": "registry_revision",
+                "value": {
+                    "configuration_id": registry_selection["configuration_id"],
+                    "revision": registry_selection["revision"],
+                    "source": registry_selection["source"],
+                    "source_change_notices": registry_selection[
+                        "source_change_notices"
+                    ],
+                    "refresh_uncertainty": registry_selection["refresh_uncertainty"],
+                },
+                "why": "The exact source revision and known source changes define the configuration accepted for this study.",
+            }
+        )
     return {
         "draft_id": stage.get("draft_id"),
         "status": "awaiting_acceptance",
@@ -369,6 +432,7 @@ def _proposal_payload(
         "instrument": configuration.instrument,
         "configuration_id": configuration.configuration_id,
         "configuration_revision": configuration.revision,
+        "registry_selection": registry_selection,
         "configuration": snapshot,
         "window_start_utc": iso_utc(start),
         "window_end_utc_exclusive": iso_utc(end),
@@ -398,7 +462,9 @@ def _proposal_payload(
         "approximation_status": snapshot["approximation_status"],
         "geometry_checks": snapshot["geometry_checks"],
         "interpretation": snapshot["interpretation"],
-        "warnings": _warnings(configuration, proposal=True),
+        "warnings": _warnings(
+            configuration, proposal=True, registry_selection=registry_selection
+        ),
         "limits": limits,
         "evidence_note": EVIDENCE_NOTE,
         "acceptance": {
@@ -425,10 +491,32 @@ def prepare_conical_study(
     draft_id: Any,
     grid_rows: Any,
     grid_columns: Any,
-    configuration: Any,
+    configuration: Any = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Resolve a sourced conical configuration into an acceptance proposal."""
-    resolved_configuration = _load_configuration(configuration)
+    registry_selection = None
+    if configuration_id is not None or configuration_revision is not None:
+        if configuration is not None:
+            raise ValueError(
+                "Supply either a study-specific configuration or an exact registry "
+                "configuration_id and configuration_revision, not both"
+            )
+        if configuration_id is None:
+            raise ValueError(
+                "configuration_id is required when selecting a registry revision"
+            )
+        resolved_configuration, registry_selection = resolve_instrument_configuration(
+            configuration_id, configuration_revision
+        )
+    else:
+        if configuration is None:
+            raise ValueError(
+                "Supply a study-specific configuration or an exact registry "
+                "configuration_id and configuration_revision"
+            )
+        resolved_configuration = _load_configuration(configuration)
     stage = copy.deepcopy(_get_draft(draft_id))
     if stage.get("roi_bbox") is None:
         raise ValueError(
@@ -449,7 +537,7 @@ def prepare_conical_study(
     except Exception as exc:  # TAT-C object construction failures
         raise ValueError(f"Could not resolve the conical configuration: {exc}") from exc
     setup_revision, consequential = _setup_revision(
-        stage, snapshot, cells, grid_rows, grid_columns
+        stage, snapshot, cells, grid_rows, grid_columns, registry_selection
     )
     proposal = _proposal_payload(
         stage,
@@ -460,6 +548,7 @@ def prepare_conical_study(
         grid_columns,
         setup_revision,
         consequential,
+        registry_selection,
     )
     proposal["draft_id"] = str(draft_id).strip()
     _set_proposal(
@@ -469,6 +558,7 @@ def prepare_conical_study(
             "grid_rows": int(grid_rows),
             "grid_columns": int(grid_columns),
             "configuration": snapshot,
+            "registry_selection": registry_selection,
             "consequential": consequential,
             "consequential_settings": proposal["consequential_settings"],
             "prepared_at_utc": iso_utc(_utcnow()),
@@ -573,6 +663,7 @@ def _result_payload(
             "grid": proposal["consequential"]["grid"],
             "satellite": proposal["consequential"]["satellite"],
             "source_choices": proposal["consequential"]["source_choices"],
+            "registry_selection": proposal.get("registry_selection"),
             "approximation_ids": proposal["consequential"]["approximation_ids"],
             "applicability": proposal["consequential"]["applicability"],
             "consequential_settings": proposal["consequential_settings"],
@@ -598,6 +689,7 @@ def _result_payload(
         "instrument": configuration.instrument,
         "configuration_id": configuration.configuration_id,
         "configuration_revision": configuration.revision,
+        "registry_selection": proposal.get("registry_selection"),
         "operating_mode": configuration.operating_mode,
         "channel": snapshot["channel"],
         "window_start_utc": iso_utc(start),
@@ -632,7 +724,9 @@ def _result_payload(
         "approximation_status": snapshot["approximation_status"],
         "geometry_checks": snapshot["geometry_checks"],
         "interpretation": snapshot["interpretation"],
-        "warnings": _warnings(configuration),
+        "warnings": _warnings(
+            configuration, registry_selection=proposal.get("registry_selection")
+        ),
         "limits": _limits(stage, configuration, long_window),
         "definitions": accounting["definitions"],
         "metrics": accounting["metrics"],
@@ -683,6 +777,7 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "instrument": full["instrument"],
         "configuration_id": full["configuration_id"],
         "configuration_revision": full["configuration_revision"],
+        "registry_selection": full["registry_selection"],
         "operating_mode": full["operating_mode"],
         "channel": full["channel"],
         "window_start_utc": full["window_start_utc"],
@@ -772,6 +867,30 @@ def finish_conical_study(
             "changed, prepare the study again and obtain a new acceptance."
         )
     configuration = configuration_from_snapshot(proposal["configuration"])
+    registry_selection = proposal.get("registry_selection")
+    if registry_selection is not None:
+        _, current_selection = resolve_instrument_configuration(
+            registry_selection["configuration_id"], registry_selection["revision"]
+        )
+        material_keys = (
+            "configuration_id",
+            "revision",
+            "source",
+            "base_revision",
+            "source_change_notices",
+            "refresh_uncertainty",
+            "shared_registry_update_required",
+        )
+        if _canonical(
+            {key: current_selection.get(key) for key in material_keys}
+        ) != _canonical(
+            {key: registry_selection.get(key) for key in material_keys}
+        ):
+            raise ValueError(
+                "The selected registry revision has new source-change information "
+                "since preparation. Prepare again and obtain acceptance of the "
+                "updated notice. No calculation was run."
+            )
     if stage.get("roi_bbox") is None:
         raise ValueError("This draft has no region; set the region before finishing")
     start, end = _parse_window(stage)
@@ -786,6 +905,7 @@ def finish_conical_study(
         cells,
         proposal["grid_rows"],
         proposal["grid_columns"],
+        registry_selection,
     )
     if current_revision != proposed_revision:
         raise ValueError(
@@ -840,6 +960,7 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "instrument": payload["instrument"],
         "configuration_id": payload["configuration_id"],
         "configuration_revision": payload["configuration_revision"],
+        "registry_selection": payload["registry_selection"],
         "window_start_utc": payload["window_start_utc"],
         "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
         "provenance": payload["provenance"],

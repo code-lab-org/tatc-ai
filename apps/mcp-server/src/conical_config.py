@@ -1,10 +1,10 @@
-"""Typed, sourced configuration for a conical-scanning study.
+"""Typed, sourced settings for shared and study-specific conical configurations.
 
 The model keeps source meaning separate from the TAT-C mapping: every angle
 carries its unit, every geometry parameter is backed by an evidence excerpt,
-and source conflicts retain the option that was chosen and why.  Tool code
-does not supply mission defaults; a researcher or calling assistant supplies
-one complete configuration.
+and source conflicts retain the option that was chosen and why. Registry data
+stays separate from generic tool logic, and study-specific settings remain
+available without automatic promotion.
 """
 
 from __future__ import annotations
@@ -23,6 +23,14 @@ from pydantic import (
 )
 
 SCHEMA_VERSION = "conical-configuration-v1"
+GeometryParameter = Literal[
+    "geometry.cone_angle",
+    "geometry.scan_center_azimuth",
+    "geometry.scan_half_width",
+    "geometry.along_track_field_of_view",
+    "geometry.beam_width",
+    "geometry.scan_sample_spacing",
+]
 REQUIRED_GEOMETRY_SUPPORT = (
     "geometry.cone_angle",
     "geometry.scan_center_azimuth",
@@ -244,6 +252,7 @@ class GeometryCheck(_StrictModel):
     reported_value: Optional[float] = None
     unit: Optional[str] = None
     tolerance: Optional[float] = None
+    geometry_parameter: Optional[GeometryParameter] = None
     status: Literal["passed", "limited", "failed"]
     evidence_ids: List[str] = Field(min_length=1)
 
@@ -290,7 +299,7 @@ class ConicalGeometry(_StrictModel):
 
 
 class ConicalConfiguration(_StrictModel):
-    """One complete, sourced, study-specific conical configuration."""
+    """One complete, sourced conical configuration."""
 
     schema_version: Literal[SCHEMA_VERSION] = SCHEMA_VERSION
     configuration_id: str = Field(min_length=1)
@@ -391,6 +400,48 @@ class ConicalConfiguration(_StrictModel):
                 "a reported geometry check failed; the configuration cannot be "
                 "accepted for calculation"
             )
+
+        geometry_values = {
+            "geometry.cone_angle": self.geometry.cone_angle,
+            "geometry.scan_center_azimuth": self.geometry.scan_center_azimuth,
+            "geometry.scan_half_width": self.geometry.scan_half_width,
+            "geometry.along_track_field_of_view": (
+                self.geometry.along_track_field_of_view
+            ),
+            "geometry.beam_width": self.geometry.beam_width,
+            "geometry.scan_sample_spacing": self.geometry.scan_sample_spacing,
+        }
+        for check in self.geometry_checks:
+            if check.geometry_parameter is None:
+                continue
+            angle = geometry_values[check.geometry_parameter]
+            if angle is None:
+                raise ValueError(
+                    f"geometry check {check.check_id!r} binds to "
+                    f"{check.geometry_parameter!r}, which is not present in this "
+                    "configuration"
+                )
+            reported_unit = _ANGLE_UNITS.get((check.unit or "").strip().lower())
+            if check.reported_value is None or reported_unit != angle.unit:
+                raise ValueError(
+                    f"geometry check {check.check_id!r} must report a value in "
+                    f"{angle.unit!r} for {check.geometry_parameter!r}"
+                )
+            tolerance = (
+                check.tolerance if check.tolerance is not None else 1e-6
+            )
+            if not math.isclose(
+                check.reported_value,
+                angle.value,
+                rel_tol=0,
+                abs_tol=tolerance,
+            ):
+                raise ValueError(
+                    f"geometry check {check.check_id!r} reports "
+                    f"{check.reported_value} {check.unit} for "
+                    f"{check.geometry_parameter!r}, but the configuration uses "
+                    f"{angle.value} {angle.unit}"
+                )
 
         for conflict in self.source_conflicts:
             choice = conflict.chosen
