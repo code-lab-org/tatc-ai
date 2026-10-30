@@ -6,7 +6,8 @@
     "epoch_tolerance_ms": 1.0,
     "position_tolerance_m": 1.0,
     "independent_method": "Construct GeneralPerturbationsOrbit, PointedInstrument, Satellite and Point directly, then call tatc.analysis.collect_observations. The fixture setup does not call the server's TAT-C mapping or event-collection adapter.",
-    "target_method": "Geodetic fixed points chosen to exercise inclusion on the right-looking side, exclusion on the opposite side, and the broad field-of-regard envelope without a valid pointed view. These are TAT-C software regression cases, not Sentinel-1 product geolocation samples.",
+    "target_method": "Geodetic fixed points include right-side events, a near-range gap and beyond-far-edge non-event, and one true left-side point in each orbit direction. The left-side points are about 34 degrees off geodetic nadir: the selected right-looking frame excludes them inside its broad field-of-regard envelope, and an independently constructed positive-roll TAT-C frame includes them. These are software regression cases, not Sentinel-1 product geolocation samples.",
+    "independent_geometry_method": "For each case, propagate the fixed OMM with TAT-C, obtain the satellite ITRS position and WGS84 subpoint from Skyfield, derive the subpoint track azimuth from positions at plus/minus 5 seconds, classify target side from the geodesic bearing relative to that track, and compute geodetic off-nadir from the satellite-to-subpoint and satellite-to-target ITRS vectors. This verification is test-only; production access geometry remains TAT-C collect_observations.",
     "source_validation_context": "TAT-C 3.6.0 validation uses Sentinel-1C Level-1 GRD annotations from 2026-10-02. Its fixed-roll residuals are retained in the registry with their published sample sizes and tolerances. That notebook's along-track sampling approximation differs from this configuration's physical 0.23-degree azimuth antenna beam-width mapping; it does not validate this exact adapter or predict acquisitions."
   },
   "orbit": {
@@ -50,11 +51,13 @@
         "longitude_deg": -90.1,
         "latitude_deg": 0.67
       },
+      "expected_side": "right",
+      "expected_off_nadir_range_deg": [33.0, 35.0],
       "expected_event_count": 1,
       "expected_epoch_utc": "2026-10-30T00:18:06.628046Z"
     },
     {
-      "case_id": "ascending-opposite-side",
+      "case_id": "ascending-near-range-gap",
       "orbit_direction": "ascending",
       "window_start_utc": "2026-10-30T00:10:00Z",
       "window_end_utc_exclusive": "2026-10-30T00:25:00Z",
@@ -63,8 +66,28 @@
         "longitude_deg": -93.0,
         "latitude_deg": 0.67
       },
+      "expected_side": "right",
+      "expected_off_nadir_range_deg": [13.0, 15.0],
       "expected_event_count": 0,
-      "expected_epoch_utc": null
+      "expected_epoch_utc": null,
+      "reference_epoch_utc": "2026-10-30T00:18:16.335316013Z"
+    },
+    {
+      "case_id": "ascending-left-side-envelope-only",
+      "orbit_direction": "ascending",
+      "window_start_utc": "2026-10-30T00:10:00Z",
+      "window_end_utc_exclusive": "2026-10-30T00:25:00Z",
+      "target": {
+        "cell_id": 4,
+        "longitude_deg": -98.6457681286507,
+        "latitude_deg": -1.1625295314556587
+      },
+      "expected_side": "left",
+      "expected_off_nadir_range_deg": [33.0, 35.0],
+      "expected_event_count": 0,
+      "expected_epoch_utc": null,
+      "expected_left_roll_event_count": 1,
+      "expected_envelope_event_count": 1
     },
     {
       "case_id": "descending-right-looking",
@@ -76,11 +99,13 @@
         "longitude_deg": 69.18992627163048,
         "latitude_deg": 2.670188299701081
       },
+      "expected_side": "right",
+      "expected_off_nadir_range_deg": [33.0, 35.0],
       "expected_event_count": 1,
       "expected_epoch_utc": "2026-10-30T01:07:00.003134Z"
     },
     {
-      "case_id": "descending-opposite-side",
+      "case_id": "descending-beyond-far-edge",
       "orbit_direction": "descending",
       "window_start_utc": "2026-10-30T01:00:00Z",
       "window_end_utc_exclusive": "2026-10-30T01:15:00Z",
@@ -89,28 +114,43 @@
         "longitude_deg": 67.2,
         "latitude_deg": 2.67
       },
+      "expected_side": "right",
+      "expected_off_nadir_range_deg": [43.0, 45.0],
       "expected_event_count": 0,
-      "expected_epoch_utc": null
+      "expected_epoch_utc": null,
+      "reference_epoch_utc": "2026-10-30T01:07:00.003134Z"
+    },
+    {
+      "case_id": "descending-left-side-envelope-only",
+      "orbit_direction": "descending",
+      "window_start_utc": "2026-10-30T01:00:00Z",
+      "window_end_utc_exclusive": "2026-10-30T01:15:00Z",
+      "target": {
+        "cell_id": 5,
+        "longitude_deg": 77.77864504667176,
+        "latitude_deg": 0.8293388696672009
+      },
+      "expected_side": "left",
+      "expected_off_nadir_range_deg": [33.0, 35.0],
+      "expected_event_count": 0,
+      "expected_epoch_utc": null,
+      "expected_left_roll_event_count": 1,
+      "expected_envelope_event_count": 1
     }
   ],
   "broad_envelope_nonviews": [
     {
-      "case_id": "ascending-envelope-only",
-      "cell_id": 4,
-      "longitude_deg": -93.0,
-      "latitude_deg": 0.67,
-      "window_start_utc": "2026-10-30T00:10:00Z",
-      "window_end_utc_exclusive": "2026-10-30T00:25:00Z",
+      "case_id": "ascending-near-range-gap",
       "expected_envelope_event_count": 1,
       "expected_view_event_count": 0
     },
     {
-      "case_id": "descending-envelope-only",
-      "cell_id": 5,
-      "longitude_deg": 73.0,
-      "latitude_deg": 2.67,
-      "window_start_utc": "2026-10-30T01:00:00Z",
-      "window_end_utc_exclusive": "2026-10-30T01:15:00Z",
+      "case_id": "ascending-left-side-envelope-only",
+      "expected_envelope_event_count": 1,
+      "expected_view_event_count": 0
+    },
+    {
+      "case_id": "descending-left-side-envelope-only",
       "expected_envelope_event_count": 1,
       "expected_view_event_count": 0
     }

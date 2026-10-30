@@ -140,6 +140,10 @@ class PointedGeometry(_StrictModel):
     def _check_mapping(self) -> "PointedGeometry":
         if self.source_altitude_minimum_km >= self.source_altitude_maximum_km:
             raise ValueError("source altitude minimum must be less than maximum")
+        if self.nadir_reference != "geodetic":
+            raise ValueError(
+                "off_nadir_reference requires nadir_reference='geodetic'"
+            )
         if self.observed_roll_range.minimum.unit != "degree":
             raise ValueError("observed_roll_range must use degrees")
         if not (
@@ -446,39 +450,30 @@ class PointedConfiguration(_StrictModel):
             raise ValueError("reference cases must include both orbit directions")
         if not any(case.expected_event_count == 0 for case in self.reference_cases):
             raise ValueError("reference cases must include expected non-events")
-        if not any(
-            check.status == "reference_only"
-            and "not validate" in check.limitation.lower()
-            for check in self.mission_reference_checks
-        ):
-            raise ValueError(
-                "mission product residuals must state that they do not validate "
-                "the TAT-C access geometry"
-            )
         return self
 
     def warnings(self) -> List[str]:
         """Return limitations that must accompany proposals and retrieved rows."""
         warnings = [
-            "Modeled viewing epochs are access opportunities, not confirmation "
-            f"that {self.spacecraft.name} acquired an IW scene at that place and time.",
-            "The fixed rectangular view approximates altitude-dependent roll "
-            "steering and the three TOPSAR IW subswaths; it does not model their "
-            "switching, gaps, burst timing, or acquisition plan.",
-            f"The published {self.spacecraft.name} TAT-C validation residuals are reference "
-            "context only; they do not validate this exact TAT-C access mapping. "
-            "Its along-track field differs from the product azimuth beam width "
-            "used here.",
+            f"Modeled viewing epochs are access opportunities for {self.instrument} "
+            f"on {self.spacecraft.name}; they do not confirm an acquisition.",
             "Events classify grid-cell centers only; they do not imply full-cell "
             "or full-region coverage.",
             "Configuration applicability is separate from orbit availability "
-            "and confirmed acquisition schedules.",
+            "and confirmed acquisition.",
             "The established applicability interval ends at "
             f"{iso_utc(self.applicability.end_utc_exclusive)}; later dates are "
             "not established for this configuration.",
         ]
+        for check in self.mission_reference_checks:
+            warnings.append(
+                f"Reference-only check {check.check_id}: {check.limitation}"
+            )
         for item in self.approximations:
-            warnings.append(f"Approximation {item.approximation_id}: {item.description}")
+            warnings.append(
+                f"Approximation {item.approximation_id}: {item.description} "
+                f"Impact: {item.impact}"
+            )
         for conflict in self.source_conflicts:
             warnings.append(
                 f"Source conflict {conflict.conflict_id} resolved to "

@@ -554,7 +554,6 @@ def _pointed_complete(expected_config_id: str, expected_revision: str):
             "preserved_warnings": (
                 "acquisition" in warning_text
                 and "roll steering" in warning_text
-                and "do not validate" in warning_text
                 and all(call.parsed.get("warnings") == warnings for call in fetched)
             ),
             "fetched_all_views": (
@@ -571,6 +570,98 @@ def _pointed_complete(expected_config_id: str, expected_revision: str):
                 and "incidence" in final
                 and ("cell center" in final or "cell-cent" in final)
             ),
+        }
+
+    return checks
+
+
+def _pointed_choices_before_acceptance(
+    expected_config_id: str, expected_revision: str
+):
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        lookup = None
+        candidate = {}
+        for call in trace.calls:
+            if (
+                call.name != "lookup_instrument_configurations"
+                or call.error
+                or not call.parsed
+            ):
+                continue
+            candidate = next(
+                (
+                    row
+                    for row in call.parsed.get("candidates", [])
+                    if row.get("configuration_id") == expected_config_id
+                    and row.get("revision") == expected_revision
+                ),
+                {},
+            )
+            if candidate:
+                lookup = call
+                break
+        prohibited_tools = {
+            "begin_access_run",
+            "set_access_region",
+            "prepare_conical_study",
+            "finish_conical_study",
+            "prepare_pointed_study",
+            "finish_pointed_study",
+            *FINISH_TOOLS,
+        }
+        did_not_start_study = not any(
+            call.name in prohibited_tools for call in trace.calls
+        )
+        final = trace.final.lower()
+        asks_to_proceed = "?" in trace.final and any(
+            phrase in final
+            for phrase in (
+                "would you like",
+                "do you want",
+                "should i",
+                "would you accept",
+                "please confirm",
+            )
+        )
+        approximations_presented = (
+            "fixed" in final
+            and "roll" in final
+            and "subswath" in final
+            and "along-track" in final
+            and "limited" in final
+        )
+        return {
+            "looked_up_supported_options": bool(
+                lookup
+                and lookup.parsed.get("candidate_count") == 1
+                and lookup.parsed.get("selection_required") is True
+                and lookup.parsed.get("selection") is None
+            ),
+            "identified_spacecraft_and_mode": (
+                candidate.get("spacecraft", {}).get("name") == "Sentinel-1C"
+                and candidate.get("operating_mode") == "IW"
+                and candidate.get("approximation_status") == "limited"
+                and "sentinel-1c" in final
+                and "iw" in final
+                and expected_config_id in final
+                and expected_revision in final
+                and any(
+                    phrase in final
+                    for phrase in (
+                        "only reviewed",
+                        "only supported",
+                        "only one",
+                        "only this one",
+                        "sole option",
+                        "exactly one",
+                        "one supported option",
+                        "one registry option",
+                    )
+                )
+            ),
+            "presented_modeling_choices": approximations_presented,
+            "asked_before_study_setup": did_not_start_study and asks_to_proceed,
         }
 
     return checks
@@ -967,6 +1058,23 @@ def build_cases(clock: Clock) -> List[Case]:
             "field-of-regard envelope "
             "limits and keep incidence and off-nadir angles distinct.",
             _pointed_complete(
+                "sentinel-1c-c-sar-iw-fixed-view", "2026-10-30.1"
+            ),
+        ),
+        Case(
+            "pointed_registry_choices_before_acceptance",
+            ("pointed", "radar", "choice", "limited"),
+            "I am considering a Sentinel-1 C-SAR access study, but I have not "
+            "chosen the spacecraft or operating mode, and I have not accepted "
+            "any geometry approximations. Look up the shared reviewed options "
+            "and tell me which exact spacecraft and mode each option uses. "
+            "Explain the consequential modeling assumptions, including fixed "
+            "roll, how the IW subswaths are represented, and how the along-track "
+            "view is defined. Do not begin, prepare, or run a study yet. If the "
+            "registry has only one supported option, say so and ask whether I "
+            "want to proceed with that exact spacecraft, mode, and limited "
+            "approximation before taking any setup action.",
+            _pointed_choices_before_acceptance(
                 "sentinel-1c-c-sar-iw-fixed-view", "2026-10-30.1"
             ),
         ),

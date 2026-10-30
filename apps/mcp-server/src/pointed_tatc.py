@@ -21,6 +21,19 @@ def build_pointed_satellite(
     """Construct the TAT-C satellite and exactly one sourced PointedInstrument."""
     geometry = configuration.geometry
     orbit = create_orbit_from_omm(list(omm_records))
+    mean_altitude_m = float(orbit.get_mean_altitude())
+    mean_altitude_km = mean_altitude_m / 1000.0
+    if not (
+        geometry.source_altitude_minimum_km
+        <= mean_altitude_km
+        <= geometry.source_altitude_maximum_km
+    ):
+        raise ValueError(
+            f"Resolved TAT-C mean orbit altitude {mean_altitude_km:.3f} km is "
+            "outside the configuration's source geometry altitude range "
+            f"[{geometry.source_altitude_minimum_km:g}, "
+            f"{geometry.source_altitude_maximum_km:g}] km"
+        )
     instrument = PointedInstrument(
         name=configuration.instrument,
         field_of_regard=geometry.field_of_regard.value,
@@ -38,7 +51,7 @@ def build_pointed_satellite(
         orbit=orbit,
         instruments=[instrument],
     )
-    return satellite, instrument, float(orbit.get_mean_altitude())
+    return satellite, instrument, mean_altitude_m
 
 
 def resolved_pointed_snapshot(

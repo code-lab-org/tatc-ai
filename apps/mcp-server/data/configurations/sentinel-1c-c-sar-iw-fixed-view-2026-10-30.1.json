@@ -459,23 +459,36 @@
       "orbit_direction": "ascending",
       "expected_event_count": 1,
       "measured_epoch_residual_ms": 0.000798,
-      "measured_position_residual_m": 0.0,
+      "measured_position_residual_m": 0.005,
       "epoch_tolerance_ms": 1.0,
       "position_tolerance_m": 1.0,
-      "tolerance_basis": "For these direct software regression cases, 1 ms allows for epoch serialization and floating-point conversion while remaining much tighter than mission-reference timing residuals; 1 m bounds WGS84 grid-center and coordinate serialization differences. The measured adapter-to-direct TAT-C residuals are 0.000798 ms and 0 m. These are adapter integration tolerances, not mission-accuracy limits.",
+      "tolerance_basis": "The measured adapter-to-direct event epoch residual is 0.000798 ms. Propagating the fixed OMM independently with Skyfield and measuring the WGS84 subpoint separation at the serialized adapter epoch versus the direct TAT-C epoch gives 0.005 m. The rounded 1 ms epoch and 1 m position limits are separate software-integration bounds for timestamp conversion and propagated-position comparison rounding; the measured differences are well inside them. Neither limit is derived from mission-product residuals or claims mission accuracy.",
       "evidence_ids": [
         "celestrak-s1c-omm",
         "tatc-s1c-iw-validation"
       ]
     },
     {
-      "case_id": "s1c-iw-ascending-opposite-direct-tatc",
-      "fixture_case_id": "ascending-opposite-side",
+      "case_id": "s1c-iw-ascending-near-range-gap-direct-tatc",
+      "fixture_case_id": "ascending-near-range-gap",
       "orbit_direction": "ascending",
       "expected_event_count": 0,
       "epoch_tolerance_ms": 1.0,
       "position_tolerance_m": 1.0,
-      "tolerance_basis": "This opposite-side direct TAT-C case returns zero valid pointed events, so no event epoch or position residual applies. The 1 ms and 1 m tolerances are retained for the included-event software regression cases and are not mission-accuracy limits.",
+      "tolerance_basis": "This independently classified right-side point is inside the near-range gap at about 14.2 degrees off geodetic nadir. It returns no valid pointed event; its broad field-of-regard event is a separate envelope classification. No event epoch or position residual applies.",
+      "evidence_ids": [
+        "celestrak-s1c-omm",
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "case_id": "s1c-iw-ascending-left-side-envelope-only-direct-tatc",
+      "fixture_case_id": "ascending-left-side-envelope-only",
+      "orbit_direction": "ascending",
+      "expected_event_count": 0,
+      "epoch_tolerance_ms": 1.0,
+      "position_tolerance_m": 1.0,
+      "tolerance_basis": "Skyfield ITRS projection independently classifies this target as left of the ascending track at about 33.8 degrees off geodetic nadir. The configured right-looking TAT-C frame returns no event, while its broad field-of-regard event remains one; the direct positive-roll TAT-C regression expects one event.",
       "evidence_ids": [
         "celestrak-s1c-omm",
         "tatc-s1c-iw-validation"
@@ -487,23 +500,36 @@
       "orbit_direction": "descending",
       "expected_event_count": 1,
       "measured_epoch_residual_ms": 0.000745,
-      "measured_position_residual_m": 0.0,
+      "measured_position_residual_m": 0.005,
       "epoch_tolerance_ms": 1.0,
       "position_tolerance_m": 1.0,
-      "tolerance_basis": "For these direct software regression cases, 1 ms allows for epoch serialization and floating-point conversion while remaining much tighter than mission-reference timing residuals; 1 m bounds WGS84 grid-center and coordinate serialization differences. The measured adapter-to-direct TAT-C residuals are 0.000745 ms and 0 m. These are adapter integration tolerances, not mission-accuracy limits.",
+      "tolerance_basis": "The measured adapter-to-direct event epoch residual is 0.000745 ms. Propagating the fixed OMM independently with Skyfield and measuring the WGS84 subpoint separation at the serialized adapter epoch versus the direct TAT-C epoch gives 0.005 m. The rounded 1 ms epoch and 1 m position limits are separate software-integration bounds for timestamp conversion and propagated-position comparison rounding; the measured differences are well inside them. Neither limit is derived from mission-product residuals or claims mission accuracy.",
       "evidence_ids": [
         "celestrak-s1c-omm",
         "tatc-s1c-iw-validation"
       ]
     },
     {
-      "case_id": "s1c-iw-descending-opposite-direct-tatc",
-      "fixture_case_id": "descending-opposite-side",
+      "case_id": "s1c-iw-descending-beyond-far-edge-direct-tatc",
+      "fixture_case_id": "descending-beyond-far-edge",
       "orbit_direction": "descending",
       "expected_event_count": 0,
       "epoch_tolerance_ms": 1.0,
       "position_tolerance_m": 1.0,
-      "tolerance_basis": "This opposite-side direct TAT-C case returns zero valid pointed events, so no event epoch or position residual applies. The 1 ms and 1 m tolerances are retained for the included-event software regression cases and are not mission-accuracy limits.",
+      "tolerance_basis": "This independently classified right-side target is about 44 degrees off geodetic nadir, beyond the modeled far edge. It produces no valid pointed event and lies outside the broad field-of-regard envelope. No event epoch or position residual applies.",
+      "evidence_ids": [
+        "celestrak-s1c-omm",
+        "tatc-s1c-iw-validation"
+      ]
+    },
+    {
+      "case_id": "s1c-iw-descending-left-side-envelope-only-direct-tatc",
+      "fixture_case_id": "descending-left-side-envelope-only",
+      "orbit_direction": "descending",
+      "expected_event_count": 0,
+      "epoch_tolerance_ms": 1.0,
+      "position_tolerance_m": 1.0,
+      "tolerance_basis": "Skyfield ITRS projection independently classifies this target as left of the descending track at about 33.8 degrees off geodetic nadir. The configured right-looking TAT-C frame returns no event, while its broad field-of-regard event remains one; the direct positive-roll TAT-C regression expects one event.",
       "evidence_ids": [
         "celestrak-s1c-omm",
         "tatc-s1c-iw-validation"
