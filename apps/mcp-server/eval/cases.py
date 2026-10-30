@@ -23,6 +23,7 @@ FINISH_TOOLS = {
 
 
 def _load_study_config():
+    # Keep this derivation consistent with tests/conical_fixtures.py.
     configuration = json.loads(
         (
             Path(__file__).resolve().parents[1]

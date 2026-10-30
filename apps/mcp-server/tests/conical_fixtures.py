@@ -16,6 +16,7 @@ def load_shared_config():
 
 
 def load_study_config():
+    # Eval uses the same derivation in eval/cases.py without importing test code.
     configuration = load_shared_config()
     configuration["configuration_id"] = "amsr2-gcom-w1-conical-product-sector-study"
     configuration["revision"] = "2026-10-27.1-study"

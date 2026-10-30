@@ -974,6 +974,40 @@ def test_applicability_refresh_requires_changed_dates_and_supporting_evidence():
     assert "support changed applicability" in text
 
 
+@pytest.mark.parametrize(
+    "case,status,message",
+    [
+        ("missing", "geometry_changed", "geometry-changing refresh must include"),
+        ("missing", "applicability_changed", "applicability-changing refresh must include"),
+        ("unchanged_geometry", "geometry_changed", "no geometry parameter changed"),
+        ("wrong_status", "applicability_changed", "geometry also changed"),
+        ("missing_support", "geometry_changed", "support every changed parameter"),
+    ],
+)
+def test_refresh_rejects_invalid_change_claim_without_recording_it(case, status, message):
+    updated = None
+    if case == "unchanged_geometry":
+        updated = _registry_config()
+        updated["revision"] = "fixture-no-geometry-change"
+    elif case != "missing":
+        updated = _refresh_fixture_configuration()
+
+    arguments = {"updated_configuration": updated}
+    if updated is not None:
+        arguments["checked_source_revision_id"] = updated["source_revision"]["revision_id"]
+    error, text, _ = _record_refresh(status, **arguments)
+    assert error
+    assert message in text
+
+    error, text, lookup = _call(
+        "lookup_instrument_configurations",
+        {"configuration_id": _registry_config()["configuration_id"]},
+    )
+    assert not error, text
+    assert lookup["candidate_count"] == 1
+    assert lookup["candidates"][0]["source_change_notices"] == []
+
+
 def test_geometry_refresh_may_recheck_the_same_source_document_revision():
     base = _registry_config()
     updated = _refresh_fixture_configuration()
