@@ -117,12 +117,14 @@ def _contains(summary: Dict[str, Any], points, max_span: float, slack: float = 0
 
 
 def _geometry(summary: Dict[str, Any], kind: str, value: float) -> bool:
-    geometry = summary["geometry_model"]
-    if geometry["geometry_input_kind"] == kind:
-        return abs(float(geometry["geometry_input_value"]) - value) <= 0.005 * value
+    geometry = summary.get("geometry_model") or {}
+    if geometry.get("geometry_input_kind") == kind:
+        reported = geometry.get("geometry_input_value")
+        return reported is not None and abs(float(reported) - value) <= 0.005 * value
     if kind == "swath_width_km":
         # A field of regard the converter produced from the right swath is fine.
-        return abs(geometry["modeled_swath_width_km_at_omm_mean_altitude"] - value) <= 0.01 * value
+        modeled = geometry.get("modeled_swath_width_km_at_omm_mean_altitude")
+        return modeled is not None and abs(float(modeled) - value) <= 0.01 * value
     return False
 
 
@@ -137,16 +139,19 @@ def _base_checks(summary, seen, points, max_span, window_ok, kind, value, status
             "assessment": False,
         }
     start, duration = _window(summary)
-    geometry = summary["geometry_model"]
+    geometry = summary.get("geometry_model") or {}
     assessment = summary.get("geometry_assessment", {})
     return {
         "completed": True,
         "window": window_ok(start, duration),
         "region": _contains(summary, points, max_span),
         "geometry": _geometry(summary, kind, value),
-        "sourced": _sourced(geometry["geometry_input_value"], seen),
+        "sourced": _sourced(geometry.get("geometry_input_value"), seen),
         "assessment": assessment.get("status") == status
-        and _sourced(geometry["geometry_input_value"], [assessment.get("source_text", "")]),
+        and _sourced(
+            geometry.get("geometry_input_value"),
+            [assessment.get("source_text", "")],
+        ),
     }
 
 

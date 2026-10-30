@@ -143,10 +143,12 @@ SERVER_INSTRUCTIONS = (
     "approximation, or software changed, prepare again for a new revision. The "
     "finish tool rejects stale revisions and runs no calculation for them. "
     "Use the instrument configuration refresh tool only when the assistant or maintainer has "
-    "checked source evidence. It records unchanged, changed-geometry, or failed "
-    "checks; a failed check means the source status is unknown. A geometry "
-    "change creates a separate selectable revision and a notice on the prior "
-    "one. The "
+    "checked source evidence. It records unchanged, documentation-only, "
+    "changed-geometry, changed-applicability, or failed checks. A "
+    "documentation-only change adds a review notice without a new revision. A "
+    "geometry or applicability change creates a separate selectable immutable "
+    "revision and a notice on the prior one. A failed check means the source "
+    "status is unknown. The "
     "established applicability interval must contain the full window; this "
     "increment rejects uncovered dates and additional configurations. "
     "Conical results preserve each valid TAT-C viewing epoch. The broader "
@@ -824,10 +826,12 @@ def record_instrument_configuration_refresh(
     are rejected at capacity; existing notices are never evicted. Repeating an
     identical check is idempotent, including equivalent UTC instants written with
     other offsets. Source evidence for changed geometry or applicability must
-    exactly match the evidence retained in the updated configuration. A revised
-    geometry cannot keep a check that reports the prior value, must cite the
-    refresh evidence, and cannot silently remove or narrow an approximation;
-    removal requires evidence supporting approximation.<id>.removed.
+    exactly match the evidence retained in the updated configuration. A geometry
+    check may bind its reported value to a geometry parameter with
+    geometry_parameter. A revised geometry cannot keep a bound check that reports
+    the prior value, must cite the refresh evidence, and cannot silently remove
+    or narrow an approximation; removal requires evidence supporting
+    approximation.<id>.removed.
 
     Args:
         configuration_id: Stable ID of the reviewed shared configuration.
@@ -846,8 +850,9 @@ def record_instrument_configuration_refresh(
         failure_reason: Required explanation when status is failed.
 
     Returns:
-        The recorded check, any measured geometry differences, and a new revision
-        candidate when the supplied source reports changed geometry.
+        The recorded check, any measured geometry or applicability differences,
+        and a new revision candidate when the supplied source reports changed
+        geometry or applicability.
     """
     return _record_instrument_configuration_refresh(
         configuration_id=configuration_id,

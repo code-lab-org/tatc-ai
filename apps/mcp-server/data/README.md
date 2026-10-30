@@ -21,8 +21,11 @@ it.
 The configuration carries the exact normalized geometry, source evidence
 locators and excerpts, source revision, source conflicts and chosen rationale,
 reported geometry checks, applicability interval, approximation status, and
-approximations. The server validates the structure and values but does not
-authenticate the source text or turn this file into a mission default.
+approximations. A geometry check may declare `geometry_parameter` to bind its
+reported value to that parameter; the value must match the configured geometry
+within the check tolerance. Unbound checks remain independent references.
+The server validates the structure and values but does not authenticate the
+source text or turn this file into a mission default.
 
 The fixed independent TAT-C reference and mission-residual record live in
 `apps/mcp-server/tests/fixtures/amsr2_conical_reference.json`. The tool-calling

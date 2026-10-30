@@ -273,7 +273,11 @@ def _current_source_state(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
             "superseded_refresh_failures": [],
         }
     _, latest = max(
-        refreshes, key=lambda item: (item[1]["checked_at_utc"], item[0])
+        refreshes,
+        key=lambda item: (
+            datetime.fromisoformat(item[1]["checked_at_utc"].replace("Z", "+00:00")),
+            item[0],
+        ),
     )
     return {
         "current_source_status": latest["status"],
@@ -411,6 +415,36 @@ def _validate_applicability_refresh(
         )
 
 
+def _validate_changed_identity(
+    base: ConicalConfiguration,
+    updated: ConicalConfiguration,
+    base_revision: str,
+    checked_source_revision_id: str,
+) -> None:
+    if updated.configuration_id != base.configuration_id:
+        raise ValueError("The refreshed revision must keep the configuration_id")
+    same_identity = (
+        updated.instrument == base.instrument
+        and updated.spacecraft.model_dump(mode="json")
+        == base.spacecraft.model_dump(mode="json")
+        and updated.operating_mode == base.operating_mode
+        and updated.channel.model_dump(mode="json")
+        == base.channel.model_dump(mode="json")
+    )
+    if not same_identity:
+        raise ValueError(
+            "A new source revision cannot change the configuration's instrument, "
+            "spacecraft, operating mode, or channel"
+        )
+    if updated.revision == base_revision:
+        raise ValueError("A changed configuration must use a new immutable revision")
+    if updated.source_revision.revision_id != checked_source_revision_id:
+        raise ValueError(
+            "The updated configuration source_revision must match the checked "
+            "source revision"
+        )
+
+
 def _validate_revised_assessment(
     base: ConicalConfiguration,
     updated: ConicalConfiguration,
@@ -418,31 +452,29 @@ def _validate_revised_assessment(
     source_evidence: List[SourceEvidence],
 ) -> None:
     """Reject stale checks and silent removal of declared simplifications."""
-    numeric_changes = [
-        (
-            change["parameter"],
-            float(change["previous_value"]["value"]),
-            float(change["new_value"]["value"]),
-            change["previous_value"].get("unit"),
-        )
+    numeric_changes = {
+        change["parameter"]: change
         for change in changes
         if isinstance(change["previous_value"], dict)
         and "value" in change["previous_value"]
-    ]
+        and isinstance(change["new_value"], dict)
+        and "value" in change["new_value"]
+    }
     stale_checks = []
     for check in updated.geometry_checks:
-        if check.reported_value is None:
+        if check.geometry_parameter is None or check.reported_value is None:
             continue
-        for parameter, previous, current, unit in numeric_changes:
-            if check.unit != unit:
-                continue
-            tolerance = max(float(check.tolerance or 0.0), 1e-9)
-            if (
-                abs(check.reported_value - previous) <= tolerance
-                and abs(check.reported_value - current) > tolerance
-            ):
-                stale_checks.append((check.check_id, parameter))
-                break
+        change = numeric_changes.get(check.geometry_parameter)
+        if change is None:
+            continue
+        previous = float(change["previous_value"]["value"])
+        current = float(change["new_value"]["value"])
+        tolerance = max(float(check.tolerance or 0.0), 1e-9)
+        if (
+            abs(check.reported_value - previous) <= tolerance
+            and abs(check.reported_value - current) > tolerance
+        ):
+            stale_checks.append((check.check_id, check.geometry_parameter))
     if stale_checks:
         raise ValueError(
             "Changed geometry leaves stale geometry checks reporting the prior "
@@ -569,27 +601,12 @@ def record_instrument_configuration_refresh(
             raise ValueError(
                 "A geometry-changing refresh must include the complete new sourced configuration"
             )
-        if updated_configuration.configuration_id != configuration_id:
-            raise ValueError("The refreshed revision must keep the configuration_id")
-        same_identity = (
-            updated_configuration.instrument == base_configuration.instrument
-            and updated_configuration.spacecraft.model_dump(mode="json")
-            == base_configuration.spacecraft.model_dump(mode="json")
-            and updated_configuration.operating_mode == base_configuration.operating_mode
-            and updated_configuration.channel.model_dump(mode="json")
-            == base_configuration.channel.model_dump(mode="json")
+        _validate_changed_identity(
+            base_configuration,
+            updated_configuration,
+            base_revision,
+            checked_source_revision_id,
         )
-        if not same_identity:
-            raise ValueError(
-                "A new source revision cannot change the configuration's instrument, "
-                "spacecraft, operating mode, or channel"
-            )
-        if updated_configuration.revision == base_revision:
-            raise ValueError("A changed configuration must use a new immutable revision")
-        if updated_configuration.source_revision.revision_id != checked_source_revision_id:
-            raise ValueError(
-                "The updated configuration source_revision must match the checked source revision"
-            )
         changes = _geometry_changes(base_configuration, updated_configuration)
         if not changes:
             raise ValueError(
@@ -625,27 +642,12 @@ def record_instrument_configuration_refresh(
                 "An applicability-changing refresh must include the complete new "
                 "sourced configuration"
             )
-        if updated_configuration.configuration_id != configuration_id:
-            raise ValueError("The refreshed revision must keep the configuration_id")
-        same_identity = (
-            updated_configuration.instrument == base_configuration.instrument
-            and updated_configuration.spacecraft.model_dump(mode="json")
-            == base_configuration.spacecraft.model_dump(mode="json")
-            and updated_configuration.operating_mode == base_configuration.operating_mode
-            and updated_configuration.channel.model_dump(mode="json")
-            == base_configuration.channel.model_dump(mode="json")
+        _validate_changed_identity(
+            base_configuration,
+            updated_configuration,
+            base_revision,
+            checked_source_revision_id,
         )
-        if not same_identity:
-            raise ValueError(
-                "A new source revision cannot change the configuration's instrument, "
-                "spacecraft, operating mode, or channel"
-            )
-        if updated_configuration.revision == base_revision:
-            raise ValueError("A changed configuration must use a new immutable revision")
-        if updated_configuration.source_revision.revision_id != checked_source_revision_id:
-            raise ValueError(
-                "The updated configuration source_revision must match the checked source revision"
-            )
         changes = _geometry_changes(base_configuration, updated_configuration)
         if changes:
             raise ValueError(

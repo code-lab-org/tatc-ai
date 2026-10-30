@@ -379,6 +379,7 @@
       "reported_value": 47.564,
       "unit": "degree",
       "tolerance": 0.1,
+      "geometry_parameter": "geometry.cone_angle",
       "status": "passed",
       "evidence_ids": [
         "tatc-amsr2-geometry-check"
@@ -391,6 +392,7 @@
       "reported_value": 75.332,
       "unit": "degree",
       "tolerance": 0.1,
+      "geometry_parameter": "geometry.scan_half_width",
       "status": "passed",
       "evidence_ids": [
         "tatc-amsr2-geometry-check"
@@ -439,6 +441,7 @@
       "reported_value": 1.0,
       "unit": "degree",
       "tolerance": null,
+      "geometry_parameter": "geometry.along_track_field_of_view",
       "status": "limited",
       "evidence_ids": [
         "tatc-amsr2-along-track-view"

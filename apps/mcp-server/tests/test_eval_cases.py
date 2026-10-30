@@ -412,6 +412,39 @@ def test_conical_reporting_accepts_negated_continuous_claims():
         assert case.checks(trace, clock)["reported"], final
 
 
+def test_eval_geometry_check_handles_missing_converted_swath_value():
+    clock = _clock()
+    case = next(
+        case
+        for case in build_cases(clock)
+        if case.id == "resolver_lookup_supported"
+    )
+    start = clock.d0
+    end = start.replace(day=start.day + 1)
+    summary = {
+        "result_id": "result-1",
+        "window_start_utc": start.isoformat(),
+        "window_end_utc_exclusive": end.isoformat(),
+        "roi_bbox": [-113.0, 32.0, -111.0, 35.0],
+        "geometry_model": {
+            "geometry_input_kind": "field_of_regard_deg",
+            "geometry_input_value": 110.0,
+        },
+        "geometry_assessment": {
+            "status": "supported",
+            "source_text": "A 110 degree field of regard.",
+        },
+    }
+    trace = Trace(
+        prompt=case.prompt,
+        calls=[Call("finish_access_run", {}, False, "{}", parsed=summary)],
+        final="The study completed.",
+    )
+    checks = case.checks(trace, clock)
+    assert checks["completed"]
+    assert checks["geometry"] is False
+
+
 def test_registry_eval_requires_lookup_and_explicit_revision_selection():
     clock = _clock()
     case = next(

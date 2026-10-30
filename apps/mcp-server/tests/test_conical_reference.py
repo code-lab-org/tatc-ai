@@ -224,6 +224,9 @@ def _synthetic_full_rotation():
     data["instrument"] = "Synthetic full rotation"
     data["geometry"]["scan_half_width"] = {"value": 180.0, "unit": "degree"}
     data["source_conflicts"] = []
+    for check in data["geometry_checks"]:
+        if check.get("geometry_parameter") == "geometry.scan_half_width":
+            check["reported_value"] = 180.0
     return ConicalConfiguration.model_validate(data)
 
 

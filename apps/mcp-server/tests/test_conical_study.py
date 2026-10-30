@@ -82,6 +82,7 @@ def _refresh_fixture_configuration():
             "reported_value": 72.0,
             "unit": "degree",
             "tolerance": 0.1,
+            "geometry_parameter": "geometry.scan_half_width",
             "status": "passed",
             "evidence_ids": ["fixture-geometry-refresh"],
         }
@@ -378,7 +379,10 @@ def test_refresh_record_capacity_rejects_without_mutation_and_keeps_duplicates_i
     assert uncertainty[0]["check_id"] == first["source_change_check"]["check_id"]
 
 
-def test_later_successful_check_supersedes_failed_refresh_uncertainty():
+@pytest.mark.parametrize("successful_at", [
+    "2026-10-28T01:00:00Z", "2026-10-28T00:00:00.500000Z"
+])
+def test_later_successful_check_supersedes_failed_refresh_uncertainty(successful_at):
     error, text, failed = _record_failed_refresh(
         "resolved-source-check", checked_at="2026-10-28T00:00:00Z"
     )
@@ -390,7 +394,7 @@ def test_later_successful_check_supersedes_failed_refresh_uncertainty():
             "configuration_id": _registry_config()["configuration_id"],
             "base_revision": _registry_config()["revision"],
             "status": "unchanged",
-            "checked_at_utc": "2026-10-28T01:00:00Z",
+            "checked_at_utc": successful_at,
             "checked_source_revision_id": "resolved-source-check",
             "reported_by": "assistant",
             "summary": "A later check found the same source content.",
@@ -763,6 +767,33 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
         )
 
 
+def test_geometry_refresh_can_remove_optional_beam_width():
+    base = _registry_config()
+    updated = _refresh_fixture_configuration()
+    updated["geometry"]["beam_width"] = None
+    updated["evidence"][-1]["supports"].append("geometry.beam_width")
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "A sourced revision removes optional beam metadata.",
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert not error, text
+    assert any(
+        change["parameter"] == "geometry.beam_width"
+        and change["new_value"] is None
+        for change in refresh["geometry_changes"]
+    )
+
+
 def test_geometry_refresh_rejects_a_stale_passing_geometry_check():
     base = _registry_config()
     updated = _refresh_fixture_configuration()
@@ -789,8 +820,81 @@ def test_geometry_refresh_rejects_a_stale_passing_geometry_check():
         },
     )
     assert error
-    assert "stale geometry checks" in text
     assert "scan-sector-consistency" in text
+    assert "geometry.scan_half_width" in text
+
+
+def test_geometry_refresh_allows_an_unbound_unrelated_coincident_angle_check():
+    base = _registry_config()
+    updated = _refresh_fixture_configuration()
+    updated["geometry_checks"].append(
+        {
+            "check_id": "independent-reference-angle",
+            "description": "An independent reference angle, not bound to a geometry parameter.",
+            "method": "Test fixture reference measurement.",
+            "reported_value": 75.332,
+            "unit": "degree",
+            "tolerance": 0.1,
+            "status": "passed",
+            "evidence_ids": ["tatc-amsr2-geometry-check"],
+        }
+    )
+
+    error, text, refresh = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture changes the sector and keeps an unrelated reference angle.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert not error, text
+    assert refresh["new_revision_candidate"]["revision"] == updated["revision"]
+
+
+def test_geometry_refresh_rejects_a_bound_check_for_removed_optional_parameter():
+    base = _registry_config()
+    updated = _refresh_fixture_configuration()
+    updated["geometry"]["beam_width"] = None
+    updated["geometry_checks"].append(
+        {
+            "check_id": "beam-width-check",
+            "description": "A check bound to the removed optional beam width.",
+            "method": "Test fixture.",
+            "reported_value": 1.2,
+            "unit": "degree",
+            "tolerance": 0.1,
+            "geometry_parameter": "geometry.beam_width",
+            "status": "passed",
+            "evidence_ids": ["jaxa-amsr2-specs"],
+        }
+    )
+
+    error, text, _ = _call(
+        "record_instrument_configuration_refresh",
+        {
+            "configuration_id": base["configuration_id"],
+            "base_revision": base["revision"],
+            "status": "geometry_changed",
+            "checked_at_utc": "2026-10-29T00:00:00Z",
+            "checked_source_revision_id": updated["source_revision"]["revision_id"],
+            "reported_by": "assistant",
+            "summary": "Fixture removes an optional parameter but keeps its bound check.",
+            "evidence_ids": ["fixture-geometry-refresh"],
+            "source_evidence": [updated["evidence"][-1]],
+            "updated_configuration": updated,
+        },
+    )
+    assert error
+    assert "beam-width-check" in text
+    assert "not present" in text
 
 
 def test_geometry_refresh_rejects_silently_cleared_approximations():
