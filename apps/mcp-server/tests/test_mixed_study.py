@@ -690,6 +690,43 @@ def test_mixed_workload_limits_are_rejected_before_tatc_resolution(monkeypatch):
     assert "at most 6 instrument configurations" in text.lower()
 
 
+def test_mixed_long_window_warning_survives_execution_and_fetch(monkeypatch):
+    from src import conical_tatc, pointed_tatc
+    import pandas as pd
+
+    monkeypatch.setattr(conical_tatc, "collect_observations", lambda *a, **kw: pd.DataFrame())
+    monkeypatch.setattr(pointed_tatc, "collect_observations", lambda *a, **kw: pd.DataFrame())
+    error, text, proposal = _prepared_mixed_study(end="2026-10-24T07:37:22Z")
+    assert not error, text
+    assert any("only aggregate statistics" in item for item in proposal["limits"])
+    summary = conical_study.finish_mixed_study(
+        proposal["draft_id"], proposal["setup_revision"], True, _max_workers=1
+    )
+    assert any("only aggregate statistics" in item for item in summary["limits"])
+    error, text, daily = _call("get_mixed_daily", {"result_id": summary["result_id"]})
+    assert not error, text
+    assert any("only aggregate statistics" in item for item in daily["limits"])
+
+
+def test_mixed_failure_identifies_configuration_and_revision(monkeypatch):
+    from src import conical_tatc
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("upstream fixture failure")
+
+    monkeypatch.setattr(conical_tatc, "collect_observations", fail)
+    error, text, proposal = _prepared_mixed_study()
+    assert not error, text
+    error, text, _ = _call(
+        "finish_mixed_study",
+        {"draft_id": proposal["draft_id"], "accepted_setup_revision": proposal["setup_revision"], "accept_setup": True},
+    )
+    assert error
+    assert "amsr2-gcom-w1-conical-product-sector" in text
+    assert "2026-10-27.1" in text
+    assert "upstream fixture failure" in text
+
+
 def test_mixed_preparation_accepts_the_short_window_144_cell_limit():
     error, text, proposal = _prepared_mixed_study(grid_rows=12, grid_columns=12)
     assert not error, text

@@ -926,6 +926,7 @@ def prepare_mixed_study(
     revision = "sha256:" + _sha256(consequential)
     limits = [
         *BASE_LIMITS,
+        *(YEAR_LIMITS if long_window else []),
         f"This mixed study evaluates {len(prepared_configurations)} configurations "
         f"across {len(staged_by_id)} spacecraft.",
         f"At most {MAX_MIXED_CONFIGURATIONS} configurations and "
@@ -1177,6 +1178,7 @@ def _mixed_result_payload(
     long_window = end - start > SHORT_WINDOW_MAX
     limits = [
         *BASE_LIMITS,
+        *(YEAR_LIMITS if long_window else []),
         f"The result evaluates {len(proposal['configurations'])} configurations "
         f"across {len(stage['satellites'])} spacecraft.",
         f"No more than {MAX_MIXED_CONFIGURATIONS} configurations or spacecraft "
