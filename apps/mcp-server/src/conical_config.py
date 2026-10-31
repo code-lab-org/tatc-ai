@@ -59,6 +59,48 @@ def iso_utc(value: datetime) -> str:
     return _utc(value).isoformat().replace("+00:00", "Z")
 
 
+def _illumination_warning(
+    requirement: str,
+    basis: Optional[str],
+    note: Optional[str],
+    *,
+    source_supported: bool,
+) -> Optional[str]:
+    """Validate a target-sunlit setting and describe its accepted basis."""
+    if requirement != "target_sunlit":
+        return None
+    if basis is None:
+        raise ValueError(
+            "target_sunlit requires illumination_requirement_basis set to "
+            "source_evidence or study_assumption"
+        )
+    if basis == "source_evidence" and not source_supported:
+        raise ValueError(
+            "a source-based target_sunlit setting requires evidence for "
+            "geometry.illumination_requirement"
+        )
+    if basis == "study_assumption":
+        if source_supported:
+            raise ValueError(
+                "a study assumption cannot be source-supported for "
+                "geometry.illumination_requirement"
+            )
+        if not (note or "").strip():
+            raise ValueError(
+                "a study-assumption target_sunlit setting requires an "
+                "illumination_requirement_note"
+            )
+        return (
+            "A study-specific target-sunlit filter is applied as an explicit "
+            "assumption, not a source-established scientific requirement: "
+            f"{note}"
+        )
+    return (
+        "TAT-C applies the source-backed target-sunlit requirement "
+        "recorded in this configuration."
+    )
+
+
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
 
@@ -137,7 +179,7 @@ class ApplicabilityInterval(_StrictModel):
 
 
 class SourceEvidence(_StrictModel):
-    """One sourced fact, excerpt, and the parameters it supports."""
+    """A sourced excerpt that may support fields or remain as background."""
 
     evidence_id: str = Field(min_length=1)
     authority: str = Field(min_length=1)
@@ -148,7 +190,10 @@ class SourceEvidence(_StrictModel):
     excerpt: str = Field(min_length=1)
     retrieved_at_utc: AwareDatetime
     interpretation: str = Field(min_length=1)
-    supports: List[str] = Field(min_length=1)
+    supports: List[str] = Field(
+        default_factory=list,
+        description="Fields directly supported by this excerpt; empty retains context only.",
+    )
 
     @field_validator("url")
     @classmethod
@@ -361,7 +406,13 @@ class ConicalConfiguration(_StrictModel):
         supported: set[str] = set()
         for item in self.evidence:
             supported.update(item.supports)
-        missing_support = sorted(set(REQUIRED_GEOMETRY_SUPPORT) - supported)
+        required_support = set(REQUIRED_GEOMETRY_SUPPORT)
+        if (
+            self.geometry.illumination_requirement == "target_sunlit"
+            and self.geometry.illumination_requirement_basis == "study_assumption"
+        ):
+            required_support.discard("geometry.illumination_requirement")
+        missing_support = sorted(required_support - supported)
         if self.geometry.beam_width is not None:
             missing_support += (
                 ["geometry.beam_width"]
@@ -379,25 +430,14 @@ class ConicalConfiguration(_StrictModel):
                 "missing source evidence for: " + ", ".join(missing_support)
             )
 
-        if self.geometry.illumination_requirement == "target_sunlit":
-            basis = self.geometry.illumination_requirement_basis
-            if basis is None:
-                raise ValueError(
-                    "target_sunlit requires illumination_requirement_basis set to "
-                    "source_evidence or study_assumption"
-                )
-            if basis == "source_evidence" and "geometry.illumination_requirement" not in supported:
-                raise ValueError(
-                    "a source-based target_sunlit setting requires evidence for "
-                    "geometry.illumination_requirement"
-                )
-            if basis == "study_assumption" and not (
-                self.geometry.illumination_requirement_note or ""
-            ).strip():
-                raise ValueError(
-                    "a study-assumption target_sunlit setting requires an "
-                    "illumination_requirement_note"
-                )
+        _illumination_warning(
+            self.geometry.illumination_requirement,
+            self.geometry.illumination_requirement_basis,
+            self.geometry.illumination_requirement_note,
+            source_supported=(
+                "geometry.illumination_requirement" in supported
+            ),
+        )
 
         if self.approximations and self.approximation_status == "supported":
             raise ValueError(
@@ -528,18 +568,17 @@ class ConicalConfiguration(_StrictModel):
         ]
         for item in self.approximations:
             warnings.append(f"Approximation {item.approximation_id}: {item.description}")
-        if self.geometry.illumination_requirement == "target_sunlit":
-            if self.geometry.illumination_requirement_basis == "study_assumption":
-                warnings.append(
-                    "A study-specific target-sunlit filter is applied as an explicit "
-                    "assumption, not a source-established scientific requirement: "
-                    f"{self.geometry.illumination_requirement_note}"
-                )
-            else:
-                warnings.append(
-                    "TAT-C applies the source-backed target-sunlit requirement "
-                    "recorded in this configuration."
-                )
+        illumination_warning = _illumination_warning(
+            self.geometry.illumination_requirement,
+            self.geometry.illumination_requirement_basis,
+            self.geometry.illumination_requirement_note,
+            source_supported=any(
+                "geometry.illumination_requirement" in item.supports
+                for item in self.evidence
+            ),
+        )
+        if illumination_warning:
+            warnings.append(illumination_warning)
         for conflict in self.source_conflicts:
             warnings.append(
                 f"Source conflict {conflict.conflict_id} resolved to "

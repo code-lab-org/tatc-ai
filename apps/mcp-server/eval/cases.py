@@ -65,6 +65,12 @@ def _load_daylight_study_config():
     configuration["geometry"]["illumination_requirement"] = "target_sunlit"
     configuration["geometry"]["illumination_requirement_basis"] = "study_assumption"
     configuration["geometry"]["illumination_requirement_note"] = note
+    for evidence in configuration["evidence"]:
+        evidence["supports"] = [
+            field
+            for field in evidence["supports"]
+            if field != "geometry.illumination_requirement"
+        ]
     configuration["interpretation"]["limitations"].append(note)
     return configuration
 
@@ -394,21 +400,40 @@ def _conical_reporting_is_limited(final: str) -> bool:
         r"does not|do not|did not|is not|are not|was not|were not|no longer)\b"
     )
     continuous = r"\b(?:continuous|continuously|uninterrupted)\b"
+    viewing = r"\b(?:viewing|viewed|observed|coverage|covered|scanning|scanned)\b"
+    continuous_claim = (
+        continuous + r".{0,40}" + viewing + "|" + viewing + r".{0,40}" + continuous
+    )
     sampling = re.search(
         r"\bcell[- ]cent(?:er|re)s?\b|"
         r"\b(?:event|visit|sample)\w*\b[^.!?\n]*\bcent(?:er|re)s?\b", final
     )
     continuous_limit = (
-        negation + r".{0,80}" + continuous + "|" + continuous
+        negation + r".{0,80}" + continuous + r".{0,40}" + viewing + "|"
+        + negation + r".{0,80}" + viewing + r".{0,40}" + continuous + "|"
+        + viewing + r".{0,40}" + negation + r".{0,40}" + continuous + "|"
+        + r"(?:" + continuous_claim + r")"
         + r".{0,120}\b(?:unavailable|not available|not provided|not computed|"
         + r"(?:isn't|aren't|wasn't|weren't)\s+available)\b"
     )
     for clause in re.split(r"[.!?;\n]|\b(?:but|however|yet|although|whereas)\b", final):
-        if re.search(continuous, clause) and not re.search(continuous_limit, clause):
+        confirmation = r"\b(?:confirm(?:s|ed|ing)?|confirmation)\b"
+        acquisition = r"\bacquisition\w*\b"
+        if re.search(confirmation, clause) and re.search(acquisition, clause):
+            denied_confirmation = (
+                negation + r".{0,40}" + confirmation + r".{0,40}" + acquisition
+                + r"|\bno\b.{0,40}" + acquisition + r".{0,40}" + confirmation
+                + r"|" + acquisition + r".{0,35}" + negation + r".{0,25}" + confirmation
+                + r"|\bunconfirmed\b.{0,20}" + acquisition
+            )
+            if not re.search(denied_confirmation, clause):
+                return False
+        if re.search(continuous_claim, clause) and not re.search(continuous_limit, clause):
             return False
         whole_cell = re.search(
             r"\b(?:every|all) (?:point|pixel|location)s?\b.*\bcell\w*\b|"
-            r"\b(?:whole|entire|full) (?:grid[- ])?cells?\b", clause
+            r"\b(?:every|all)\s+(?:grid\s+)?cells?\b|"
+            r"\b(?:whole|entire|full)(?:[ -](?:grid[ -])?)?cells?\b", clause
         )
         classification = re.search(
             r"\b(?:classif\w*|counted|counts? as|based on|described as|"
@@ -417,7 +442,10 @@ def _conical_reporting_is_limited(final: str) -> bool:
         )
         if (
             whole_cell
-            and re.search(r"\b(?:observed|viewed|covered|scanned)\b", clause)
+            and re.search(
+                r"\b(?:observ\w*|view\w*|cover\w*|coverage|scan\w*)\b",
+                clause,
+            )
             and not classification
             and not re.search(negation, clause)
         ):
@@ -889,6 +917,11 @@ def _mixed_complete(
                 and geometry.get("illumination_requirement") == "target_sunlit"
                 and geometry.get("illumination_requirement_basis") == "study_assumption"
                 and mapping.get("req_target_sunlit") is True
+                and bool(daylight.get("evidence"))
+                and not any(
+                    "geometry.illumination_requirement" in evidence.get("supports", [])
+                    for evidence in daylight.get("evidence", [])
+                )
                 and "not a source-established scientific requirement" in warnings
             )
 
@@ -900,6 +933,7 @@ def _mixed_complete(
             and "acquisition" in final
             and "envelope" in final
             and "cell" in final
+            and _conical_reporting_is_limited(final)
         )
         if daylight_pair:
             reported = (
@@ -1348,10 +1382,10 @@ def build_cases(clock: Clock) -> List[Case]:
         Case(
             "mixed_amsr2_s1c_complete",
             ("mixed", "multi_instrument", "combined", "complete"),
-            f"Run one mixed access study over west=0, south=-65, east=10, north=-55 "
-            f"with a 2x2 grid starting exactly "
-            f"{clock.d0.isoformat().replace('+00:00', 'Z')} for 2 hours. Copy the "
-            "exact ISO timestamps unchanged into start_time and end_time; do not "
+            "Run one mixed access study over west=-65, south=0, east=-55, north=10 "
+            "with a 2x2 grid starting at 2026-10-04T00:00:00Z and ending at the "
+            "exclusive timestamp 2026-10-05T00:00:00Z (24 hours). Copy the exact "
+            "ISO timestamps unchanged into start_time and end_time; do not "
             "substitute a different date. I select "
             "the reviewed AMSR2 GCOM-W1 configuration "
             "amsr2-gcom-w1-conical-product-sector revision 2026-10-27.1 and the "
@@ -1392,11 +1426,12 @@ def build_cases(clock: Clock) -> List[Case]:
         Case(
             "mixed_shared_spacecraft_daylight",
             ("mixed", "same_spacecraft", "illumination", "study_assumption"),
-            f"Run one mixed sensitivity study for GCOM-W1 over west=0, south=-65, "
-            f"east=10, north=-55 with a 1x1 grid starting exactly "
-            f"{clock.d0.isoformat().replace('+00:00', 'Z')} for 2 hours. Copy the "
-            "exact ISO timestamps unchanged into start_time and end_time; do not "
-            "substitute a different date. I select "
+            "Run one mixed sensitivity study for GCOM-W1 over west=-65, south=0, "
+            "east=-55, north=10 with a 2x2 grid starting at 2026-10-04T00:00:00Z "
+            "and ending at the exclusive timestamp 2026-10-05T00:00:00Z (24 hours). "
+            "Copy the exact ISO timestamps unchanged into start_time and end_time; "
+            "do not substitute a different "
+            "date. I select "
             "the reviewed AMSR2 configuration amsr2-gcom-w1-conical-product-sector "
             "revision 2026-10-27.1 as the unfiltered case, and I provide this second "
             "study-specific case with the same spacecraft and geometry plus a "

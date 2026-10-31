@@ -17,6 +17,7 @@ from .conical_config import (
     SourceEvidence,
     SourceRevision,
     SpacecraftIdentity,
+    _illumination_warning,
     iso_utc,
 )
 
@@ -419,28 +420,14 @@ class PointedConfiguration(_StrictModel):
         if missing_support:
             raise ValueError("missing source evidence for: " + ", ".join(missing_support))
 
-        if self.geometry.illumination_requirement == "target_sunlit":
-            basis = self.geometry.illumination_requirement_basis
-            if basis is None:
-                raise ValueError(
-                    "target_sunlit requires illumination_requirement_basis set to "
-                    "source_evidence or study_assumption"
-                )
-            if basis == "source_evidence" and not any(
-                "geometry.illumination_requirement" in item.supports
-                for item in self.evidence
-            ):
-                raise ValueError(
-                    "a source-based target_sunlit setting requires evidence for "
-                    "geometry.illumination_requirement"
-                )
-            if basis == "study_assumption" and not (
-                self.geometry.illumination_requirement_note or ""
-            ).strip():
-                raise ValueError(
-                    "a study-assumption target_sunlit setting requires an "
-                    "illumination_requirement_note"
-                )
+        _illumination_warning(
+            self.geometry.illumination_requirement,
+            self.geometry.illumination_requirement_basis,
+            self.geometry.illumination_requirement_note,
+            source_supported=(
+                "geometry.illumination_requirement" in supported
+            ),
+        )
 
         referenced = [
             *self.applicability.evidence_ids,
@@ -493,18 +480,17 @@ class PointedConfiguration(_StrictModel):
             f"{iso_utc(self.applicability.end_utc_exclusive)}; later dates are "
             "not established for this configuration.",
         ]
-        if self.geometry.illumination_requirement == "target_sunlit":
-            if self.geometry.illumination_requirement_basis == "study_assumption":
-                warnings.append(
-                    "A study-specific target-sunlit filter is applied as an explicit "
-                    "assumption, not a source-established scientific requirement: "
-                    f"{self.geometry.illumination_requirement_note}"
-                )
-            else:
-                warnings.append(
-                    "TAT-C applies the source-backed target-sunlit requirement "
-                    "recorded in this configuration."
-                )
+        illumination_warning = _illumination_warning(
+            self.geometry.illumination_requirement,
+            self.geometry.illumination_requirement_basis,
+            self.geometry.illumination_requirement_note,
+            source_supported=any(
+                "geometry.illumination_requirement" in item.supports
+                for item in self.evidence
+            ),
+        )
+        if illumination_warning:
+            warnings.append(illumination_warning)
         for check in self.mission_reference_checks:
             warnings.append(
                 f"Reference-only check {check.check_id}: {check.limitation}"

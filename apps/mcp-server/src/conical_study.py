@@ -1014,6 +1014,28 @@ def _configuration_from_mixed_snapshot(snapshot: Dict[str, Any]) -> InstrumentCo
     )
 
 
+def _cell_tasks(
+    configuration: InstrumentConfiguration,
+    omm_records: Sequence[Dict[str, Any]],
+    cells: Sequence[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+) -> List[Dict[str, Any]]:
+    configuration_payload = configuration.portable()
+    return [
+        {
+            "configuration": configuration_payload,
+            "omm_records": omm_records,
+            "cell_id": int(cell["id"]),
+            "latitude": float(cell["center_lat"]),
+            "longitude": float(cell["center_lon"]),
+            "start": start,
+            "end": end,
+        }
+        for cell in cells
+    ]
+
+
 def _mixed_tasks_for_cells(
     stage: Dict[str, Any],
     configurations: Sequence[Dict[str, Any]],
@@ -1026,18 +1048,9 @@ def _mixed_tasks_for_cells(
     for item in configurations:
         configuration = _configuration_from_mixed_snapshot(item["configuration"])
         satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
-        for cell in cells:
-            tasks.append(
-                {
-                    "configuration": configuration.portable(),
-                    "omm_records": satellite["omm_records"],
-                    "cell_id": int(cell["id"]),
-                    "latitude": float(cell["center_lat"]),
-                    "longitude": float(cell["center_lon"]),
-                    "start": start,
-                    "end": end,
-                }
-            )
+        tasks.extend(
+            _cell_tasks(configuration, satellite["omm_records"], cells, start, end)
+        )
     return tasks
 
 
@@ -1093,7 +1106,14 @@ def _mixed_result_payload(
             "satellite": item["satellite"]["satellite"],
         }
         for event in normalized:
-            event["contributor_configurations"] = [contributor]
+            event["contributor_configurations"] = [
+                {
+                    **contributor,
+                    "envelope_start_utc": event["envelope_start_utc"],
+                    "envelope_end_utc": event["envelope_end_utc"],
+                    "envelope_duration_hours": event["envelope_duration_hours"],
+                }
+            ]
         accounting = summarize_events(
             cells,
             normalized,
@@ -1111,8 +1131,6 @@ def _mixed_result_payload(
             "configuration_revision": configuration.revision,
             "instrument": configuration.instrument,
             "satellite": item["satellite"]["satellite"],
-            "configuration": item["configuration"],
-            "registry_selection": item["registry_selection"],
             "warnings": item["warnings"],
             "summary_counts": counts,
             **accounting,
@@ -1172,6 +1190,16 @@ def _mixed_result_payload(
     combined["definitions"]["combined_contributors"] = (
         "Each combined event retains every configuration that contributed at the "
         "same cell and exact viewing epoch. Events at different epochs are not merged."
+    )
+    combined["definitions"]["envelope"] = (
+        "For a combined event, the top-level envelope start, end, and duration "
+        "describe the temporal hull across its contributor envelopes, not one TAT-C "
+        "field-of-regard period. Each contributor_configurations entry retains its "
+        "own TAT-C envelope interval and duration."
+    )
+    combined["definitions"]["envelope_period_count"] = (
+        "Counts distinct contributor envelope intervals by configuration, cell, "
+        "start, and end. It does not count a combined event hull as a TAT-C period."
     )
     combined_counts = _event_summary_counts(combined)
     start_utc, end_utc = iso_utc(start), iso_utc(end)
@@ -1238,7 +1266,6 @@ def _mixed_result_payload(
         "satellites": _public_satellites(stage),
         "configuration_id": None,
         "configuration_revision": None,
-        "configurations": proposal["configurations"],
         "configuration_summaries": configuration_summaries,
         "configuration_results": configuration_results,
         "window_start_utc": start_utc,
@@ -1264,7 +1291,6 @@ def _mixed_result_payload(
         "metrics": combined["metrics"],
         "daily": combined["daily"],
         "cells": combined["cells"],
-        "grid_cells": combined["cells"],
         "event_spacing": combined["event_spacing"],
         "events": combined_events,
         "method": {
@@ -1454,19 +1480,7 @@ def _tasks_for_cells(
     end: datetime,
 ) -> List[Dict[str, Any]]:
     omm_records = stage["satellites"][0]["omm_records"]
-    configuration_payload = configuration.portable()
-    return [
-        {
-            "configuration": configuration_payload,
-            "omm_records": omm_records,
-            "cell_id": int(cell["id"]),
-            "latitude": float(cell["center_lat"]),
-            "longitude": float(cell["center_lon"]),
-            "start": start,
-            "end": end,
-        }
-        for cell in cells
-    ]
+    return _cell_tasks(configuration, omm_records, cells, start, end)
 
 
 def _collect_tasks(tasks: Sequence[Dict[str, Any]], max_workers: int, work: float) -> List[Dict[str, Any]]:
@@ -2213,7 +2227,10 @@ def _mixed_fetch_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for evidence in source_evidence
                 ],
                 "registry_selection": registry_selection,
-                "source_choices": item["source_choices"],
+                "source_choices": [
+                    {key: choice[key] for key in ("conflict_id", "chosen_option_id")}
+                    for choice in item["source_choices"]
+                ],
                 "applicability": item["applicability"],
                 "geometry": {
                     "model_family": full_geometry["model_family"],
@@ -2271,15 +2288,6 @@ def _mixed_fetch_header(
         ),
         "configuration_id": None if is_combined else selected["configuration_id"],
         "configuration_revision": None if is_combined else selected["configuration_revision"],
-        "configurations": [
-            {
-                "configuration_id": item["configuration_id"],
-                "configuration_revision": item["configuration_revision"],
-                "instrument": item["instrument"],
-                "satellite": item["satellite"],
-            }
-            for item in payload["modeled_configurations"]
-        ],
         "setup_revision": payload["setup_revision"],
         "window_start_utc": payload["window_start_utc"],
         "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
@@ -2302,9 +2310,14 @@ def _paginate_mixed(
     items: Sequence[Any], offset: Any, limit: Any, name: str, maximum: int
 ) -> Dict[str, Any]:
     requested = _paginate([], offset, limit, name)
-    return _paginate(
-        list(items), requested["offset"], min(requested["limit"], maximum), name
-    )
+    offset_value = requested["offset"]
+    limit_value = min(requested["limit"], maximum)
+    return {
+        "offset": offset_value,
+        "limit": limit_value,
+        "total": len(items),
+        "items": list(items)[offset_value : offset_value + limit_value],
+    }
 
 
 def get_mixed_events(
@@ -2313,7 +2326,6 @@ def get_mixed_events(
     offset: Any = 0,
     limit: Any = 5,
 ) -> Dict[str, Any]:
-    _paginate([], offset, limit, "event")
     result_id, payload, selected = _mixed_scope(result_id, configuration_id)
     page = _paginate_mixed(
         selected["events"], offset, limit, "event", MAX_MIXED_EVENT_PAGE_SIZE
@@ -2333,7 +2345,6 @@ def get_mixed_daily(
     offset: Any = 0,
     limit: Any = 31,
 ) -> Dict[str, Any]:
-    _paginate([], offset, limit, "daily")
     result_id, payload, selected = _mixed_scope(result_id, configuration_id)
     page = _paginate(selected["daily"], offset, limit, "daily")
     return {
@@ -2352,7 +2363,6 @@ def get_mixed_cells(
     offset: Any = 0,
     limit: Any = 2,
 ) -> Dict[str, Any]:
-    _paginate([], offset, limit, "cell")
     if not isinstance(include, str) or include.strip().lower() not in ("all", "observed", "gaps"):
         raise ValueError("include must be one of all, observed, or gaps")
     result_id, payload, selected = _mixed_scope(result_id, configuration_id)
@@ -2406,22 +2416,7 @@ def get_mixed_revisit(
     result_id: Any, configuration_id: Any = None
 ) -> Dict[str, Any]:
     result_id, payload, selected = _mixed_scope(result_id, configuration_id)
-    return {
-        **_mixed_fetch_header(result_id, payload, selected, configuration_id),
-        "event_spacing": {
-            key: selected["metrics"][key]
-            for key in (
-                "cells_with_event_spacing",
-                "event_spacing_sample_count",
-                "mean_event_spacing_hours",
-                "median_event_spacing_hours",
-                "min_event_spacing_hours",
-                "max_event_spacing_hours",
-                "continuous_viewing_duration_available",
-                "continuous_uncovered_duration_available",
-            )
-        },
-    }
+    return _mixed_fetch_header(result_id, payload, selected, configuration_id)
 
 
 def get_mixed_event_spacing(
@@ -2430,7 +2425,6 @@ def get_mixed_event_spacing(
     offset: Any = 0,
     limit: Any = 5,
 ) -> Dict[str, Any]:
-    _paginate([], offset, limit, "event spacing")
     result_id, payload, selected = _mixed_scope(result_id, configuration_id)
     page = _paginate_mixed(
         selected["event_spacing"],

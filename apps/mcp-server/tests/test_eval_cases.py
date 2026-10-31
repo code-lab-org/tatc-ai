@@ -392,6 +392,56 @@ def test_mixed_eval_checker_requires_exact_acceptance_and_each_fetch_scope():
     checks = case.checks(trace, _clock())
     assert all(checks.values()), checks
 
+    original_event_count = summary["summary_counts"]["event_count"]
+    summary["summary_counts"]["event_count"] = 4
+    trace.final = (
+        "4 modeled acquisitions confirmed. Every cell was continuously viewed "
+        "throughout each envelope."
+    )
+    checks = case.checks(trace, _clock())
+    assert all(
+        value for name, value in checks.items() if name != "reported_model_limits"
+    ), checks
+    assert not checks["reported_model_limits"]
+
+    summary["summary_counts"]["event_count"] = original_event_count
+    for final in (
+        "There were 3 modeled acquisitions confirmed. Cell-center samples and "
+        "envelope periods do not show continuous viewing.",
+        "There were 3 modeled events. Every point in every cell was viewed. "
+        "Cell-center samples and envelope periods are not continuous viewing time.",
+        "There were 3 modeled events, not confirmed acquisitions. "
+        "The whole-cell area was viewed. "
+        "Cell-center samples and envelope periods are not continuous viewing time.",
+        "There were 3 modeled events at cell centers. Viewing is continuous "
+        "throughout each envelope.",
+    ):
+        trace.final = final
+        checks = case.checks(trace, _clock())
+        assert all(
+            value for name, value in checks.items() if name != "reported_model_limits"
+        ), checks
+        assert not checks["reported_model_limits"], final
+
+    for final in (
+        "There are 3 modeled events, not confirmed acquisitions. Cell-center "
+        "samples and envelope periods do not show continuous viewing.",
+        "There are 3 modelled opportunities; no acquisition was confirmed. "
+        "Cell-centre samples are not whole-cell coverage, and envelope periods "
+        "aren't continuous viewing time.",
+        "There are 3 modeled opportunities, not confirmed acquisitions. One "
+        "continuous rectangular view is a geometry approximation. Cell-center "
+        "samples and envelopes do not establish continuous viewing time or "
+        "full-cell coverage.",
+    ):
+        trace.final = final
+        assert case.checks(trace, _clock())["reported_model_limits"], final
+
+    trace.final = (
+        "There are 3 modeled events, not confirmed acquisitions. Cell-center "
+        "samples and envelope periods do not show continuous viewing."
+    )
+
     configuration_ids = list(expected)
     fetch_requirements = {
         None: {
@@ -628,6 +678,10 @@ def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
         "throughout each envelope.",
         "There were 4 viewing events at cell centers. The envelopes mean "
         "continuous viewing of the whole cell.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing time, but the cells were continuously viewed throughout every envelope.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing time. Every grid cell was viewed.",
         "The study found 4 events. Daily area is cell-center sampled; the "
         "envelope is not continuous viewing. Every point in each cell was observed.",
         "There were 4 events at cell centers. The envelope is not continuous "
@@ -648,6 +702,7 @@ def test_conical_reporting_accepts_negated_continuous_claims():
         "viewing. A gap area of zero wouldn't mean continuous observation.",
         "There were 4 events at cell centers. The envelope is not continuous "
         "viewing. Continuous viewing and uncovered durations aren't available.",
+        "There were 4 events at cell centers. Envelope viewing is not continuous.",
         "There were 4 events at cell centers. The envelope is not continuous "
         "viewing. Each whole cell is classified observed or gap based on the "
         "event at its center.",

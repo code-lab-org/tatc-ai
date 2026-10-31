@@ -4,7 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -192,6 +192,16 @@ def test_mixed_finish_and_fetch_support_combined_and_configuration_scopes():
         all("excerpt" in evidence for evidence in item["configuration"]["evidence"])
         for item in snapshots
     )
+    stored = result_store.get_result(summary["result_id"])
+    assert "configurations" not in stored
+    assert all(
+        "configuration" not in item and "registry_selection" not in item
+        for item in stored["configuration_results"].values()
+    )
+    assert all(
+        item["configuration"]["evidence"]
+        for item in stored["provenance"]["setup_snapshot"]["configurations"]
+    )
 
     fetches = {
         "get_mixed_events": "events",
@@ -214,6 +224,14 @@ def test_mixed_finish_and_fetch_support_combined_and_configuration_scopes():
             assert not error, text
             assert fetched["scope"] == selector
             assert fetched["configuration_id"] == configuration_id
+            assert "configurations" not in fetched
+            assert [
+                item["configuration_id"]
+                for item in fetched["modeled_configurations"]
+            ] == [
+                "amsr2-gcom-w1-conical-product-sector",
+                "sentinel-1c-c-sar-iw-fixed-view",
+            ]
             assert fetched["accounting_method"] in {
                 "mixed_events_union_v1",
                 "mixed_configuration_events_v1",
@@ -249,7 +267,14 @@ def test_mixed_finish_and_fetch_support_combined_and_configuration_scopes():
                 assert compact["configuration_revision"] == full["configuration_revision"]
                 assert compact["instrument"] == configuration["instrument"]
                 assert compact["source_revision_id"] == configuration["source_revision"]["revision_id"]
-                assert compact["source_choices"] == full["source_choices"]
+                assert compact["source_choices"] == [
+                    {
+                        key: choice[key]
+                        for key in ("conflict_id", "chosen_option_id")
+                    }
+                    for choice in full["source_choices"]
+                ]
+                assert all("rationale" in choice for choice in full["source_choices"])
                 assert compact["geometry"]["model_family"] == configuration["geometry"]["model_family"]
                 assert compact["geometry"]["illumination_requirement"] == configuration["geometry"]["illumination_requirement"]
                 assert compact["geometry"]["tatc_mapping"] == configuration["tatc_mapping"]
@@ -279,6 +304,8 @@ def test_mixed_finish_and_fetch_support_combined_and_configuration_scopes():
                 assert fetched["limit"] == 2
             elif result_key == "revisit":
                 assert "event_spacing_sample_count" in fetched["metrics"]
+                assert "event_spacing" not in fetched
+                assert "mean_event_spacing_hours" in fetched["metrics"]
             else:
                 assert isinstance(fetched["event_spacing"], list)
                 assert fetched["limit"] == 5
@@ -336,6 +363,28 @@ def test_known_events_use_exact_epoch_union_and_independent_cell_area(monkeypatc
         }
         for event in fixture["events"]
     ]
+    for event in event_rows:
+        if event["cell_id"] == 0 and event["epoch"].isoformat() == "2026-10-04T23:10:00+00:00":
+            if event["configuration_id"] == "amsr2-gcom-w1-conical-product-sector":
+                event["envelope_start"] = event["epoch"] - timedelta(minutes=10)
+                event["envelope_end"] = event["epoch"] + timedelta(minutes=10)
+            else:
+                event["envelope_start"] = event["epoch"] - timedelta(minutes=15)
+                event["envelope_end"] = event["epoch"] + timedelta(minutes=5)
+    duplicate_base_event = next(
+        event
+        for event in event_rows
+        if event["cell_id"] == 0
+        and event["epoch"].isoformat() == "2026-10-04T23:10:00+00:00"
+        and event["configuration_id"] == "amsr2-gcom-w1-conical-product-sector"
+    ).copy()
+    duplicate_base_event["envelope_start"] = duplicate_base_event["epoch"] - timedelta(
+        minutes=12
+    )
+    duplicate_base_event["envelope_end"] = duplicate_base_event["epoch"] + timedelta(
+        minutes=15
+    )
+    event_rows.append(duplicate_base_event)
     monkeypatch.setattr(
         conical_study,
         "_collect_tasks",
@@ -367,14 +416,53 @@ def test_known_events_use_exact_epoch_union_and_independent_cell_area(monkeypatc
         "amsr2-gcom-w1-conical-accounting-copy",
         "amsr2-gcom-w1-conical-product-sector",
     ]
+    assert simultaneous["envelope_semantics"] == "contributor_hull"
+    assert simultaneous["envelope_start_utc"] == "2026-10-04T22:55:00Z"
+    assert simultaneous["envelope_end_utc"] == "2026-10-04T23:25:00Z"
+    assert simultaneous["envelope_duration_hours"] == pytest.approx(0.5)
     assert len(simultaneous["contributor_configurations"]) == 2
+    contributor_envelopes = {
+        item["configuration_id"]: item for item in simultaneous["contributor_configurations"]
+    }
+    assert contributor_envelopes[
+        "amsr2-gcom-w1-conical-product-sector"
+    ]["envelope_start_utc"] == "2026-10-04T22:58:00Z"
+    assert contributor_envelopes[
+        "amsr2-gcom-w1-conical-product-sector"
+    ]["envelope_end_utc"] == "2026-10-04T23:25:00Z"
+    assert contributor_envelopes[
+        "amsr2-gcom-w1-conical-accounting-copy"
+    ]["envelope_start_utc"] == "2026-10-04T22:55:00Z"
+    assert contributor_envelopes[
+        "amsr2-gcom-w1-conical-accounting-copy"
+    ]["envelope_end_utc"] == "2026-10-04T23:15:00Z"
+    assert combined_events["metrics"]["envelope_period_count"] == 7
+    assert "hull" in combined_events["definitions"]["envelope"].lower()
+    assert "not one tat-c field-of-regard period" in combined_events["definitions"]["envelope"].lower()
     assert len(
         [event for event in combined_events["events"] if event["cell_id"] == 0]
     ) == 2
+    error, text, configuration_events = _call(
+        "get_mixed_events",
+        {
+            "result_id": summary["result_id"],
+            "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+            "limit": 20,
+        },
+    )
+    assert not error, text
+    retained = next(
+        event
+        for event in configuration_events["events"]
+        if event["cell_id"] == 0 and event["epoch_utc"] == "2026-10-04T23:10:00Z"
+    )
+    assert retained["envelope_start_utc"] == "2026-10-04T22:58:00Z"
+    assert retained["envelope_end_utc"] == "2026-10-04T23:25:00Z"
 
     error, text, daily = _call("get_mixed_daily", {"result_id": summary["result_id"]})
     assert not error, text
     assert [row["utc_date"] for row in daily["daily"]] == ["2026-10-04", "2026-10-05"]
+    assert [row["envelope_period_count"] for row in daily["daily"]] == [4, 3]
     assert daily["daily"][0]["observed_cell_ids"] == [0, 1]
     assert daily["daily"][1]["observed_cell_ids"] == [1, 2]
     geod = Geod(ellps="WGS84")
@@ -459,6 +547,12 @@ def test_daylight_assumption_is_applied_per_configuration_on_shared_spacecraft()
         "does not establish a daylight-only AMSR2 requirement."
     )
     daylight["geometry"]["illumination_requirement_note"] = daylight_note
+    for evidence in daylight["evidence"]:
+        evidence["supports"] = [
+            field
+            for field in evidence["supports"]
+            if field != "geometry.illumination_requirement"
+        ]
     daylight["interpretation"]["limitations"].append(daylight_note)
     selections = [
         {
@@ -472,11 +566,11 @@ def test_daylight_assumption_is_applied_per_configuration_on_shared_spacecraft()
         },
     ]
     error, text, proposal = _prepared_mixed_study(
-        start="2026-10-05T00:00:00Z",
-        end="2026-10-05T01:00:00Z",
+        start="2026-10-04T00:00:00Z",
+        end="2026-10-05T00:00:00Z",
         grid_rows=2,
         grid_columns=2,
-        region=(0.0, -65.0, 10.0, -55.0),
+        region=(-65.0, 0.0, -55.0, 10.0),
         configurations=selections,
     )
     assert not error, text
@@ -486,6 +580,15 @@ def test_daylight_assumption_is_applied_per_configuration_on_shared_spacecraft()
     assert filtered["configuration"]["geometry"]["illumination_requirement"] == "target_sunlit"
     assert filtered["configuration"]["geometry"]["illumination_requirement_basis"] == "study_assumption"
     assert filtered["configuration"]["tatc_mapping"]["req_target_sunlit"] is True
+    daylight_evidence = filtered["configuration"]["evidence"]
+    assert any(
+        item["evidence_id"] == "jaxa-amsr2-passive-microwave" and item["excerpt"]
+        for item in daylight_evidence
+    )
+    assert not any(
+        "geometry.illumination_requirement" in item["supports"]
+        for item in daylight_evidence
+    )
     assert any("not a source-established scientific requirement" in warning for warning in filtered["warnings"])
 
     error, text, summary = _call(
@@ -497,11 +600,59 @@ def test_daylight_assumption_is_applied_per_configuration_on_shared_spacecraft()
         },
     )
     assert not error, text
-    base_events = summary["configuration_summaries"][0]["summary_counts"]["event_count"]
-    daylight_events = summary["configuration_summaries"][1]["summary_counts"]["event_count"]
-    assert base_events == 4
-    assert daylight_events == 0
+    configuration_counts = {
+        item["configuration_id"]: item["summary_counts"]["event_count"]
+        for item in summary["configuration_summaries"]
+    }
+    base_events = configuration_counts["amsr2-gcom-w1-conical-product-sector"]
+    daylight_events = configuration_counts[
+        "amsr2-gcom-w1-daylight-study-assumption"
+    ]
+    radar_events = configuration_counts["sentinel-1c-c-sar-iw-fixed-view"]
+    combined_events = summary["summary_counts"]["event_count"]
+    assert base_events == 5
+    assert 0 < daylight_events <= base_events
+    assert radar_events == 1
+    assert 0 < combined_events < sum(configuration_counts.values())
     assert any("not a source-established scientific requirement" in warning for warning in summary["warnings"])
+
+    error, text, combined = _call(
+        "get_mixed_events", {"result_id": summary["result_id"], "limit": 20}
+    )
+    assert not error, text
+    assert combined["total_events"] == combined_events
+    assert any(len(event["contributor_configurations"]) > 1 for event in combined["events"])
+    error, text, radar = _call(
+        "get_mixed_events",
+        {
+            "result_id": summary["result_id"],
+            "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+        },
+    )
+    assert not error, text
+    assert radar["total_events"] == radar_events > 0
+
+
+def test_mixed_daylight_study_assumption_rejects_source_support_claim():
+    daylight = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text(encoding="utf-8")
+    )
+    daylight["configuration_id"] = "amsr2-daylight-contradictory-evidence"
+    daylight["revision"] = "fixture-contradictory-1"
+    daylight["geometry"]["illumination_requirement"] = "target_sunlit"
+    daylight["geometry"]["illumination_requirement_basis"] = "study_assumption"
+    daylight["geometry"]["illumination_requirement_note"] = "Study sensitivity only."
+
+    error, text, _ = _prepared_mixed_study(
+        configurations=[{"configuration": daylight}]
+    )
+    assert error
+    assert "study assumption cannot be source-supported" in text
 
 
 def test_mixed_preparation_rejects_duplicate_and_unknown_registry_selections():

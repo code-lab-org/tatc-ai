@@ -369,6 +369,94 @@ def test_pointed_configuration_rejects_incompatible_or_unsupported_inputs(mutati
         PointedConfiguration.model_validate(data)
 
 
+def test_pointed_daylight_basis_requires_evidence_or_unclaimed_assumption():
+    data = _configuration().portable()
+    data["geometry"]["illumination_requirement"] = "target_sunlit"
+    data["geometry"]["illumination_requirement_basis"] = "source_evidence"
+    with pytest.raises(ValueError, match="source-based target_sunlit setting requires evidence"):
+        PointedConfiguration.model_validate(data)
+
+    data["evidence"][0]["supports"].append("geometry.illumination_requirement")
+    source_backed = PointedConfiguration.model_validate(data)
+    assert any(
+        "source-backed target-sunlit requirement" in warning
+        for warning in source_backed.warnings()
+    )
+
+    data["geometry"]["illumination_requirement_basis"] = "study_assumption"
+    data["geometry"]["illumination_requirement_note"] = "Study sensitivity only."
+    data["evidence"][0]["supports"].remove("geometry.illumination_requirement")
+    assumed = PointedConfiguration.model_validate(data)
+    assert any("not a source-established scientific requirement" in warning for warning in assumed.warnings())
+
+    data["evidence"][0]["supports"].append("geometry.illumination_requirement")
+    with pytest.raises(ValueError, match="study assumption cannot be source-supported"):
+        PointedConfiguration.model_validate(data)
+
+
+def test_pointed_prepare_preserves_daylight_assumption_basis():
+    case = _reference()["cases"][0]
+    draft = _begin(case["window_start_utc"], case["window_end_utc_exclusive"])
+    _set_region(
+        draft["draft_id"],
+        case["target"]["longitude_deg"],
+        case["target"]["latitude_deg"],
+    )
+    configuration = _configuration().portable()
+    configuration["geometry"]["illumination_requirement"] = "target_sunlit"
+    configuration["geometry"]["illumination_requirement_basis"] = "source_evidence"
+    error, text, _ = _call(
+        "prepare_pointed_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 1,
+            "grid_columns": 1,
+            "configuration": configuration,
+        },
+    )
+    assert error
+    assert "source-based target_sunlit setting requires evidence" in text
+
+    configuration["geometry"]["illumination_requirement_basis"] = "study_assumption"
+    error, text, _ = _call(
+        "prepare_pointed_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 1,
+            "grid_columns": 1,
+            "configuration": configuration,
+        },
+    )
+    assert error
+    assert "requires an illumination_requirement_note" in text
+
+    configuration["geometry"]["illumination_requirement_note"] = "Study sensitivity only."
+    error, text, proposal = _call(
+        "prepare_pointed_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 1,
+            "grid_columns": 1,
+            "configuration": configuration,
+        },
+    )
+    assert not error, text
+    assert any("not a source-established scientific requirement" in warning for warning in proposal["warnings"])
+
+    configuration["evidence"][0]["supports"].append("geometry.illumination_requirement")
+    error, text, _ = _call(
+        "prepare_pointed_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 1,
+            "grid_columns": 1,
+            "configuration": configuration,
+        },
+    )
+    assert error
+    assert "study assumption cannot be source-supported" in text
+
+
 def test_pointed_study_rejects_more_than_one_configured_instrument():
     fixture = _reference()["cases"][0]
     draft = _begin(fixture["window_start_utc"], fixture["window_end_utc_exclusive"])

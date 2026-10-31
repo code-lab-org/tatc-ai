@@ -99,6 +99,8 @@ def test_blank_source_evidence_is_rejected(field):
 
 def test_missing_illumination_evidence_is_rejected():
     data = _fixture()
+    data["geometry"]["illumination_requirement"] = "target_sunlit"
+    data["geometry"]["illumination_requirement_basis"] = "source_evidence"
     data["evidence"] = [
         item
         for item in data["evidence"]
@@ -106,6 +108,44 @@ def test_missing_illumination_evidence_is_rejected():
     ]
     data["source_revision"]["evidence_ids"].remove("jaxa-amsr2-passive-microwave")
     with pytest.raises(ValidationError, match="geometry.illumination_requirement"):
+        ConicalConfiguration.model_validate(data)
+
+
+def test_source_evidence_illumination_requirement_is_supported():
+    data = _fixture()
+    data["geometry"]["illumination_requirement"] = "target_sunlit"
+    data["geometry"]["illumination_requirement_basis"] = "source_evidence"
+
+    configuration = ConicalConfiguration.model_validate(data)
+    assert any(
+        "source-backed target-sunlit requirement" in warning
+        for warning in configuration.warnings()
+    )
+
+
+def test_study_assumption_does_not_claim_illumination_source_support():
+    data = _fixture()
+    data["geometry"]["illumination_requirement"] = "target_sunlit"
+    data["geometry"]["illumination_requirement_basis"] = "study_assumption"
+    data["geometry"]["illumination_requirement_note"] = "Study sensitivity only."
+    for evidence in data["evidence"]:
+        evidence["supports"] = [
+            field
+            for field in evidence["supports"]
+            if field != "geometry.illumination_requirement"
+        ]
+
+    configuration = ConicalConfiguration.model_validate(data)
+    assert any("not a source-established scientific requirement" in warning for warning in configuration.warnings())
+
+
+def test_study_assumption_rejects_claimed_illumination_source_support():
+    data = _fixture()
+    data["geometry"]["illumination_requirement"] = "target_sunlit"
+    data["geometry"]["illumination_requirement_basis"] = "study_assumption"
+    data["geometry"]["illumination_requirement_note"] = "Study sensitivity only."
+
+    with pytest.raises(ValidationError, match="study assumption cannot be source-supported"):
         ConicalConfiguration.model_validate(data)
 
 
