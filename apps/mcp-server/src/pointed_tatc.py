@@ -34,18 +34,21 @@ def build_pointed_satellite(
             f"[{geometry.source_altitude_minimum_km:g}, "
             f"{geometry.source_altitude_maximum_km:g}] km"
         )
-    instrument = PointedInstrument(
-        name=configuration.instrument,
-        field_of_regard=geometry.field_of_regard.value,
-        cross_track_field_of_view=geometry.cross_track_field_of_view.value,
-        along_track_field_of_view=geometry.along_track_field_of_view.value,
-        roll_angle=geometry.roll_angle.value,
-        pitch_angle=geometry.pitch_angle.value,
-        nadir_reference=NadirReference(geometry.nadir_reference),
-        velocity_frame=VelocityFrame(geometry.velocity_frame),
-        is_rectangular=geometry.is_rectangular,
-        view_geometry=geometry.view_geometry,
-    )
+    instrument_options: Dict[str, Any] = {
+        "name": configuration.instrument,
+        "field_of_regard": geometry.field_of_regard.value,
+        "cross_track_field_of_view": geometry.cross_track_field_of_view.value,
+        "along_track_field_of_view": geometry.along_track_field_of_view.value,
+        "roll_angle": geometry.roll_angle.value,
+        "pitch_angle": geometry.pitch_angle.value,
+        "nadir_reference": NadirReference(geometry.nadir_reference),
+        "velocity_frame": VelocityFrame(geometry.velocity_frame),
+        "is_rectangular": geometry.is_rectangular,
+        "view_geometry": geometry.view_geometry,
+    }
+    if geometry.illumination_requirement == "target_sunlit":
+        instrument_options["req_target_sunlit"] = True
+    instrument = PointedInstrument(**instrument_options)
     satellite = Satellite(
         name=configuration.spacecraft.name,
         orbit=orbit,
@@ -70,6 +73,7 @@ def resolved_pointed_snapshot(
         "nadir_reference_source": "tatc.schemas.PointedInstrument.nadir_reference",
         "view_geometry": instrument.view_geometry,
         "is_rectangular": instrument.is_rectangular,
+        "req_target_sunlit": instrument.req_target_sunlit,
         "field_of_regard_deg": float(instrument.field_of_regard),
         "cross_track_field_of_view_deg": float(instrument.cross_track_field_of_view),
         "along_track_field_of_view_deg": float(instrument.along_track_field_of_view),

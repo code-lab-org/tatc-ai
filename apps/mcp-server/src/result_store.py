@@ -112,7 +112,7 @@ def set_draft_study_proposal(
     draft_id: Any, study_kind: str, proposal: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Attach the latest instrument-study proposal to a staged draft."""
-    if study_kind not in ("conical", "pointed"):
+    if study_kind not in ("conical", "pointed", "mixed"):
         raise ValueError(f"Unsupported study kind {study_kind!r}")
     with _lock:
         payload = _lookup_locked(_drafts, _DRAFT, draft_id)

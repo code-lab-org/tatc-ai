@@ -17,9 +17,16 @@ from .configuration_registry import (
 )
 from .conical_config import ConicalConfiguration, SourceEvidence
 from .conical_study import finish_conical_study as _finish_conical
+from .conical_study import finish_mixed_study as _finish_mixed
 from .conical_study import get_conical_event_spacing as _conical_event_spacing
 from .conical_study import get_conical_events as _conical_events
+from .conical_study import get_mixed_cells as _mixed_cells
+from .conical_study import get_mixed_daily as _mixed_daily
+from .conical_study import get_mixed_event_spacing as _mixed_event_spacing
+from .conical_study import get_mixed_events as _mixed_events
+from .conical_study import get_mixed_revisit as _mixed_revisit
 from .conical_study import prepare_conical_study as _prepare_conical
+from .conical_study import prepare_mixed_study as _prepare_mixed
 from .conical_study import finish_pointed_study as _finish_pointed
 from .conical_study import get_pointed_cells as _pointed_cells
 from .conical_study import get_pointed_daily as _pointed_daily
@@ -157,8 +164,8 @@ SERVER_INSTRUCTIONS = (
     "geometry or applicability change creates a separate selectable immutable "
     "revision and a notice on the prior one. A failed check means the source "
     "status is unknown. The "
-    "established applicability interval must contain the full window; this "
-    "increment rejects uncovered dates and additional configurations. "
+    "established applicability interval must contain the full window. The "
+    "single-configuration conical and pointed workflows reject uncovered dates. "
     "Conical results preserve each valid TAT-C viewing epoch. The broader "
     "field-of-regard period is envelope metadata only: never describe it as "
     "continuous viewing, access duration, or uncovered duration. Daily area "
@@ -182,6 +189,21 @@ SERVER_INSTRUCTIONS = (
     "schedule or mission capability. Use its pointed event, daily, cell, and "
     "revisit fetches. Field-of-regard envelopes remain metadata; count access "
     "only at valid TAT-C event epochs. "
+    "For more than one selected configuration, use the mixed study preparation "
+    "tool and mixed study finish tool. It accepts one to six exact registry revisions or "
+    "complete study-specific configurations, across at most six spacecraft. "
+    "Every staged spacecraft must have at least one selected configuration, and "
+    "every configuration must cover the full UTC window. Keep each configuration's "
+    "identity, source revision, orbit, geometry, and illumination setting separate. "
+    "A target-sunlit filter may be a study assumption; report its note and do not "
+    "call it a source-established scientific requirement. TAT-C applies each "
+    "configuration's filter independently, including for configurations sharing "
+    "a spacecraft. Mixed fetches return the combined cell-union scope when "
+    "configuration_id is omitted, or one configuration's contribution when its "
+    "exact ID is supplied. Exact simultaneous events retain all contributors and "
+    "count once for combined spacing; nearby epochs remain separate. Combined "
+    "daily area counts each visited cell ID once. Keep the setup provenance, "
+    "warnings, completeness status, and accounting definitions with every view. "
     "Coverage is modeled access at each grid-cell center only: never claim "
     "every point of the region was scanned or that an acquisition occurred. "
     "A daily gap_area_km2 of 0 means every cell center had access that UTC "
@@ -1026,6 +1048,97 @@ def finish_pointed_study(
 ) -> Dict[str, Any]:
     """Run only the current accepted pointed study proposal."""
     return _finish_pointed(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def prepare_mixed_study(
+    draft_id: str,
+    grid_rows: int,
+    grid_columns: int,
+    configurations: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Prepare one through six sourced conical or pointed configurations.
+
+    configurations must be a JSON list of objects. Each item is either an
+    exact registry selection with configuration_id and configuration_revision,
+    or a complete study-specific configuration nested as an object under
+    configuration; do not pass a JSON-encoded string. Every staged spacecraft
+    must have a selected configuration. Preparation checks full-window
+    applicability and workload limits but runs no viewing-event calculation.
+
+    The returned proposal preserves each identity, revision, source evidence,
+    orbit, geometry, illumination setting, and acceptance revision. Accept the
+    proposal before calling the mixed finish tool.
+    """
+    return _prepare_mixed(draft_id, grid_rows, grid_columns, configurations)
+
+
+@mcp.tool
+def finish_mixed_study(
+    draft_id: str,
+    accepted_setup_revision: str,
+    accept_setup: bool,
+) -> Dict[str, Any]:
+    """Run only the current, explicitly accepted mixed study proposal."""
+    return _finish_mixed(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def get_mixed_events(
+    result_id: str,
+    configuration_id: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Fetch events for one configuration or the combined exact-epoch union.
+
+    Omit configuration_id for the combined scope. Pass one exact configuration
+    ID from the result to fetch its separate contribution. Pages default to
+    five events and cap at 20; use offset to retrieve later pages.
+    """
+    return _mixed_events(result_id, configuration_id, offset, limit)
+
+
+@mcp.tool
+def get_mixed_daily(
+    result_id: str,
+    configuration_id: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 31,
+) -> Dict[str, Any]:
+    """Fetch per-configuration or combined union area by half-open UTC day."""
+    return _mixed_daily(result_id, configuration_id, offset, limit)
+
+
+@mcp.tool
+def get_mixed_cells(
+    result_id: str,
+    configuration_id: Optional[str] = None,
+    include: str = "all",
+    offset: int = 0,
+    limit: int = 2,
+) -> Dict[str, Any]:
+    """Fetch up to ten per-configuration or combined GeoJSON cells (default two)."""
+    return _mixed_cells(result_id, configuration_id, include, offset, limit)
+
+
+@mcp.tool
+def get_mixed_revisit(
+    result_id: str, configuration_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Fetch combined or per-configuration event-spacing summary metrics."""
+    return _mixed_revisit(result_id, configuration_id)
+
+
+@mcp.tool
+def get_mixed_event_spacing(
+    result_id: str,
+    configuration_id: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Fetch up to 20 spacing rows (default five) for combined or selected scope."""
+    return _mixed_event_spacing(result_id, configuration_id, offset, limit)
 
 
 @mcp.tool

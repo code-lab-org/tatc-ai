@@ -1,4 +1,4 @@
-"""Staged single-configuration conical and pointed studies.
+"""Staged conical, pointed, and mixed instrument studies.
 
 The workflow mirrors the legacy staged access path: begin locks the
 spacecraft and window, region sets the bounds, prepare resolves a sourced
@@ -23,8 +23,11 @@ from pydantic import ValidationError
 from .conical_accounting import (
     ACCOUNTING_METHOD,
     EVENT_DEFINITION,
+    MIXED_ACCOUNTING_METHOD,
+    MIXED_CONFIGURATION_ACCOUNTING_METHOD,
     POINTED_ACCOUNTING_METHOD,
     POINTED_EVENT_DEFINITION,
+    normalize_mixed_events,
     normalize_events,
     summarize_events,
 )
@@ -62,6 +65,10 @@ from .result_store import (
 InstrumentConfiguration = Union[ConicalConfiguration, PointedConfiguration]
 
 MAX_EVALUATED_CONFIGURATIONS = 1
+MAX_MIXED_CONFIGURATIONS = 6
+MAX_MIXED_EVENT_PAGE_SIZE = 20
+MAX_MIXED_CELL_PAGE_SIZE = 10
+MAX_MIXED_SPACING_PAGE_SIZE = 20
 # Below this many cell-days, starting worker processes costs more than it saves.
 POOL_MIN_CELL_DAYS = 100
 
@@ -555,6 +562,12 @@ def _prepare_study(
             )
         resolved_configuration = _load_configuration(configuration, study_kind)
     stage = copy.deepcopy(_get_draft(draft_id))
+    if stage.get("mixed_proposal"):
+        raise ValueError(
+            "This draft already has a mixed proposal. Use the mixed finish tool "
+            "with its accepted setup revision, or start a new draft for a "
+            "single-configuration study."
+        )
     if stage.get("roi_bbox") is None:
         raise ValueError(
             f"This draft has no region yet. Call the region tool with four "
@@ -654,14 +667,360 @@ def prepare_pointed_study(
     )
 
 
-def _tasks_for_cells(
+def _resolve_mixed_configuration(selection: Any) -> Tuple[
+    InstrumentConfiguration, Optional[Dict[str, Any]]
+]:
+    if not isinstance(selection, dict):
+        raise ValueError("Each mixed configuration must be an object")
+    if "configuration_id" in selection or "configuration_revision" in selection:
+        if set(selection) != {"configuration_id", "configuration_revision"}:
+            raise ValueError(
+                "A registry selection must contain only configuration_id and "
+                "configuration_revision; do not combine it with a study-specific "
+                "configuration."
+            )
+        if not selection.get("configuration_id") or not selection.get(
+            "configuration_revision"
+        ):
+            raise ValueError(
+                "Mixed registry selections require both configuration_id and "
+                "configuration_revision. Choose an exact revision from lookup."
+            )
+        configuration, registry_selection = resolve_instrument_configuration(
+            selection["configuration_id"], selection["configuration_revision"]
+        )
+        if not isinstance(configuration, (ConicalConfiguration, PointedConfiguration)):
+            raise ValueError(
+                f"Registry ID {selection['configuration_id']!r} is not a supported "
+                "conical or pointed configuration."
+            )
+        return configuration, registry_selection
+
+    if set(selection) != {"configuration"}:
+        raise ValueError(
+            "Each mixed configuration must be either an exact registry selection "
+            "with configuration_id and configuration_revision, or a complete "
+            "study-specific configuration under configuration."
+        )
+    raw = selection["configuration"]
+    if not isinstance(raw, dict):
+        raise ValueError("A study-specific configuration must be an object")
+    version = raw.get("schema_version")
+    expected = {
+        "conical-configuration-v1": ConicalConfiguration,
+        "pointed-configuration-v1": PointedConfiguration,
+    }.get(version)
+    if expected is None:
+        raise ValueError(
+            f"Unsupported mixed configuration schema_version {version!r}; use a "
+            "supported conical or pointed configuration."
+        )
+    try:
+        return expected.model_validate(raw), None
+    except ValidationError as exc:
+        raise ValueError(
+            f"Configuration rejected: {_configuration_error(exc)}"
+        ) from exc
+
+
+def _check_mixed_spacecraft(
     stage: Dict[str, Any],
+    configurations: Sequence[InstrumentConfiguration],
+) -> Dict[int, Dict[str, Any]]:
+    staged_by_id = {int(item["norad_id"]): item for item in stage["satellites"]}
+    configured_ids = {int(item.spacecraft.norad_id) for item in configurations}
+    if len(configured_ids) > MAX_MIXED_CONFIGURATIONS:
+        raise ValueError(
+            f"A mixed study may use at most {MAX_MIXED_CONFIGURATIONS} spacecraft."
+        )
+    if configured_ids != set(staged_by_id):
+        missing = sorted(configured_ids - set(staged_by_id))
+        extra = sorted(set(staged_by_id) - configured_ids)
+        details = []
+        if missing:
+            details.append("missing staged NORAD IDs " + ", ".join(map(str, missing)))
+        if extra:
+            details.append("staged spacecraft without a selected configuration " + ", ".join(map(str, extra)))
+        raise ValueError(
+            "Every staged spacecraft must match at least one selected configuration "
+            "and every selected configuration must match a staged spacecraft: "
+            + "; ".join(details)
+            + ". Begin a new draft with the exact spacecraft set."
+        )
+    for configuration in configurations:
+        satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
+        stage_name = str(satellite["satellite"]).lower()
+        names = [configuration.spacecraft.name, *configuration.spacecraft.aliases]
+        if not any(name and name.lower() in stage_name for name in names):
+            raise ValueError(
+                f"Configuration {configuration.configuration_id!r} names spacecraft "
+                f"{configuration.spacecraft.name!r} and aliases "
+                f"{configuration.spacecraft.aliases!r}, but staged NORAD "
+                f"{satellite['norad_id']} resolves to {satellite['satellite']!r}. "
+                "Correct the identity or add a sourced alias."
+            )
+    return staged_by_id
+
+
+def _mixed_consequential_payload(
+    stage: Dict[str, Any],
+    prepared_configurations: Sequence[Dict[str, Any]],
+    grid_rows: int,
+    grid_columns: int,
+    cells: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    start, end = _parse_window(stage)
+    return {
+        "study_kind": "mixed_instrument_configuration_study",
+        "window_start_utc": iso_utc(start),
+        "window_end_utc_exclusive": iso_utc(end),
+        "roi_bbox": [float(value) for value in stage["roi_bbox"]],
+        "grid": {
+            "rows": int(grid_rows),
+            "columns": int(grid_columns),
+            "cell_count": len(cells),
+        },
+        "satellites": [
+            {
+                "norad_id": int(item["norad_id"]),
+                "satellite": item["satellite"],
+                "omm_epoch_utc": item["omm_epoch_utc"],
+                "omm_age_hours": item["omm_age_hours"],
+                "omm_hash": _omm_hash(item["omm_records"]),
+                "omm_mean_altitude_km": item["omm_mean_altitude_km"],
+            }
+            for item in stage["satellites"]
+        ],
+        "configurations": [
+            {
+                "configuration_id": item["configuration_id"],
+                "configuration_revision": item["configuration_revision"],
+                "configuration_digest": item["configuration_digest"],
+                "registry_selection": item["registry_selection"],
+                "source_choices": item["source_choices"],
+                "applicability": item["applicability"],
+                "tatc_mapping": item["configuration"]["tatc_mapping"],
+            }
+            for item in prepared_configurations
+        ],
+        "evaluated_configuration_count": len(prepared_configurations),
+        "spacecraft_count": len(stage["satellites"]),
+        "software": [item["configuration"]["software"] for item in prepared_configurations],
+    }
+
+
+def prepare_mixed_study(
+    draft_id: Any,
+    grid_rows: Any,
+    grid_columns: Any,
+    configurations: Any,
+) -> Dict[str, Any]:
+    """Resolve and accept a bounded set of conical and pointed configurations."""
+    if not isinstance(configurations, list) or not configurations:
+        raise ValueError("configurations must contain between 1 and 6 selections")
+    if len(configurations) > MAX_MIXED_CONFIGURATIONS:
+        raise ValueError(
+            f"A mixed study may evaluate at most {MAX_MIXED_CONFIGURATIONS} "
+            "instrument configurations. Reduce the selection and prepare again."
+        )
+
+    resolved: List[Tuple[InstrumentConfiguration, Optional[Dict[str, Any]]]] = [
+        _resolve_mixed_configuration(selection) for selection in configurations
+    ]
+    identities: Dict[str, Tuple[str, str, int]] = {}
+    for configuration, _registry in resolved:
+        identity = (
+            configuration.revision,
+            configuration.instrument,
+            int(configuration.spacecraft.norad_id),
+        )
+        previous = identities.get(configuration.configuration_id)
+        if previous is not None:
+            if previous == identity:
+                raise ValueError(
+                    f"Configuration {configuration.configuration_id!r} was selected "
+                    "more than once. Remove the duplicate selection."
+                )
+            raise ValueError(
+                f"Configuration ID {configuration.configuration_id!r} has "
+                "inconsistent revisions or instrument identity in this study. "
+                "Select one exact revision for each configuration ID."
+            )
+        identities[configuration.configuration_id] = identity
+
+    stage = copy.deepcopy(_get_draft(draft_id))
+    conflicting_kinds = [
+        kind
+        for kind in ("conical", "pointed")
+        if stage.get(f"{kind}_proposal")
+    ]
+    if conflicting_kinds:
+        raise ValueError(
+            "This draft already has a single-configuration "
+            f"{', '.join(conflicting_kinds)} proposal. Start a new draft for a "
+            "mixed study so its acceptance applies to one workflow."
+        )
+    if stage.get("roi_bbox") is None:
+        raise ValueError(
+            "This draft has no region yet. Set the region before preparing a mixed study."
+        )
+    staged_by_id = _check_mixed_spacecraft(
+        stage, [configuration for configuration, _ in resolved]
+    )
+    start, end = _parse_window(stage)
+    long_window = end - start > SHORT_WINDOW_MAX
+    cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
+    if not long_window and len(cells) > MAX_GRID_CELLS:
+        raise ValueError(f"Grid must contain no more than {MAX_GRID_CELLS} cells")
+    if long_window:
+        if len(cells) > MAX_YEAR_GRID_CELLS:
+            raise ValueError(
+                f"Windows over 3 days allow at most {MAX_YEAR_GRID_CELLS} cells."
+            )
+        workload = len(cells) * len(resolved)
+        if workload > MAX_YEAR_CELL_CONFIGURATIONS:
+            raise ValueError(
+                f"Windows over 3 days allow at most {MAX_YEAR_CELL_CONFIGURATIONS} "
+                "cells times evaluated configurations; "
+                f"{len(cells)} cells x {len(resolved)} configurations = "
+                f"{workload}. Reduce the grid or configuration list."
+            )
+
+    prepared_configurations = []
+    for configuration, registry_selection in resolved:
+        app_start, app_end = _validate_applicability(configuration, start, end)
+        satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
+        try:
+            snapshot = resolved_snapshot(configuration, satellite["omm_records"])
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                f"Could not resolve configuration "
+                f"{configuration.configuration_id!r} through TAT-C: {exc}"
+            ) from exc
+        satellite_snapshot = _public_satellites({"satellites": [satellite]})[0]
+        satellite_snapshot["omm_hash"] = _omm_hash(satellite["omm_records"])
+        prepared_configurations.append(
+            {
+                "configuration_id": configuration.configuration_id,
+                "configuration_revision": configuration.revision,
+                "instrument": configuration.instrument,
+                "spacecraft": configuration.spacecraft.model_dump(mode="json"),
+                "satellite": satellite_snapshot,
+                "configuration": snapshot,
+                "configuration_digest": _sha256(snapshot),
+                "registry_selection": registry_selection,
+                "source_choices": source_choices_from_snapshot(snapshot),
+                "applicability": {
+                    "start_utc": iso_utc(app_start),
+                    "end_utc_exclusive": iso_utc(app_end),
+                },
+                "warnings": _warnings(configuration, registry_selection=registry_selection),
+            }
+        )
+
+    consequential = _mixed_consequential_payload(
+        stage, prepared_configurations, grid_rows, grid_columns, cells
+    )
+    revision = "sha256:" + _sha256(consequential)
+    limits = [
+        *BASE_LIMITS,
+        *(YEAR_LIMITS if long_window else []),
+        f"This mixed study evaluates {len(prepared_configurations)} configurations "
+        f"across {len(staged_by_id)} spacecraft.",
+        f"At most {MAX_MIXED_CONFIGURATIONS} configurations and "
+        f"{MAX_MIXED_CONFIGURATIONS} spacecraft are allowed.",
+        (
+            f"Windows up to 3 days allow at most {MAX_GRID_CELLS} cells."
+            if not long_window
+            else f"Windows over 3 days allow at most {MAX_YEAR_GRID_CELLS} cells and "
+            f"{MAX_YEAR_CELL_CONFIGURATIONS} cells times configurations."
+        ),
+        f"No more than {MAX_YEAR_WORKERS} workers are used; each worker evaluates "
+        "one configuration and cell at a time.",
+    ]
+    proposal = {
+        "status": "awaiting_acceptance",
+        "draft_id": str(draft_id).strip(),
+        "setup_revision": revision,
+        "satellite": stage["satellite"],
+        "satellites": _public_satellites(stage),
+        "window_start_utc": iso_utc(start),
+        "window_end_utc_exclusive": iso_utc(end),
+        "window_duration_hours": round((end - start).total_seconds() / 3600, 3),
+        "roi_bbox": [float(value) for value in stage["roi_bbox"]],
+        "grid": {
+            **consequential["grid"],
+            "max_cell_axis_span_deg": round(
+                max(
+                    (float(stage["roi_bbox"][2]) - float(stage["roi_bbox"][0]))
+                    / int(grid_columns),
+                    (float(stage["roi_bbox"][3]) - float(stage["roi_bbox"][1]))
+                    / int(grid_rows),
+                ),
+                6,
+            ),
+        },
+        "evaluated_configuration_count": len(prepared_configurations),
+        "spacecraft_count": len(staged_by_id),
+        "configurations": prepared_configurations,
+        "consequential_settings": consequential,
+        "warnings": [
+            f"{item['configuration_id']}: {warning}"
+            for item in prepared_configurations
+            for warning in item["warnings"]
+        ]
+        + ["No calculation has run; accept this exact setup revision to execute."],
+        "limits": limits,
+        "acceptance": {
+            "required": True,
+            "setup_revision": revision,
+            "instruction": (
+                "Present each configuration, revision, source, illumination setting, "
+                "assumption, warning, region, grid, and window. Run only after the "
+                "researcher accepts this exact setup revision."
+            ),
+        },
+        "next_step": (
+            "After acceptance, call the mixed finish tool with this draft_id and "
+            "exact setup_revision. Do not add legacy geometry arguments."
+        ),
+    }
+    _set_proposal(
+        draft_id,
+        "mixed",
+        {
+            "setup_revision": revision,
+            "grid_rows": int(grid_rows),
+            "grid_columns": int(grid_columns),
+            "configurations": prepared_configurations,
+            "consequential": consequential,
+            "proposal": proposal,
+            "prepared_at_utc": iso_utc(_utcnow()),
+        },
+    )
+    return proposal
+
+
+def _configuration_from_mixed_snapshot(snapshot: Dict[str, Any]) -> InstrumentConfiguration:
+    if snapshot.get("schema_version") == SCHEMA_VERSION:
+        return conical_configuration_from_snapshot(snapshot)
+    if snapshot.get("schema_version") == "pointed-configuration-v1":
+        return pointed_configuration_from_snapshot(snapshot)
+    raise ValueError(
+        f"Unsupported mixed configuration schema_version "
+        f"{snapshot.get('schema_version')!r}"
+    )
+
+
+def _cell_tasks(
     configuration: InstrumentConfiguration,
+    omm_records: Sequence[Dict[str, Any]],
     cells: Sequence[Dict[str, Any]],
     start: datetime,
     end: datetime,
 ) -> List[Dict[str, Any]]:
-    omm_records = stage["satellites"][0]["omm_records"]
     configuration_payload = configuration.portable()
     return [
         {
@@ -675,6 +1034,453 @@ def _tasks_for_cells(
         }
         for cell in cells
     ]
+
+
+def _mixed_tasks_for_cells(
+    stage: Dict[str, Any],
+    configurations: Sequence[Dict[str, Any]],
+    cells: Sequence[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+) -> List[Dict[str, Any]]:
+    staged_by_id = {int(item["norad_id"]): item for item in stage["satellites"]}
+    tasks = []
+    for item in configurations:
+        configuration = _configuration_from_mixed_snapshot(item["configuration"])
+        satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
+        tasks.extend(
+            _cell_tasks(configuration, satellite["omm_records"], cells, start, end)
+        )
+    return tasks
+
+
+def _event_summary_counts(accounting: Dict[str, Any]) -> Dict[str, int]:
+    daily = accounting["daily"]
+    metrics = accounting["metrics"]
+    return {
+        "total_days": len(daily),
+        "days_with_events": sum(row["event_count"] > 0 for row in daily),
+        "gap_days": sum(row["event_count"] == 0 for row in daily),
+        "grid_cell_count": metrics["grid_cell_count"],
+        "observed_cell_count": metrics["observed_cell_count"],
+        "never_observed_cell_count": metrics["never_observed_cell_count"],
+        "event_count": metrics["event_count"],
+        "envelope_period_count": metrics["envelope_period_count"],
+    }
+
+
+def _mixed_result_payload(
+    stage: Dict[str, Any],
+    proposal: Dict[str, Any],
+    cells: Sequence[Dict[str, Any]],
+    raw_events: Sequence[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    accepted_at_utc: datetime,
+) -> Dict[str, Any]:
+    configuration_results: Dict[str, Dict[str, Any]] = {}
+    configuration_summaries = []
+    modeled_configurations = []
+    accepted_choices = []
+    all_warnings = []
+
+    for item in proposal["configurations"]:
+        configuration = _configuration_from_mixed_snapshot(item["configuration"])
+        configuration_id = item["configuration_id"]
+        config_raw_events = [
+            event
+            for event in raw_events
+            if event["configuration_id"] == configuration_id
+        ]
+        normalized = normalize_events(
+            config_raw_events,
+            start,
+            end,
+            applicability_start=configuration.applicability.start_utc,
+            applicability_end=configuration.applicability.end_utc_exclusive,
+        )
+        contributor = {
+            "configuration_id": configuration_id,
+            "configuration_revision": configuration.revision,
+            "instrument": configuration.instrument,
+            "satellite": item["satellite"]["satellite"],
+        }
+        for event in normalized:
+            event["contributor_configurations"] = [
+                {
+                    **contributor,
+                    "envelope_start_utc": event["envelope_start_utc"],
+                    "envelope_end_utc": event["envelope_end_utc"],
+                    "envelope_duration_hours": event["envelope_duration_hours"],
+                }
+            ]
+        accounting = summarize_events(
+            cells,
+            normalized,
+            start,
+            end,
+            accounting_method=MIXED_CONFIGURATION_ACCOUNTING_METHOD,
+            event_definition=(
+                f"{EVENT_DEFINITION if isinstance(configuration, ConicalConfiguration) else POINTED_EVENT_DEFINITION} "
+                f"Configuration {configuration_id!r}, revision {configuration.revision}."
+            ),
+        )
+        counts = _event_summary_counts(accounting)
+        result = {
+            "configuration_id": configuration_id,
+            "configuration_revision": configuration.revision,
+            "instrument": configuration.instrument,
+            "satellite": item["satellite"]["satellite"],
+            "warnings": item["warnings"],
+            "summary_counts": counts,
+            **accounting,
+            "events": normalized,
+        }
+        configuration_results[configuration_id] = result
+        configuration_summaries.append(
+            {
+                "configuration_id": configuration_id,
+                "configuration_revision": configuration.revision,
+                "instrument": configuration.instrument,
+                "satellite": item["satellite"]["satellite"],
+                "summary_counts": counts,
+                "metrics": accounting["metrics"],
+                "warnings": item["warnings"],
+            }
+        )
+        modeled_configurations.append(
+            {
+                "configuration_id": configuration_id,
+                "configuration_revision": configuration.revision,
+                "instrument": configuration.instrument,
+                "satellite": item["satellite"]["satellite"],
+                "status": "modeled",
+                "event_count": accounting["metrics"]["event_count"],
+                "applicability": item["applicability"],
+            }
+        )
+        accepted_choices.append(
+            {
+                "configuration_id": configuration_id,
+                "configuration_revision": configuration.revision,
+                "choices": item["source_choices"],
+            }
+        )
+        all_warnings.extend(
+            f"{configuration_id}: {warning}" for warning in item["warnings"]
+        )
+
+    combined_events = normalize_mixed_events(raw_events, start, end)
+    combined = summarize_events(
+        cells,
+        combined_events,
+        start,
+        end,
+        accounting_method=MIXED_ACCOUNTING_METHOD,
+        event_definition=(
+            "The exact-time union of valid TAT-C conical and pointed viewing epochs "
+            "at each cell center. Simultaneous contributors are retained together; "
+            "nearby epochs remain distinct."
+        ),
+    )
+    combined["definitions"]["combined_daily_area"] = (
+        "For each half-open UTC day, count the WGS84 geodesic area of the set union "
+        "of cell IDs visited by any selected configuration. A cell contributes once."
+    )
+    combined["definitions"]["combined_contributors"] = (
+        "Each combined event retains every configuration that contributed at the "
+        "same cell and exact viewing epoch. Events at different epochs are not merged."
+    )
+    combined["definitions"]["envelope"] = (
+        "For a combined event, the top-level envelope start, end, and duration "
+        "describe the temporal hull across its contributor envelopes, not one TAT-C "
+        "field-of-regard period. Each contributor_configurations entry retains its "
+        "own TAT-C envelope interval and duration."
+    )
+    combined["definitions"]["envelope_period_count"] = (
+        "Counts distinct contributor envelope intervals by configuration, cell, "
+        "start, and end. It does not count a combined event hull as a TAT-C period."
+    )
+    combined_counts = _event_summary_counts(combined)
+    start_utc, end_utc = iso_utc(start), iso_utc(end)
+    long_window = end - start > SHORT_WINDOW_MAX
+    limits = [
+        *BASE_LIMITS,
+        *(YEAR_LIMITS if long_window else []),
+        f"The result evaluates {len(proposal['configurations'])} configurations "
+        f"across {len(stage['satellites'])} spacecraft.",
+        f"No more than {MAX_MIXED_CONFIGURATIONS} configurations or spacecraft "
+        "are supported.",
+        (
+            f"Windows up to 3 days allow at most {MAX_GRID_CELLS} cells."
+            if not long_window
+            else f"Windows over 3 days allow at most {MAX_YEAR_GRID_CELLS} cells and "
+            f"{MAX_YEAR_CELL_CONFIGURATIONS} cells times configurations."
+        ),
+        f"Execution uses one worker pool with at most {MAX_YEAR_WORKERS} workers; "
+        "workers do not start nested pools.",
+    ]
+    provenance = {
+        "setup_revision": proposal["setup_revision"],
+        "accepted_setup_revision": proposal["setup_revision"],
+        "accepted_at_utc": iso_utc(accepted_at_utc),
+        "setup_snapshot": {
+            "configurations": [
+                {
+                    "configuration_id": item["configuration_id"],
+                    "configuration_revision": item["configuration_revision"],
+                    "configuration": item["configuration"],
+                    "registry_selection": item["registry_selection"],
+                    "source_choices": item["source_choices"],
+                    "applicability": item["configuration"]["applicability"],
+                    "satellite": item["satellite"],
+                }
+                for item in proposal["configurations"]
+            ],
+            "window": {"start_utc": start_utc, "end_utc_exclusive": end_utc},
+            "region": [float(value) for value in stage["roi_bbox"]],
+            "grid": proposal["consequential"]["grid"],
+            "satellites": proposal["consequential"]["satellites"],
+        },
+        "accepted_choices": accepted_choices,
+        "software": [
+            {
+                "configuration_id": item["configuration_id"],
+                "configuration_revision": item["configuration_revision"],
+                **item["configuration"]["software"],
+            }
+            for item in proposal["configurations"]
+        ],
+    }
+    summary_counts = {
+        **combined_counts,
+        "configuration_count": len(proposal["configurations"]),
+        "spacecraft_count": len(stage["satellites"]),
+    }
+    return {
+        "result_kind": "mixed_study",
+        "accounting_method": MIXED_ACCOUNTING_METHOD,
+        "setup_revision": proposal["setup_revision"],
+        "accepted_setup_revision": proposal["setup_revision"],
+        "satellite": stage["satellite"],
+        "satellites": _public_satellites(stage),
+        "configuration_id": None,
+        "configuration_revision": None,
+        "configuration_summaries": configuration_summaries,
+        "configuration_results": configuration_results,
+        "window_start_utc": start_utc,
+        "window_end_utc_exclusive": end_utc,
+        "window_duration_hours": round((end - start).total_seconds() / 3600, 3),
+        "roi_bbox": [float(value) for value in stage["roi_bbox"]],
+        "grid_shape": [proposal["grid_rows"], proposal["grid_columns"]],
+        "total_roi_area_km2": combined["total_roi_area_km2"],
+        "summary_counts": summary_counts,
+        "completeness_status": "complete",
+        "modeled_configurations": modeled_configurations,
+        "omitted_configurations": [],
+        "applicable_dates": {
+            "start_utc": start_utc,
+            "end_utc_exclusive": end_utc,
+        },
+        "unresolved_dates": [],
+        "consequential_settings": proposal["consequential"],
+        "provenance": provenance,
+        "warnings": all_warnings,
+        "limits": limits,
+        "definitions": combined["definitions"],
+        "metrics": combined["metrics"],
+        "daily": combined["daily"],
+        "cells": combined["cells"],
+        "event_spacing": combined["event_spacing"],
+        "events": combined_events,
+        "method": {
+            "observation_source": (
+                "TAT-C collect_observations runs once per selected configuration and "
+                "grid-cell center with that configuration's geometry, orbit, and "
+                "illumination settings."
+            ),
+            "combined_coverage": combined["definitions"]["combined_daily_area"],
+            "event_spacing": combined["definitions"]["event_spacing"],
+            "unavailable": combined["definitions"]["unavailable_metrics"],
+        },
+        "storage": _storage_note(),
+        "evidence_note": EVIDENCE_NOTE,
+    }
+
+
+def _compact_mixed_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
+    return {
+        "result_id": result_id,
+        "result_kind": full["result_kind"],
+        "accounting_method": full["accounting_method"],
+        "setup_revision": full["setup_revision"],
+        "accepted_setup_revision": full["accepted_setup_revision"],
+        "satellite": full["satellite"],
+        "satellites": full["satellites"],
+        "window_start_utc": full["window_start_utc"],
+        "window_end_utc_exclusive": full["window_end_utc_exclusive"],
+        "window_duration_hours": full["window_duration_hours"],
+        "roi_bbox": full["roi_bbox"],
+        "grid_shape": full["grid_shape"],
+        "total_roi_area_km2": full["total_roi_area_km2"],
+        "summary_counts": full["summary_counts"],
+        "completeness_status": full["completeness_status"],
+        "modeled_configurations": full["modeled_configurations"],
+        "omitted_configurations": full["omitted_configurations"],
+        "applicable_dates": full["applicable_dates"],
+        "unresolved_dates": full["unresolved_dates"],
+        "configuration_summaries": full["configuration_summaries"],
+        "metrics": full["metrics"],
+        "definitions": full["definitions"],
+        "warnings": full["warnings"],
+        "limits": full["limits"],
+        "provenance": full["provenance"],
+        "storage": full["storage"],
+        "evidence_note": full["evidence_note"],
+        "fetch": (
+            "Omit configuration_id to fetch the combined cell union. Pass one exact "
+            "configuration_id to each mixed event, daily, cell, revisit, or spacing "
+            "tool for that configuration's contribution. Results expire after 24 hours."
+        ),
+    }
+
+
+def finish_mixed_study(
+    draft_id: Any,
+    accepted_setup_revision: Any,
+    accept_setup: Any,
+    *,
+    _max_workers: int = MAX_YEAR_WORKERS,
+) -> Dict[str, Any]:
+    """Run only the current accepted mixed-configuration proposal."""
+    if not isinstance(accept_setup, bool):
+        raise ValueError("accept_setup must be true or false")
+    if not accept_setup:
+        raise ValueError(
+            "The mixed study must be explicitly accepted before calculation. "
+            "Present the proposal and call again with accept_setup=true only after acceptance."
+        )
+    if not isinstance(accepted_setup_revision, str) or not accepted_setup_revision.strip():
+        raise ValueError(
+            "accepted_setup_revision must match the setup_revision returned by mixed preparation"
+        )
+    if (
+        isinstance(_max_workers, bool)
+        or not isinstance(_max_workers, int)
+        or not 1 <= _max_workers <= MAX_YEAR_WORKERS
+    ):
+        raise ValueError(f"_max_workers must be an integer between 1 and {MAX_YEAR_WORKERS}")
+
+    stage = copy.deepcopy(_get_draft(draft_id))
+    conflicting_kinds = [
+        kind
+        for kind in ("conical", "pointed")
+        if stage.get(f"{kind}_proposal")
+    ]
+    if conflicting_kinds:
+        raise ValueError(
+            "This draft also has a single-configuration "
+            f"{', '.join(conflicting_kinds)} proposal. Use a separate draft for "
+            "each accepted workflow."
+        )
+    proposal = stage.get("mixed_proposal")
+    if not proposal:
+        raise ValueError(
+            "This draft has no prepared mixed proposal. Call mixed preparation with "
+            "the region, grid, and exact configuration selections first."
+        )
+    if accepted_setup_revision.strip() != proposal["setup_revision"]:
+        raise ValueError(
+            "Accepted setup revision does not match the current mixed proposal. "
+            "Prepare again and obtain acceptance of the updated setup. No calculation was run."
+        )
+    if stage.get("roi_bbox") is None:
+        raise ValueError("This draft has no region; set the region before finishing")
+
+    configurations = [
+        _configuration_from_mixed_snapshot(item["configuration"])
+        for item in proposal["configurations"]
+    ]
+    staged_by_id = _check_mixed_spacecraft(stage, configurations)
+    start, end = _parse_window(stage)
+    long_window = end - start > SHORT_WINDOW_MAX
+    cells = _build_grid(stage["roi_bbox"], proposal["grid_rows"], proposal["grid_columns"])
+    if not long_window and len(cells) > MAX_GRID_CELLS:
+        raise ValueError(f"Grid must contain no more than {MAX_GRID_CELLS} cells")
+    if long_window and (
+        len(cells) > MAX_YEAR_GRID_CELLS
+        or len(cells) * len(configurations) > MAX_YEAR_CELL_CONFIGURATIONS
+    ):
+        raise ValueError(
+            f"Windows over 3 days allow at most {MAX_YEAR_GRID_CELLS} cells and "
+            f"{MAX_YEAR_CELL_CONFIGURATIONS} cells times configurations."
+        )
+    if len(configurations) > MAX_MIXED_CONFIGURATIONS or len(staged_by_id) > MAX_MIXED_CONFIGURATIONS:
+        raise ValueError("Mixed studies support at most six configurations and six spacecraft")
+    for configuration in configurations:
+        _validate_applicability(configuration, start, end)
+
+    for item in proposal["configurations"]:
+        selected = item.get("registry_selection")
+        if selected is None:
+            continue
+        _, current = resolve_instrument_configuration(
+            selected["configuration_id"], selected["revision"]
+        )
+        material_keys = (
+            "configuration_id",
+            "revision",
+            "source",
+            "base_revision",
+            "source_change_notices",
+            "refresh_uncertainty",
+            "shared_registry_update_required",
+        )
+        if _canonical({key: current.get(key) for key in material_keys}) != _canonical(
+            {key: selected.get(key) for key in material_keys}
+        ):
+            raise ValueError(
+                f"Configuration {item['configuration_id']!r} has new source-change "
+                "information since preparation. Prepare again and obtain acceptance "
+                "of the updated notice. No calculation was run."
+            )
+
+    current_consequential = _mixed_consequential_payload(
+        stage,
+        proposal["configurations"],
+        proposal["grid_rows"],
+        proposal["grid_columns"],
+        cells,
+    )
+    current_revision = "sha256:" + _sha256(current_consequential)
+    if current_revision != proposal["setup_revision"]:
+        raise ValueError(
+            "The prepared mixed setup is stale: a consequential draft setting "
+            "changed after preparation. Prepare again and obtain a new acceptance. "
+            "No calculation was run."
+        )
+
+    tasks = _mixed_tasks_for_cells(
+        stage, proposal["configurations"], cells, start, end
+    )
+    work = len(tasks) * (end - start).total_seconds() / 86400
+    raw_events = _collect_tasks(tasks, _max_workers, work)
+    full = _mixed_result_payload(
+        stage, proposal, cells, raw_events, start, end, _utcnow()
+    )
+    result_id = _save_result(full)
+    return _compact_mixed_summary(full, result_id)
+
+
+def _tasks_for_cells(
+    stage: Dict[str, Any],
+    configuration: InstrumentConfiguration,
+    cells: Sequence[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+) -> List[Dict[str, Any]]:
+    omm_records = stage["satellites"][0]["omm_records"]
+    return _cell_tasks(configuration, omm_records, cells, start, end)
 
 
 def _collect_tasks(tasks: Sequence[Dict[str, Any]], max_workers: int, work: float) -> List[Dict[str, Any]]:
@@ -955,6 +1761,11 @@ def _finish_study(
     # by concurrent tool calls, so later edits must not change the evidence
     # saved beside this result.
     stage = copy.deepcopy(_get_draft(draft_id))
+    if stage.get("mixed_proposal"):
+        raise ValueError(
+            "This draft has a mixed proposal. Use finish_mixed_study with its "
+            "accepted setup revision."
+        )
     proposal = stage.get(f"{study_kind}_proposal")
     if not proposal:
         raise ValueError(
@@ -1339,3 +2150,293 @@ def get_pointed_event_spacing(
     return get_conical_event_spacing(
         result_id, offset, limit, _expected_result_kind="pointed_study"
     )
+
+
+def _mixed_scope(
+    result_id: Any, configuration_id: Any = None
+) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    payload = _get_saved(result_id)
+    if payload.get("result_kind") != "mixed_study":
+        raise ValueError("This result is not a mixed study; use the matching fetch tools")
+    result_id = str(result_id).strip()
+    if configuration_id is None:
+        return result_id, payload, payload
+    if not isinstance(configuration_id, str) or not configuration_id.strip():
+        raise ValueError("configuration_id must be a non-empty mixed-study configuration ID")
+    configuration_id = configuration_id.strip()
+    selected = payload["configuration_results"].get(configuration_id)
+    if selected is None:
+        available = ", ".join(
+            item["configuration_id"] for item in payload["modeled_configurations"]
+        )
+        raise ValueError(
+            f"Configuration {configuration_id!r} is not in this result. Choose one of: "
+            f"{available}. Omit configuration_id for the combined union."
+        )
+    return result_id, payload, selected
+
+
+def _mixed_fetch_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return compact provenance references for repeated mixed-study fetches."""
+    provenance = payload["provenance"]
+    setup_snapshot = provenance["setup_snapshot"]
+    configurations = []
+    for item in setup_snapshot["configurations"]:
+        configuration = item["configuration"]
+        source_evidence = configuration["evidence"]
+        registry_selection = item["registry_selection"]
+        if registry_selection is not None:
+            registry_selection = {
+                key: registry_selection[key]
+                for key in (
+                    "source",
+                    "configuration_id",
+                    "revision",
+                    "selection",
+                    "current_source_status",
+                    "base_revision",
+                    "shared_registry_update_required",
+                )
+                if key in registry_selection
+            }
+            for name in (
+                "source_change_checks",
+                "source_change_notices",
+                "refresh_uncertainty",
+                "superseded_refresh_failures",
+            ):
+                registry_selection[name] = [
+                    {
+                        key: check[key]
+                        for key in ("check_id", "kind", "status", "checked_at_utc")
+                        if key in check
+                    }
+                    for check in item["registry_selection"].get(name, [])
+                    if isinstance(check, dict)
+                ]
+        full_geometry = configuration["geometry"]
+        configurations.append(
+            {
+                "configuration_id": item["configuration_id"],
+                "configuration_revision": item["configuration_revision"],
+                "instrument": configuration["instrument"],
+                "configuration_sha256": _sha256(configuration),
+                "source_revision_id": configuration["source_revision"]["revision_id"],
+                "source_evidence": [
+                    {"evidence_id": evidence["evidence_id"], "url": evidence["url"]}
+                    for evidence in source_evidence
+                ],
+                "registry_selection": registry_selection,
+                "source_choices": [
+                    {key: choice[key] for key in ("conflict_id", "chosen_option_id")}
+                    for choice in item["source_choices"]
+                ],
+                "applicability": item["applicability"],
+                "geometry": {
+                    "model_family": full_geometry["model_family"],
+                    "illumination_requirement": full_geometry[
+                        "illumination_requirement"
+                    ],
+                    "illumination_requirement_basis": full_geometry.get(
+                        "illumination_requirement_basis"
+                    ),
+                    "illumination_requirement_note": full_geometry.get(
+                        "illumination_requirement_note"
+                    ),
+                    "tatc_mapping": configuration["tatc_mapping"],
+                },
+                "spacecraft": item["satellite"],
+            }
+        )
+    return {
+        "setup_revision": provenance["setup_revision"],
+        "accepted_setup_revision": provenance["accepted_setup_revision"],
+        "accepted_at_utc": provenance["accepted_at_utc"],
+        "setup_snapshot": {
+            "configurations": configurations,
+            "window": setup_snapshot["window"],
+            "region": setup_snapshot["region"],
+            "grid": setup_snapshot["grid"],
+        },
+        "software": provenance["software"],
+    }
+
+
+def _mixed_fetch_header(
+    result_id: str,
+    payload: Dict[str, Any],
+    selected: Dict[str, Any],
+    configuration_id: Any,
+) -> Dict[str, Any]:
+    is_combined = configuration_id is None
+    warnings = (
+        payload["warnings"]
+        if is_combined
+        else [
+            f"{selected['configuration_id']}: {warning}"
+            for warning in selected["warnings"]
+        ]
+    )
+    return {
+        "result_id": result_id,
+        "result_kind": payload["result_kind"],
+        "scope": "combined" if is_combined else "configuration",
+        "accounting_method": (
+            MIXED_ACCOUNTING_METHOD
+            if is_combined
+            else MIXED_CONFIGURATION_ACCOUNTING_METHOD
+        ),
+        "configuration_id": None if is_combined else selected["configuration_id"],
+        "configuration_revision": None if is_combined else selected["configuration_revision"],
+        "setup_revision": payload["setup_revision"],
+        "window_start_utc": payload["window_start_utc"],
+        "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
+        "provenance": _mixed_fetch_provenance(payload),
+        "warnings": warnings,
+        "limits": payload["limits"],
+        "completeness_status": payload["completeness_status"],
+        "modeled_configurations": payload["modeled_configurations"],
+        "omitted_configurations": payload["omitted_configurations"],
+        "applicable_dates": payload["applicable_dates"],
+        "unresolved_dates": payload["unresolved_dates"],
+        "definitions": selected["definitions"],
+        "summary_counts": selected["summary_counts"],
+        "metrics": selected["metrics"],
+        "evidence_note": payload["evidence_note"],
+    }
+
+
+def _paginate_mixed(
+    items: Sequence[Any], offset: Any, limit: Any, name: str, maximum: int
+) -> Dict[str, Any]:
+    requested = _paginate([], offset, limit, name)
+    offset_value = requested["offset"]
+    limit_value = min(requested["limit"], maximum)
+    return {
+        "offset": offset_value,
+        "limit": limit_value,
+        "total": len(items),
+        "items": list(items)[offset_value : offset_value + limit_value],
+    }
+
+
+def get_mixed_events(
+    result_id: Any,
+    configuration_id: Any = None,
+    offset: Any = 0,
+    limit: Any = 5,
+) -> Dict[str, Any]:
+    result_id, payload, selected = _mixed_scope(result_id, configuration_id)
+    page = _paginate_mixed(
+        selected["events"], offset, limit, "event", MAX_MIXED_EVENT_PAGE_SIZE
+    )
+    return {
+        **_mixed_fetch_header(result_id, payload, selected, configuration_id),
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "total_events": page["total"],
+        "events": _public_events(page["items"]),
+    }
+
+
+def get_mixed_daily(
+    result_id: Any,
+    configuration_id: Any = None,
+    offset: Any = 0,
+    limit: Any = 31,
+) -> Dict[str, Any]:
+    result_id, payload, selected = _mixed_scope(result_id, configuration_id)
+    page = _paginate(selected["daily"], offset, limit, "daily")
+    return {
+        **_mixed_fetch_header(result_id, payload, selected, configuration_id),
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "total_days": page["total"],
+        "daily": page["items"],
+    }
+
+
+def get_mixed_cells(
+    result_id: Any,
+    configuration_id: Any = None,
+    include: Any = "all",
+    offset: Any = 0,
+    limit: Any = 2,
+) -> Dict[str, Any]:
+    if not isinstance(include, str) or include.strip().lower() not in ("all", "observed", "gaps"):
+        raise ValueError("include must be one of all, observed, or gaps")
+    result_id, payload, selected = _mixed_scope(result_id, configuration_id)
+    wanted = include.strip().lower()
+    features = []
+    for cell in selected["cells"]:
+        observed = cell["event_count"] > 0
+        if (wanted == "observed" and not observed) or (wanted == "gaps" and observed):
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {key: value for key, value in cell.items() if key != "geometry"},
+                "geometry": cell["geometry"],
+            }
+        )
+    page = _paginate_mixed(
+        features, offset, limit, "cell", MAX_MIXED_CELL_PAGE_SIZE
+    )
+    header = _mixed_fetch_header(result_id, payload, selected, configuration_id)
+    return {
+        **header,
+        "include": wanted,
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "matched_cells": page["total"],
+        "cell_count": len(page["items"]),
+        "total_cells": len(selected["cells"]),
+        "geojson": {
+            "type": "FeatureCollection",
+            "metadata": {
+                key: header[key]
+                for key in (
+                    "result_id",
+                    "result_kind",
+                    "scope",
+                    "accounting_method",
+                    "configuration_id",
+                    "configuration_revision",
+                    "setup_revision",
+                    "window_start_utc",
+                    "window_end_utc_exclusive",
+                )
+            },
+            "features": page["items"],
+        },
+    }
+
+
+def get_mixed_revisit(
+    result_id: Any, configuration_id: Any = None
+) -> Dict[str, Any]:
+    result_id, payload, selected = _mixed_scope(result_id, configuration_id)
+    return _mixed_fetch_header(result_id, payload, selected, configuration_id)
+
+
+def get_mixed_event_spacing(
+    result_id: Any,
+    configuration_id: Any = None,
+    offset: Any = 0,
+    limit: Any = 5,
+) -> Dict[str, Any]:
+    result_id, payload, selected = _mixed_scope(result_id, configuration_id)
+    page = _paginate_mixed(
+        selected["event_spacing"],
+        offset,
+        limit,
+        "event spacing",
+        MAX_MIXED_SPACING_PAGE_SIZE,
+    )
+    return {
+        **_mixed_fetch_header(result_id, payload, selected, configuration_id),
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "total_cells": page["total"],
+        "event_spacing": page["items"],
+    }

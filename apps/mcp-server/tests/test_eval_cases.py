@@ -1,5 +1,6 @@
 """Offline checks for geometry behavior scored by the tool-calling eval."""
 
+import json
 from datetime import datetime, timezone
 
 from eval.cases import (
@@ -7,6 +8,7 @@ from eval.cases import (
     Call,
     Clock,
     Trace,
+    _mixed_complete,
     build_cases,
 )
 
@@ -222,6 +224,293 @@ def test_lookup_resolution_requires_width_from_a_relevant_source_call():
     assert not all(checks.values())
 
 
+def test_eval_cases_cover_combined_mixed_and_shared_spacecraft_daylight_workflows():
+    cases = build_cases(_clock())
+    mixed = next(case for case in cases if case.id == "mixed_amsr2_s1c_complete")
+    assert "prepare_mixed_study" in mixed.prompt
+    assert "distinct-epoch spacing" in mixed.prompt.lower()
+    assert "each exact configuration id" in mixed.prompt.lower()
+    assert "get_mixed_events limit=5" in mixed.prompt
+    assert "get_mixed_cells limit=2" in mixed.prompt
+    assert "get_mixed_event_spacing limit=5" in mixed.prompt
+    assert "Copy the exact ISO timestamps unchanged" in mixed.prompt
+    assert "all five views for the combined union" in mixed.prompt.lower()
+    assert "all five views for the amsr2 configuration" in mixed.prompt.lower()
+    assert "get_mixed_events for the sentinel-1c configuration" in mixed.prompt.lower()
+
+    daylight = next(
+        case for case in cases if case.id == "mixed_shared_spacecraft_daylight"
+    )
+    assert "JSON array of two objects" in daylight.prompt
+    assert '"configuration": <this JSON object>' in daylight.prompt
+    assert "not a quoted JSON string" in daylight.prompt
+    assert "get_mixed_events limit=5" in daylight.prompt
+    assert "get_mixed_cells limit=2" not in daylight.prompt
+    assert "get_mixed_event_spacing limit=5" not in daylight.prompt
+    assert "Copy the exact ISO timestamps unchanged" in daylight.prompt
+    assert "combined events and daily union" in daylight.prompt.lower()
+    assert "get_mixed_events for each exact configuration id" in daylight.prompt.lower()
+    marker = "Configuration JSON: "
+    config = json.loads(daylight.prompt.split(marker, 1)[1])
+    assert config["configuration_id"] == "amsr2-gcom-w1-daylight-study-assumption-eval"
+    assert config["spacecraft"]["norad_id"] == 38337
+    assert config["geometry"]["illumination_requirement"] == "target_sunlit"
+    assert config["geometry"]["illumination_requirement_basis"] == "study_assumption"
+    assert "sensitivity" in config["geometry"]["illumination_requirement_note"].lower()
+    assert "does not establish" in config["geometry"]["illumination_requirement_note"].lower()
+
+
+def test_mixed_eval_checker_requires_exact_acceptance_and_each_fetch_scope():
+    expected = {
+        "amsr2-gcom-w1-conical-product-sector": "2026-10-27.1",
+        "sentinel-1c-c-sar-iw-fixed-view": "2026-10-30.1",
+    }
+    setup_revision = "sha256:mixed-eval"
+    snapshots = [
+        {
+            "configuration_id": configuration_id,
+            "configuration_revision": revision,
+            "configuration": {"evidence": [{}]},
+            "satellite": {"norad_id": index},
+        }
+        for index, (configuration_id, revision) in enumerate(expected.items(), start=1)
+    ]
+    summary = {
+        "result_id": "mixed-result",
+        "result_kind": "mixed_study",
+        "accounting_method": "mixed_events_union_v1",
+        "completeness_status": "complete",
+        "setup_revision": setup_revision,
+        "summary_counts": {"event_count": 3},
+        "modeled_configurations": [
+            {
+                "configuration_id": configuration_id,
+                "configuration_revision": revision,
+            }
+            for configuration_id, revision in expected.items()
+        ],
+        "provenance": {
+            "setup_revision": setup_revision,
+            "setup_snapshot": {"configurations": snapshots},
+        },
+    }
+    calls = [
+        Call(
+            "lookup_instrument_configurations",
+            {},
+            False,
+            "{}",
+            parsed={
+                "selection": None,
+                "candidates": [
+                    {"configuration_id": configuration_id, "revision": revision}
+                ],
+            },
+        )
+        for configuration_id, revision in expected.items()
+    ]
+    calls.extend(
+        [
+            Call(
+                "prepare_mixed_study",
+                {
+                    "configurations": [
+                        {
+                            "configuration_id": configuration_id,
+                            "configuration_revision": revision,
+                        }
+                        for configuration_id, revision in expected.items()
+                    ]
+                },
+                False,
+                "{}",
+                parsed={"status": "awaiting_acceptance"},
+            ),
+            Call(
+                "finish_mixed_study",
+                {
+                    "accepted_setup_revision": setup_revision,
+                    "accept_setup": True,
+                },
+                False,
+                "{}",
+                parsed=summary,
+            ),
+        ]
+    )
+    for configuration_id in [None, *expected]:
+        for name in {
+            "get_mixed_events",
+            "get_mixed_daily",
+            "get_mixed_cells",
+            "get_mixed_revisit",
+            "get_mixed_event_spacing",
+        }:
+            args = {"result_id": "mixed-result"}
+            if name in {"get_mixed_events", "get_mixed_event_spacing"}:
+                args["limit"] = 5
+            elif name == "get_mixed_cells":
+                args["limit"] = 2
+            if configuration_id is not None:
+                args["configuration_id"] = configuration_id
+            calls.append(
+                Call(
+                    name,
+                    args,
+                    False,
+                    "{}",
+                    parsed={
+                        "scope": (
+                            "combined"
+                            if configuration_id is None
+                            else "configuration"
+                        ),
+                        "provenance": {"setup_revision": setup_revision},
+                        "definitions": {},
+                        "warnings": [],
+                        "limit": {
+                            "get_mixed_events": 5,
+                            "get_mixed_cells": 2,
+                            "get_mixed_event_spacing": 5,
+                        }.get(name),
+                    },
+                )
+            )
+    trace = Trace(
+        prompt="mixed study",
+        calls=calls,
+        final=(
+            "There are 3 modeled events, not confirmed acquisitions. Cell-center "
+            "samples and envelope periods do not show continuous viewing."
+        ),
+    )
+    case = next(
+        case
+        for case in build_cases(_clock())
+        if case.id == "mixed_amsr2_s1c_complete"
+    )
+    checks = case.checks(trace, _clock())
+    assert all(checks.values()), checks
+
+    original_event_count = summary["summary_counts"]["event_count"]
+    summary["summary_counts"]["event_count"] = 4
+    trace.final = (
+        "4 modeled acquisitions confirmed. Every cell was continuously viewed "
+        "throughout each envelope."
+    )
+    checks = case.checks(trace, _clock())
+    assert all(
+        value for name, value in checks.items() if name != "reported_model_limits"
+    ), checks
+    assert not checks["reported_model_limits"]
+
+    summary["summary_counts"]["event_count"] = original_event_count
+    for final in (
+        "There were 3 modeled acquisitions confirmed. Cell-center samples and "
+        "envelope periods do not show continuous viewing.",
+        "There were 3 modeled events. Every point in every cell was viewed. "
+        "Cell-center samples and envelope periods are not continuous viewing time.",
+        "There were 3 modeled events, not confirmed acquisitions. "
+        "The whole-cell area was viewed. "
+        "Cell-center samples and envelope periods are not continuous viewing time.",
+        "There were 3 modeled events at cell centers. Viewing is continuous "
+        "throughout each envelope.",
+    ):
+        trace.final = final
+        checks = case.checks(trace, _clock())
+        assert all(
+            value for name, value in checks.items() if name != "reported_model_limits"
+        ), checks
+        assert not checks["reported_model_limits"], final
+
+    for final in (
+        "There are 3 modeled events, not confirmed acquisitions. Cell-center "
+        "samples and envelope periods do not show continuous viewing.",
+        "There are 3 modelled opportunities; no acquisition was confirmed. "
+        "Cell-centre samples are not whole-cell coverage, and envelope periods "
+        "aren't continuous viewing time.",
+        "There are 3 modeled opportunities, not confirmed acquisitions. One "
+        "continuous rectangular view is a geometry approximation. Cell-center "
+        "samples and envelopes do not establish continuous viewing time or "
+        "full-cell coverage.",
+    ):
+        trace.final = final
+        assert case.checks(trace, _clock())["reported_model_limits"], final
+
+    trace.final = (
+        "There are 3 modeled events, not confirmed acquisitions. Cell-center "
+        "samples and envelope periods do not show continuous viewing."
+    )
+
+    configuration_ids = list(expected)
+    fetch_requirements = {
+        None: {
+            "get_mixed_events",
+            "get_mixed_daily",
+            "get_mixed_cells",
+            "get_mixed_revisit",
+            "get_mixed_event_spacing",
+        },
+        configuration_ids[0]: {
+            "get_mixed_events",
+            "get_mixed_daily",
+            "get_mixed_cells",
+            "get_mixed_revisit",
+            "get_mixed_event_spacing",
+        },
+        configuration_ids[1]: {"get_mixed_events"},
+    }
+    partial_trace = Trace(
+        prompt=trace.prompt,
+        calls=[
+            call
+            for call in trace.calls
+            if call.name not in {
+                "get_mixed_events",
+                "get_mixed_daily",
+                "get_mixed_cells",
+                "get_mixed_revisit",
+                "get_mixed_event_spacing",
+            }
+            or call.name
+            in fetch_requirements.get(call.args.get("configuration_id"), set())
+        ],
+        final=trace.final,
+        turns=trace.turns,
+        stop=trace.stop,
+    )
+    partial_checks = _mixed_complete(
+        expected,
+        tuple(expected),
+        fetch_requirements=fetch_requirements,
+    )(partial_trace, _clock())
+    assert all(partial_checks.values()), partial_checks
+
+    trace.final = trace.final.replace("modeled", "modelled")
+    assert case.checks(trace, _clock())["reported_model_limits"]
+    trace.final = trace.final.replace("modelled", "modeled")
+
+    for call in trace.calls:
+        if call.name in {"get_mixed_events", "get_mixed_cells", "get_mixed_event_spacing"}:
+            call.args.pop("limit", None)
+    checks = case.checks(trace, _clock())
+    assert checks["fetch_page_sizes"]
+
+    next(call for call in trace.calls if call.name == "get_mixed_events").parsed[
+        "limit"
+    ] = 21
+    checks = case.checks(trace, _clock())
+    assert not checks["fetch_page_sizes"]
+
+    trace.calls = [
+        call
+        for call in trace.calls
+        if not (call.name == "get_mixed_daily" and call.args.get("configuration_id") is None)
+    ]
+    checks = case.checks(trace, _clock())
+    assert not checks["combined_and_configuration_fetches"]
+
+
 def test_lookup_resolution_accepts_a_faithful_excerpt_of_the_candidate():
     case = next(
         case for case in build_cases(_clock()) if case.id == "resolver_lookup_supported"
@@ -389,6 +678,10 @@ def test_conical_eval_rejects_continuous_viewing_and_whole_cell_claims():
         "throughout each envelope.",
         "There were 4 viewing events at cell centers. The envelopes mean "
         "continuous viewing of the whole cell.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing time, but the cells were continuously viewed throughout every envelope.",
+        "There were 4 events at cell centers. The envelope is not continuous "
+        "viewing time. Every grid cell was viewed.",
         "The study found 4 events. Daily area is cell-center sampled; the "
         "envelope is not continuous viewing. Every point in each cell was observed.",
         "There were 4 events at cell centers. The envelope is not continuous "
@@ -409,6 +702,7 @@ def test_conical_reporting_accepts_negated_continuous_claims():
         "viewing. A gap area of zero wouldn't mean continuous observation.",
         "There were 4 events at cell centers. The envelope is not continuous "
         "viewing. Continuous viewing and uncovered durations aren't available.",
+        "There were 4 events at cell centers. Envelope viewing is not continuous.",
         "There were 4 events at cell centers. The envelope is not continuous "
         "viewing. Each whole cell is classified observed or gap based on the "
         "event at its center.",

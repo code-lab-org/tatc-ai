@@ -22,9 +22,17 @@ def resolved_snapshot(configuration: Any, omm_records: Sequence[Dict[str, Any]])
 
 def collect_cell_events(task: Dict[str, Any]) -> list[Dict[str, Any]]:
     """Keep one cell-task interface for both existing and pointed studies."""
-    version = task.get("configuration", {}).get("schema_version")
-    if version == "pointed-configuration-v1":
-        return collect_pointed_cell_events(task)
-    if version == "conical-configuration-v1":
-        return collect_conical_cell_events(task)
-    raise ValueError(f"Unsupported instrument configuration schema_version {version!r}")
+    configuration = task.get("configuration", {})
+    version = configuration.get("schema_version")
+    try:
+        if version == "pointed-configuration-v1":
+            return collect_pointed_cell_events(task)
+        if version == "conical-configuration-v1":
+            return collect_conical_cell_events(task)
+        raise ValueError(f"Unsupported instrument configuration schema_version {version!r}")
+    except Exception as exc:
+        raise ValueError(
+            f"Configuration {configuration.get('configuration_id')!r}, "
+            f"revision {configuration.get('revision')!r}, "
+            f"cell {task.get('cell_id')}: {exc}"
+        ) from exc
