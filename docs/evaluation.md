@@ -8,7 +8,7 @@ Run these commands from the repository root. By default, the eval runs the model
 
 ```bash
 cd apps/mcp-server
-.venv312/bin/python -m eval.run_eval --label issue51-s1c-pointed --workers 4 --repeats 1
+.venv312/bin/python -m eval.run_eval --label issue52-mixed-coverage --workers 4 --repeats 1
 .venv312/bin/python -m eval.run_eval --compare /path/to/baseline.jsonl /path/to/current-run.jsonl
 ```
 
@@ -16,7 +16,7 @@ The run writes a timestamped JSONL file under `eval/results/` and prints its sum
 
 The eval reads the proxy key from `apps/librechat/.env` and sends prompts and tool schemas to the ASU proxy. A full run normally takes about half an hour but can take longer when model requests are slow or time out. It saves each completed conversation to the timestamped JSONL file. Use the Python 3.12 environment that matches the server Dockerfile, for example `apps/mcp-server/.venv312` if you created one.
 
-The coverage cases include the legacy single-geometry workflow, the conical-scanning cases below, and a complete pointed Sentinel-1 IW case:
+The coverage cases include the legacy single-geometry workflow, conical and pointed studies, and two mixed-study cases:
 
 - `conical_amsr2_complete`: a study-specific sourced AMSR2 configuration with conflicting nominal/product sector choices and declared approximations. The model must prepare, accept the current revision, run, fetch viewing events, and preserve cell-center and envelope limits. It uses the study-specific fixture with its own ID and revision; the reviewed shared entry is the independent TAT-C reference target.
 - `conical_amsr2_registry_selection`: the model must look up the reviewed shared configuration, leave lookup unselected, prepare with the exact configuration ID and revision the researcher chose, and retain that revision in the result.
@@ -26,10 +26,12 @@ The coverage cases include the legacy single-geometry workflow, the conical-scan
 - `conical_missing_evidence`: a configuration missing the measured cone/sector evidence. The model must not invent evidence or substitute a nominal swath.
 - `pointed_s1c_iw_complete`: the model must look up and explicitly select Sentinel-1C C-SAR IW revision `2026-10-30.1`, use `prepare_pointed_study` and `finish_pointed_study`, retrieve event, daily, cell, revisit, and per-cell event-spacing views, and carry fixed-roll, source-reference, off-nadir/incidence, cell-center, and acquisition-schedule limits into its reply.
 - `pointed_registry_choices_before_acceptance`: the model must look up the shared option, present its exact spacecraft and mode plus the fixed-roll, subswath, and along-track approximations, and ask whether to proceed before any study setup or calculation.
+- `mixed_amsr2_s1c_complete`: the model must look up the exact reviewed AMSR2 and Sentinel-1C revisions, stage both spacecraft, prepare and accept one mixed setup, retain each configuration's source and geometry snapshot, fetch all five combined views and all five AMSR2-scoped views, and fetch events for both exact configuration IDs. Event and spacing requests use five rows and cell requests use two features; the finish summary carries full counts.
+- `mixed_shared_spacecraft_daylight`: the model must combine the reviewed AMSR2 configuration with a separate study-specific daylight sensitivity configuration on the same GCOM-W1 spacecraft. The inline configuration is passed as a JSON object inside a two-item configurations array. The model fetches combined events and daily union plus per-configuration events, preserves the distinct illumination settings, and states that daylight is a study assumption, not an AMSR2 source requirement.
 
 The recorded Sentinel-1C GP response uses the exact CelesTrak TLE published in the TAT-C 3.6.0 validation reference (epoch 2026-10-02) re-encoded as OMM fields. This keeps the eval's recorded clock and OMM freshness checks consistent; it is a fixed test input, not a live refresh. The pointed configuration itself cites the source record and its later 2026-10-30 CelesTrak OMM snapshot.
 
-The eval is not a mission-accuracy test. Pointed reference tests cover direct TAT-C event counts and identities, event epochs, independently propagated WGS84 subpoint separation, and test-only Skyfield side/off-nadir classifications. Conical and pointed studies each accept only one configuration in this increment.
+The eval is not a mission-accuracy test. Pointed reference tests cover direct TAT-C event counts and identities, event epochs, independently propagated WGS84 subpoint separation, and test-only Skyfield side/off-nadir classifications. The mixed cases check tool use, exact selectors, saved configuration snapshots, combined and per-configuration fetches, and study-specific illumination notes. Offline integration tests separately check the event-union accounting and shared-spacecraft TAT-C path.
 
 ## Issue #51 review evaluation
 
@@ -38,6 +40,14 @@ The baseline and full issue #51 comparison each used one repeat per model and ca
 Two cases regressed by one response each: `needs_clarification` went from 4/5 to 3/5, and `long_given` went from 5/5 to 4/5. The baseline had one model timeout and one result-parsing infrastructure error. The full issue run had three timeouts: `glm-5-3-flash` on the complete conical case, and `mimo-v2-6-flash` on the failed-refresh conical and complete pointed cases.
 
 The scoped review run requested ten conversations, five models across the two pointed cases. After rescoring, all five choice-before-acceptance cases passed; four complete-study cases passed, and Mimo timed out on the remaining complete study after 883.7 seconds. The scoped run repeated neither the baseline nor the 70-conversation issue set. Three of the five choice replies also made Sentinel-1A or Sentinel-1D status claims absent from the lookup results; the checker does not score those extra claims.
+
+## Issue #52 mixed-study evaluation
+
+The latest saved issue #51 baseline, `eval/results/20261030T181255Z-issue51-pointed-review.jsonl`, contains ten conversations across five models and two pointed cases. Nine rows were scored and passed; one was an infrastructure error. The full issue #52 run, `eval/results/20261030T231506Z-issue52-mixed-final.jsonl`, requested 85 conversations across five models and 17 cases. Its 90-minute deadline stopped the run at 83 rows: 76 were scored, 67 passed, nine failed a checker, and seven were infrastructure errors. Four mixed-study rows were scored and all passed; four mixed-study rows were infrastructure errors, and the final two Qwen mixed rows were not recorded before the deadline. This full run started before the final fetch-scope prompt and checker refinement, so the scoped run below is the evidence for the final mixed prompts.
+
+The final scoped run, `eval/results/20261031T004523Z-issue52-mixed-scoped-final.jsonl`, completed all ten mixed conversations across the five configured models. Six were scored and all six passed; four were infrastructure errors. The AMSR2/Sentinel-1C case had four scored passes and one GLM-5-3 context-limit error. The shared-spacecraft daylight case had two scored passes and three provider read timeouts. GLM-5-3 and Mimo passed the daylight case. No scored mixed row failed a checker.
+
+The `--compare` run used the baseline, full issue #52 run, and final scoped run above. The baseline, full suite, and two-case scoped run have different case coverage and response counts, and the full issue #52 run is incomplete. Their aggregate rates are not a paired improvement claim. The remaining limitations are model context and provider response time, especially on the longer mixed conversations.
 
 The raw JSONL traces, comparison report under `eval/results/`, and `/tmp` test logs cited by the audit trail are local-only artifacts excluded from the PR. The counts and limitations above are the retained summary.
 

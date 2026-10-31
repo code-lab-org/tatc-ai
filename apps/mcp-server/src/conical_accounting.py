@@ -17,6 +17,8 @@ from .coverage_core import _utc_days
 
 ACCOUNTING_METHOD = "conical_events_v1"
 POINTED_ACCOUNTING_METHOD = "pointed_events_v1"
+MIXED_ACCOUNTING_METHOD = "mixed_events_union_v1"
+MIXED_CONFIGURATION_ACCOUNTING_METHOD = "mixed_configuration_events_v1"
 
 EVENT_DEFINITION = (
     "A valid TAT-C conical viewing epoch at a grid-cell center: the time the "
@@ -167,6 +169,76 @@ def normalize_events(
             }
         )
     return normalized
+
+
+def normalize_mixed_events(
+    raw_events: Iterable[Dict[str, Any]], start: datetime, end: datetime
+) -> List[Dict[str, Any]]:
+    """Group only exact simultaneous mixed-configuration events by cell."""
+    start, end = _as_utc(start), _as_utc(end)
+    merged: Dict[Tuple[int, datetime], Dict[str, Any]] = {}
+    for raw in raw_events:
+        cell_id = int(raw["cell_id"])
+        epoch = _as_utc(raw["epoch"])
+        if not start <= epoch < end:
+            continue
+        configuration_id = str(raw["configuration_id"])
+        contributor = {
+            "configuration_id": configuration_id,
+            "configuration_revision": str(raw["configuration_revision"]),
+            "instrument": str(raw["instrument"]),
+            "satellite": str(raw["satellite"]),
+        }
+        key = (cell_id, epoch)
+        existing = merged.get(key)
+        envelope_start = _as_utc(raw.get("envelope_start", epoch))
+        envelope_end = _as_utc(raw.get("envelope_end", epoch))
+        if existing is None:
+            merged[key] = {
+                "cell_id": cell_id,
+                "target_longitude_deg": raw.get("target_longitude_deg"),
+                "target_latitude_deg": raw.get("target_latitude_deg"),
+                "epoch": epoch,
+                "envelope_start": envelope_start,
+                "envelope_end": envelope_end,
+                "contributors": {configuration_id: contributor},
+            }
+        else:
+            existing["envelope_start"] = min(existing["envelope_start"], envelope_start)
+            existing["envelope_end"] = max(existing["envelope_end"], envelope_end)
+            existing["contributors"][configuration_id] = contributor
+
+    events: List[Dict[str, Any]] = []
+    for index, event in enumerate(
+        sorted(merged.values(), key=lambda item: (item["epoch"], item["cell_id"]))
+    ):
+        contributors = [
+            event["contributors"][key]
+            for key in sorted(event["contributors"])
+        ]
+        events.append(
+            {
+                "event_id": f"E{index:06d}",
+                "cell_id": event["cell_id"],
+                "target_longitude_deg": event["target_longitude_deg"],
+                "target_latitude_deg": event["target_latitude_deg"],
+                "epoch_utc": _iso(event["epoch"]),
+                "utc_date": event["epoch"].date().isoformat(),
+                "envelope_start_utc": _iso(event["envelope_start"]),
+                "envelope_end_utc": _iso(event["envelope_end"]),
+                "envelope_duration_hours": round(
+                    (event["envelope_end"] - event["envelope_start"]).total_seconds()
+                    / 3600,
+                    6,
+                ),
+                "configuration_id": None,
+                "configuration_revision": None,
+                "contributors": sorted(event["contributors"]),
+                "contributor_configurations": contributors,
+                "_epoch": event["epoch"],
+            }
+        )
+    return events
 
 
 def summarize_events(

@@ -268,6 +268,10 @@ class ConicalGeometry(_StrictModel):
     velocity_frame: Literal["inertial", "earth_fixed"]
     nadir_reference: Literal["geodetic", "geocentric"]
     illumination_requirement: Literal["none", "target_sunlit"]
+    illumination_requirement_basis: Optional[
+        Literal["source_evidence", "study_assumption"]
+    ] = None
+    illumination_requirement_note: Optional[str] = None
     beam_width: Optional[Angle] = None
     scan_sample_spacing: Optional[Angle] = None
 
@@ -374,6 +378,26 @@ class ConicalConfiguration(_StrictModel):
             raise ValueError(
                 "missing source evidence for: " + ", ".join(missing_support)
             )
+
+        if self.geometry.illumination_requirement == "target_sunlit":
+            basis = self.geometry.illumination_requirement_basis
+            if basis is None:
+                raise ValueError(
+                    "target_sunlit requires illumination_requirement_basis set to "
+                    "source_evidence or study_assumption"
+                )
+            if basis == "source_evidence" and "geometry.illumination_requirement" not in supported:
+                raise ValueError(
+                    "a source-based target_sunlit setting requires evidence for "
+                    "geometry.illumination_requirement"
+                )
+            if basis == "study_assumption" and not (
+                self.geometry.illumination_requirement_note or ""
+            ).strip():
+                raise ValueError(
+                    "a study-assumption target_sunlit setting requires an "
+                    "illumination_requirement_note"
+                )
 
         if self.approximations and self.approximation_status == "supported":
             raise ValueError(
@@ -504,6 +528,18 @@ class ConicalConfiguration(_StrictModel):
         ]
         for item in self.approximations:
             warnings.append(f"Approximation {item.approximation_id}: {item.description}")
+        if self.geometry.illumination_requirement == "target_sunlit":
+            if self.geometry.illumination_requirement_basis == "study_assumption":
+                warnings.append(
+                    "A study-specific target-sunlit filter is applied as an explicit "
+                    "assumption, not a source-established scientific requirement: "
+                    f"{self.geometry.illumination_requirement_note}"
+                )
+            else:
+                warnings.append(
+                    "TAT-C applies the source-backed target-sunlit requirement "
+                    "recorded in this configuration."
+                )
         for conflict in self.source_conflicts:
             warnings.append(
                 f"Source conflict {conflict.conflict_id} resolved to "

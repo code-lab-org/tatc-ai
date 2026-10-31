@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 FINISH_TOOLS = {
     "finish_access_run",
@@ -43,6 +43,33 @@ CONICAL_CONFIG = _load_study_config()
 CONICAL_CONFIG["configuration_id"] += "-eval"
 CONICAL_SHARED_ID = "amsr2-gcom-w1-conical-product-sector"
 CONICAL_SHARED_REVISION = "2026-10-27.1"
+
+
+def _load_daylight_study_config():
+    configuration = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text()
+    )
+    configuration["configuration_id"] = (
+        "amsr2-gcom-w1-daylight-study-assumption-eval"
+    )
+    configuration["revision"] = "2026-10-27.1-daylight-study-eval"
+    note = (
+        "A daylight sensitivity filter selected for this study only; the source "
+        "does not establish a daylight-only AMSR2 requirement."
+    )
+    configuration["geometry"]["illumination_requirement"] = "target_sunlit"
+    configuration["geometry"]["illumination_requirement_basis"] = "study_assumption"
+    configuration["geometry"]["illumination_requirement_note"] = note
+    configuration["interpretation"]["limitations"].append(note)
+    return configuration
+
+
+DAYLIGHT_CONFIG = _load_daylight_study_config()
 
 PHOENIX = (33.45, -112.07)
 TEMPE = (33.42, -111.94)
@@ -334,6 +361,19 @@ def successful_pointed_finish(trace: Trace):
     for call in reversed(trace.calls):
         if (
             call.name == "finish_pointed_study"
+            and not call.error
+            and call.parsed
+            and call.parsed.get("result_id")
+        ):
+            return call
+    return None
+
+
+def successful_mixed_finish(trace: Trace):
+    """Last mixed finish that returned a saved result."""
+    for call in reversed(trace.calls):
+        if (
+            call.name == "finish_mixed_study"
             and not call.error
             and call.parsed
             and call.parsed.get("result_id")
@@ -662,6 +702,233 @@ def _pointed_choices_before_acceptance(
             ),
             "presented_modeling_choices": approximations_presented,
             "asked_before_study_setup": did_not_start_study and asks_to_proceed,
+        }
+
+    return checks
+
+
+MIXED_FETCH_TOOLS = {
+    "get_mixed_events",
+    "get_mixed_daily",
+    "get_mixed_cells",
+    "get_mixed_revisit",
+    "get_mixed_event_spacing",
+}
+
+
+def _mixed_complete(
+    expected_configurations: Dict[str, str],
+    registry_configurations: Tuple[str, ...],
+    *,
+    daylight_pair: bool = False,
+    fetch_requirements: Optional[Dict[Optional[str], Set[str]]] = None,
+):
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        finish = successful_mixed_finish(trace)
+        if finish is None or not finish.parsed:
+            return {
+                "completed": False,
+                "selected_exact_revisions": False,
+                "accepted_revision": False,
+                "preserved_provenance": False,
+                "combined_and_configuration_fetches": False,
+                "fetch_headers": False,
+                "fetch_page_sizes": False,
+                "per_configuration_illumination": False,
+                "reported_model_limits": False,
+            }
+
+        summary = finish.parsed
+        result_id = summary.get("result_id")
+        preparations = [
+            call
+            for call in trace.calls
+            if call.name == "prepare_mixed_study" and not call.error and call.parsed
+        ]
+        prepared = preparations[-1] if preparations else None
+        raw_selections = (
+            prepared.args.get("configurations", []) if prepared else []
+        )
+        selected = set()
+        for selection in raw_selections:
+            if not isinstance(selection, dict):
+                continue
+            if "configuration" in selection:
+                value = selection["configuration"]
+                if not isinstance(value, dict):
+                    continue
+                selected.add(
+                    (value.get("configuration_id"), value.get("revision"))
+                )
+            else:
+                selected.add(
+                    (
+                        selection.get("configuration_id"),
+                        selection.get("configuration_revision"),
+                    )
+                )
+
+        lookups = [
+            call.parsed
+            for call in trace.calls
+            if call.name == "lookup_instrument_configurations"
+            and not call.error
+            and call.parsed
+        ]
+        exact_lookup = all(
+            any(
+                lookup.get("selection") is None
+                and any(
+                    item.get("configuration_id") == configuration_id
+                    and item.get("revision") == expected_configurations[configuration_id]
+                    for item in lookup.get("candidates", [])
+                )
+                for lookup in lookups
+            )
+            for configuration_id in registry_configurations
+        )
+        expected = {
+            (configuration_id, revision)
+            for configuration_id, revision in expected_configurations.items()
+        }
+        selections_match = selected == expected and exact_lookup
+
+        modeled = {
+            item.get("configuration_id"): item.get("configuration_revision")
+            for item in summary.get("modeled_configurations", [])
+        }
+        snapshot_rows = summary.get("provenance", {}).get("setup_snapshot", {}).get(
+            "configurations", []
+        )
+        snapshots = {
+            item.get("configuration_id"): item
+            for item in snapshot_rows
+            if isinstance(item, dict)
+        }
+        provenance_kept = (
+            modeled == expected_configurations
+            and summary.get("provenance", {}).get("setup_revision")
+            == summary.get("setup_revision")
+            and set(snapshots) == set(expected_configurations)
+            and all(
+                snapshots[configuration_id].get("configuration_revision") == revision
+                and snapshots[configuration_id].get("configuration", {}).get(
+                    "evidence"
+                )
+                for configuration_id, revision in expected_configurations.items()
+            )
+        )
+
+        result_fetches = [
+            call
+            for call in trace.calls
+            if call.name in MIXED_FETCH_TOOLS
+            and not call.error
+            and call.parsed
+            and call.args.get("result_id") == result_id
+        ]
+        requirements = fetch_requirements or {
+            None: MIXED_FETCH_TOOLS,
+            **{
+                configuration_id: MIXED_FETCH_TOOLS
+                for configuration_id in expected_configurations
+            },
+        }
+        required_scopes_match = (
+            set(requirements) == {None, *expected_configurations}
+            and all(
+                required_tools.issubset(
+                    {
+                        call.name
+                        for call in result_fetches
+                        if call.args.get("configuration_id") == scope_id
+                    }
+                )
+                for scope_id, required_tools in requirements.items()
+            )
+        )
+        fetch_scopes = required_scopes_match
+        page_limits = {
+            "get_mixed_events": 20,
+            "get_mixed_cells": 10,
+            "get_mixed_event_spacing": 20,
+        }
+        fetch_page_sizes = all(
+            isinstance(call.parsed.get("limit"), int)
+            and 1 <= call.parsed["limit"] <= page_limits[call.name]
+            for call in result_fetches
+            if call.name in page_limits
+        )
+        headers_ok = bool(result_fetches) and all(
+            call.parsed.get("scope")
+            == (
+                "combined"
+                if call.args.get("configuration_id") in (None, "")
+                else "configuration"
+            )
+            and call.parsed.get("provenance", {}).get("setup_revision")
+            == summary.get("setup_revision")
+            and isinstance(call.parsed.get("definitions"), dict)
+            and isinstance(call.parsed.get("warnings"), list)
+            for call in result_fetches
+        )
+
+        illumination_ok = True
+        if daylight_pair:
+            base_id, daylight_id = expected_configurations
+            base = snapshots.get(base_id, {}).get("configuration", {})
+            daylight = snapshots.get(daylight_id, {}).get("configuration", {})
+            geometry = daylight.get("geometry", {})
+            mapping = daylight.get("tatc_mapping", {})
+            warnings = " ".join(summary.get("warnings", [])).lower()
+            illumination_ok = (
+                snapshots.get(base_id, {}).get("satellite", {}).get("norad_id")
+                == snapshots.get(daylight_id, {}).get("satellite", {}).get("norad_id")
+                and base.get("geometry", {}).get("illumination_requirement") == "none"
+                and geometry.get("illumination_requirement") == "target_sunlit"
+                and geometry.get("illumination_requirement_basis") == "study_assumption"
+                and mapping.get("req_target_sunlit") is True
+                and "not a source-established scientific requirement" in warnings
+            )
+
+        final = trace.final.lower()
+        event_count = summary.get("summary_counts", {}).get("event_count")
+        reported = (
+            (event_count is None or str(event_count) in re.findall(r"\d+", final))
+            and ("modeled" in final or "modelled" in final)
+            and "acquisition" in final
+            and "envelope" in final
+            and "cell" in final
+        )
+        if daylight_pair:
+            reported = (
+                reported
+                and "daylight" in final
+                and "study" in final
+                and "source" in final
+                and "not" in final
+            )
+
+        return {
+            "completed": (
+                summary.get("result_kind") == "mixed_study"
+                and summary.get("accounting_method") == "mixed_events_union_v1"
+                and summary.get("completeness_status") == "complete"
+            ),
+            "selected_exact_revisions": selections_match,
+            "accepted_revision": bool(
+                prepared
+                and finish.args.get("accepted_setup_revision")
+                == summary.get("setup_revision")
+                and finish.args.get("accept_setup") is True
+            ),
+            "preserved_provenance": provenance_kept,
+            "combined_and_configuration_fetches": fetch_scopes,
+            "fetch_headers": headers_ok,
+            "fetch_page_sizes": fetch_page_sizes,
+            "per_configuration_illumination": illumination_ok,
+            "reported_model_limits": reported,
         }
 
     return checks
@@ -1076,6 +1343,96 @@ def build_cases(clock: Clock) -> List[Case]:
             "approximation before taking any setup action.",
             _pointed_choices_before_acceptance(
                 "sentinel-1c-c-sar-iw-fixed-view", "2026-10-30.1"
+            ),
+        ),
+        Case(
+            "mixed_amsr2_s1c_complete",
+            ("mixed", "multi_instrument", "combined", "complete"),
+            f"Run one mixed access study over west=0, south=-65, east=10, north=-55 "
+            f"with a 2x2 grid starting exactly "
+            f"{clock.d0.isoformat().replace('+00:00', 'Z')} for 2 hours. Copy the "
+            "exact ISO timestamps unchanged into start_time and end_time; do not "
+            "substitute a different date. I select "
+            "the reviewed AMSR2 GCOM-W1 configuration "
+            "amsr2-gcom-w1-conical-product-sector revision 2026-10-27.1 and the "
+            "reviewed Sentinel-1C C-SAR IW configuration "
+            "sentinel-1c-c-sar-iw-fixed-view revision 2026-10-30.1. Look up both "
+            "exact revisions. Stage both spacecraft, prepare them together with "
+            "prepare_mixed_study, show the returned sources, per-instrument geometry, "
+            "illumination settings, and warnings, and then run the exact proposal "
+            "revision because I accept these choices and limits. Fetch all five "
+            "views for the combined union. Fetch all five views for the AMSR2 "
+            "configuration; also fetch get_mixed_events for the Sentinel-1C "
+            "configuration so I can compare events by each exact configuration ID. "
+            "Keep event, cell, and spacing responses small: call get_mixed_events "
+            "limit=5, get_mixed_cells limit=2, and get_mixed_event_spacing limit=5 "
+            "in the scopes that return those views. The finish summary has the full counts; these fetch "
+            "pages are samples. "
+            "Report the per-configuration and combined event counts, the daily union "
+            "area, distinct-epoch spacing, and simultaneous contributors. State that "
+            "these are modeled opportunities, not confirmed acquisitions; cells use "
+            "cell-center samples and field-of-regard envelopes are not continuous "
+            "viewing time.",
+            _mixed_complete(
+                {
+                    "amsr2-gcom-w1-conical-product-sector": "2026-10-27.1",
+                    "sentinel-1c-c-sar-iw-fixed-view": "2026-10-30.1",
+                },
+                (
+                    "amsr2-gcom-w1-conical-product-sector",
+                    "sentinel-1c-c-sar-iw-fixed-view",
+                ),
+                fetch_requirements={
+                    None: MIXED_FETCH_TOOLS,
+                    "amsr2-gcom-w1-conical-product-sector": MIXED_FETCH_TOOLS,
+                    "sentinel-1c-c-sar-iw-fixed-view": {"get_mixed_events"},
+                },
+            ),
+        ),
+        Case(
+            "mixed_shared_spacecraft_daylight",
+            ("mixed", "same_spacecraft", "illumination", "study_assumption"),
+            f"Run one mixed sensitivity study for GCOM-W1 over west=0, south=-65, "
+            f"east=10, north=-55 with a 1x1 grid starting exactly "
+            f"{clock.d0.isoformat().replace('+00:00', 'Z')} for 2 hours. Copy the "
+            "exact ISO timestamps unchanged into start_time and end_time; do not "
+            "substitute a different date. I select "
+            "the reviewed AMSR2 configuration amsr2-gcom-w1-conical-product-sector "
+            "revision 2026-10-27.1 as the unfiltered case, and I provide this second "
+            "study-specific case with the same spacecraft and geometry plus a "
+            "daylight-only sensitivity filter. Treat daylight as my study assumption, "
+            "not as an AMSR2 source requirement. Use the exact shared registry lookup "
+            "for the reviewed case. Prepare both configurations together, preserve "
+            "their distinct IDs and per-configuration illumination settings, present "
+            "the assumption note and warnings, and run with the exact proposal revision "
+            "because I accept it. Fetch combined events and daily union, then fetch "
+            "get_mixed_events for each exact configuration ID to compare the daylight "
+            "filter's contribution. In the summary, say the daylight filter is a study-only "
+            "sensitivity and is not source-established; report modeled opportunities, "
+            "not confirmed acquisitions, and explain cell-center sampling and the "
+            "field-of-regard envelope limit. "
+            "For prepare_mixed_study, pass configurations as a JSON array of two "
+            'objects. The first is {"configuration_id":"amsr2-gcom-w1-conical-product-sector",'
+            '"configuration_revision":"2026-10-27.1"}. The second is '
+            '{"configuration": <this JSON object>}; the configuration value must be '
+            "an object, not a quoted JSON string. Do not serialize the array as a string. "
+            "Keep event responses small: call get_mixed_events limit=5. The finish "
+            "summary has the full counts; these fetch pages are samples. "
+            f"Configuration JSON: {json.dumps(DAYLIGHT_CONFIG, separators=(',', ':'))}",
+            _mixed_complete(
+                {
+                    "amsr2-gcom-w1-conical-product-sector": "2026-10-27.1",
+                    DAYLIGHT_CONFIG["configuration_id"]: DAYLIGHT_CONFIG["revision"],
+                },
+                ("amsr2-gcom-w1-conical-product-sector",),
+                daylight_pair=True,
+                fetch_requirements={
+                    None: {"get_mixed_events", "get_mixed_daily"},
+                    "amsr2-gcom-w1-conical-product-sector": {
+                        "get_mixed_events"
+                    },
+                    DAYLIGHT_CONFIG["configuration_id"]: {"get_mixed_events"},
+                },
             ),
         ),
     ]

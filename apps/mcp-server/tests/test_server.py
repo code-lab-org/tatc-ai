@@ -66,6 +66,13 @@ class ServerTests(unittest.TestCase):
                 "finish_access_run",
                 "prepare_conical_study",
                 "finish_conical_study",
+                "prepare_mixed_study",
+                "finish_mixed_study",
+                "get_mixed_events",
+                "get_mixed_daily",
+                "get_mixed_cells",
+                "get_mixed_revisit",
+                "get_mixed_event_spacing",
                 "prepare_pointed_study",
                 "finish_pointed_study",
                 "get_pointed_events",
@@ -100,6 +107,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn("instrument configuration refresh tool", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("viewing-event fetch", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("event-spacing fetch", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("mixed study preparation", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("mixed study finish", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("Exact simultaneous events retain all contributors", self.server.SERVER_INSTRUCTIONS)
+        self.assertIn("configuration_id is omitted", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("field-of-regard period", self.server.SERVER_INSTRUCTIONS)
         self.assertIn("24 hours", self.server.SERVER_INSTRUCTIONS)
         self.assertNotIn("prepare_conical_study", self.server.SERVER_INSTRUCTIONS)
