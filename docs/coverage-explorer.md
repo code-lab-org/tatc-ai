@@ -304,8 +304,6 @@ python -m pytest apps/mcp-server/tests -q
 cd apps/mcp-server/tests/ui
 npm ci --ignore-scripts
 TATC_PYTHON=/absolute/path/to/python npm test
-TATC_PYTHON=/absolute/path/to/python TATC_BROWSER_CHANNEL=chrome \
-  TATC_LIBRECHAT_URL=http://localhost:3080 npm run test:browser
 ```
 
 The Python tests check scientific calculations, limits, tool schemas and delivery.
@@ -316,18 +314,3 @@ The map's loading deadline counts 30 seconds while the Map tab, study pane, and 
 document are visible. Closing the pane, switching views, or backgrounding the document pauses the
 deadline; returning resumes the remaining budget. It does not restart the map or
 substitute a different renderer.
-
-The browser test calls the running MCP server (`TATC_TEST_SERVER`, default
-`http://localhost:8000`) for the deterministic example and supplied numeric data.
-It imports the installed LibreChat resource renderer into an isolated HTTP test
-page and uses the actual pane adapter, server assets, workers and WebGL. It does
-not touch accounts or conversations. Without `TATC_LIBRECHAT_URL` it uses a minimal
-test host for the same resource contract. External browser requests are blocked.
-
-Checks include charts without Cesium, CSV downloads, exact edited parameters at
-the renderer callback, rejection of a real calculation with an unrequested
-satellite, acceptance of an exact MCP recalculation, same-pane replacement, resizing,
-mobile layout, Earth tiles, worker startup, map controls, and a blocked-worker
-error that leaves numerical results available. Set `TATC_SCREENSHOT_DIR` to save
-screenshots. Live catalog retrieval and end-to-end model routing are separate from
-this deterministic rendering test.

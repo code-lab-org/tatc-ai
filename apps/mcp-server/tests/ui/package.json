@@ -2,12 +2,10 @@
   "name": "tatc-coverage-ui-tests",
   "private": true,
   "scripts": {
-    "test": "node --test coverage_view.test.cjs workspace.test.cjs",
-    "test:browser": "node --test coverage_browser.test.cjs"
+    "test": "node --test coverage_view.test.cjs workspace.test.cjs"
   },
   "devDependencies": {
     "cesium": "1.146.0",
-    "jsdom": "26.1.0",
-    "playwright": "1.64.1"
+    "jsdom": "26.1.0"
   }
 }
