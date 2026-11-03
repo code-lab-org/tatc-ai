@@ -1,3 +1,8 @@
+FROM node:22-slim AS viewer-assets
+WORKDIR /assets
+COPY apps/mcp-server/viewer-assets/package*.json ./
+RUN npm ci --ignore-scripts --omit=dev
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -9,6 +14,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 RUN python -c "import cartopy.io.shapereader as s; s.natural_earth(resolution='110m', category='physical', name='coastline')"
 
 COPY apps/mcp-server/src /app/src
+COPY --from=viewer-assets /assets/node_modules/cesium/Build/Cesium /app/viewer-assets/node_modules/cesium/Build/Cesium
+COPY --from=viewer-assets /assets/node_modules/cesium/LICENSE.md /app/viewer-assets/CESIUM-LICENSE.md
 
 EXPOSE 8000
 
