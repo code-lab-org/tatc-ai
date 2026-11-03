@@ -199,6 +199,9 @@ class CoverageRequest(BaseModel):
 
 
 def timestamp(value: datetime) -> str:
+    # TATC 3.6 returns pandas timestamps with nanoseconds; keep microseconds.
+    if hasattr(value, "to_pydatetime"):
+        value = value.floor("us").to_pydatetime()
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 

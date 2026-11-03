@@ -219,6 +219,11 @@ def test_real_tatc_observations_match_reference_and_do_not_depend_on_display_ste
         for o in phoenix["observations"]
     ]
     assert sorted(actual) == sorted(reference)
+    assert all(
+        len(o[key].split(".")[-1]) <= 7  # six digits and Z, like other times
+        for o in phoenix["observations"]
+        for key in ("start", "end")
+    )
     slower = analyze(request.model_copy(update={"display_step_seconds": 300}))
     assert slower["points"] == result["points"]
     assert "tracks" not in result
