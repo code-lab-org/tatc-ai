@@ -81,7 +81,7 @@ the call that re-shows the same study if the user later asks for another view:
 study. It does not list presentations, so the model does not narrate views it
 never requested. The server keeps the last 100 scenarios by `analysis_id` in
 memory (including those from `analyze_coverage`); after a restart the model must
-resend the scenario. Orbit results state each satellite's NORAD ID and TLE epoch,
+resend the scenario. Orbit results state each satellite's NORAD ID and element epoch,
 also shown under Methods & source, and the exact orbit call to re-show them.
 
 Required keys, size and range limits, timestamps and `workspace_id` are checked
@@ -103,7 +103,7 @@ separate evaluation with the model used by your deployment.
 
 | Request in context | Expected output |
 | --- | --- |
-| What is the ISS NORAD ID? / Show its TLE | Metadata or TLE text |
+| What is the ISS NORAD ID? / Show its orbital elements | Metadata or GP (OMM) elements |
 | What is the longest gap in this scenario? | Numerical coverage analysis |
 | Compare the longest gaps at these study points | Coverage overview if a visual comparison is wanted |
 | Show when Phoenix has no access in this study | Coverage timeline |
@@ -231,7 +231,7 @@ Reverse proxies must serve `/visualization/` alongside `/mcp`. The adapter expec
 the default `/visualization/v1/` path; a custom path prefix requires updating its
 path configuration. MCP authentication remains unchanged.
 
-The orbit view uses current CelesTrak TLEs and reports their epochs. It is not a
+The orbit view uses current CelesTrak GP (OMM) elements and reports their epochs. It is not a
 historical ephemeris service. Defaults are now, one hour and 60-second samples;
 resolved values are returned. CelesTrak must be reachable for catalog orbit requests.
 
@@ -243,12 +243,14 @@ in the output. A `PointedInstrument` (with `cross_track_field_of_view` and
 `along_track_field_of_view`) keeps an access only if its footprint contains the
 point at the access midpoint, so roll and pitch change results. The model-visible
 summary lists every supplied instrument setting. Circular and other Keplerian-family designs must specify an epoch
-with a timezone. Supplied TLEs use `{"type": "tle", "tle": [line1, line2]}` in
-the orbit field, plus the satellite name and explicit instruments. Catalog data
-can be obtained through the existing satellite-info tool; the explorer does not
-fetch or substitute new orbital data during a study. Supplied TLEs must be two
-69-character lines with valid checksums and the same catalog number, and their
-epoch must be within 30 days of the study window (SGP4 error grows by roughly
+with a timezone. Catalog satellites use `{"type": "omm", "elements": [records]}`
+in the orbit field, with the OMM records returned by the satellite-info tool;
+TATC stores them as a `gp` orbit. Supplied TLEs use
+`{"type": "tle", "tle": [line1, line2]}`. Either needs the satellite name and
+explicit instruments; the explorer does not fetch or substitute new orbital data
+during a study. Supplied TLEs must be two 69-character lines with valid checksums
+and the same catalog number. Element sets must have an epoch within 30 days of
+the study window (SGP4 error grows by roughly
 1–3 km/day in LEO). This also rejects element sets a chat model writes from
 memory; the error tells it to use the satellite-info tool or ask the user.
 A satellite search with no match returns a message telling the model to ask
@@ -293,8 +295,8 @@ Display samples are independent of these calculations and use Earth-fixed WGS84
 positions with linear Cartesian interpolation; a smooth replay is not a precision
 ephemeris. No observational accuracy or uncertainty is inferred from the display.
 
-The minimum TATC dependency is 3.5.1 so the explorer uses the current observation
-window handling and schema implementation. Requirements do not pin all numerical
+The server pins TATC 3.6.0, which the explorer's observation window handling and
+schema use and its reference tests check. Requirements do not pin all numerical
 dependencies; record and reproduce the reported versions for comparative studies.
 
 ## Local verification

@@ -6,6 +6,12 @@ It was compiled from the installed `tatc` package (public modules under
 `tatc.analysis`, `tatc.generation`, `tatc.schemas` and `tatc.utils`) on
 November 2, 2026.
 
+The server now pins TATC 3.6.0. It still exports every analysis function listed
+here from `tatc.analysis`, under reorganized submodules (for example
+`point_sampling` instead of `coverage`), and adds APIs such as radar tracks,
+region observations, limb and coincidence analysis that this list has not yet
+reviewed.
+
 ## What the MCP layer uses today
 
 | TATC API | Where TATC-AI uses it | Visualization |
@@ -17,7 +23,7 @@ November 2, 2026.
 | `PointedInstrument.compute_footprint`, `compute_footprint_center` | Coverage scenes with pointed instruments | Footprints layer: instantaneous footprint and boresight line |
 | `schemas.Point` | Coverage study points | Point markers and per-point timelines |
 
-Orbit views (`visualize(view="orbit")`) use CelesTrak TLEs and TATC propagation
+Orbit views (`visualize(view="orbit")`) use CelesTrak GP (OMM) elements and TATC propagation
 for display sampling only.
 
 ## Accepted by the MCP layer but not carried through end to end
@@ -33,7 +39,7 @@ the result does not show them.
 | Circular RAAN and true anomaly | Yes | Yes | No; only altitude and inclination | Yes |
 | `compute_ground_track` swaths | Only in `ground_track_map` | One-line summary | n/a | No; MapLibre only, assumed field of view |
 
-Tool descriptions mention only circular and TLE orbits.
+Tool descriptions mention only circular, OMM and TLE orbits.
 An invalid orbit returns TATC's full multi-model validation error (16 entries
 for an incomplete Molniya orbit), which is hard for a chat model to act on.
 
@@ -105,10 +111,11 @@ TATC does not produce a solar-illumination mask as a separate product.
 
 ## Unsupported list in the MCP instructions
 
-The server currently tells the model that swaths, footprints of basic
-field-of-regard instruments, illumination masks,
-scheduling, downlink/latency, area heatmaps, cost models and design-space
-optimization are unsupported. Swaths, area heatmaps and downlink latency
-are TATC capabilities missing from the MCP layer, not TATC limitations; that
+The server currently tells the model that the study pane does not draw swaths,
+footprints of basic field-of-regard instruments or illumination masks, and that
+scheduling, downlink/latency, cost models and design-space optimization are
+unsupported. Regional coverage goes to the begin, region and finish workflow,
+whose cells are not yet drawn in the pane. Swaths, area heatmaps and downlink
+latency are TATC capabilities missing from the study pane, not TATC limitations; that
 list should change as each is exposed. Observation scheduling, cost models and
 design-space optimization are not TATC functions.
