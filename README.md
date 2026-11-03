@@ -56,6 +56,19 @@ docker compose -f docker-compose.dev.yml up --build
 Ground-track requests are capped at 2,000 output points. For example, a
 1-day request at 1-minute intervals produces 1,441 points.
 
+The **Study** button in LibreChat opens an optional research pane. The `visualize`
+MCP tool supplies its contents:
+coverage comparisons, charts of supplied results, event timelines, tables with CSV
+export, and 2D/3D maps. The model chooses the output from the research question;
+plotting-code and numerical requests do not automatically open a scene.
+`analyze_coverage` remains available for numerical analysis alone. Analysis runs
+in TATC-AI; the map uses self-hosted CesiumJS without Cesium ion.
+The pane starts closed and opens empty before any visual result exists. Closing
+pauses playback and preserves the study and draft inputs until the conversation
+changes or the page reloads. Ask “Open the built-in coverage example” to try it. See the
+[visualization guide](docs/coverage-explorer.md) and
+[example scenario](apps/mcp-server/src/coverage-scenario.json).
+
 Local UI is branded as TATC AI (browser tab, welcome message, footer).
 Models are grouped under ASU Voyager, where all chat models come from for
 now. Every Voyager chat model has a labeled spec with its maker icon.
