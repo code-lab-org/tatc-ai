@@ -1,0 +1,289 @@
+"""Interval accounting, validated mission inputs, and real TATC observations."""
+
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
+import json
+
+import pytest
+
+from src.coverage_analysis import (
+    CoverageRequest,
+    analyze,
+    build_satellites,
+    summarize_intervals,
+)
+
+START = datetime(2026, 10, 7, tzinfo=timezone.utc)
+END = START + timedelta(hours=1)
+
+
+def observation(start, end, satellite="A", instrument="Sensor"):
+    return {
+        "start": (START + timedelta(minutes=start)).isoformat(),
+        "end": (START + timedelta(minutes=end)).isoformat(),
+        "satellite": satellite,
+        "instrument": instrument,
+    }
+
+
+def scenario():
+    return {
+        "satellites": [
+            {
+                "name": "Equatorial study satellite",
+                "orbit": {
+                    "type": "circular",
+                    "mean_altitude": 550000,
+                    "inclination": 0,
+                    "epoch": START.isoformat(),
+                },
+                "instruments": [{"name": "Sensor", "field_of_regard": 120}],
+            }
+        ],
+        "points": [{"name": "North pole", "latitude": 90, "longitude": 0}],
+        "start_time": START.isoformat(),
+        "end_time": END.isoformat(),
+        "display_step_seconds": 120,
+    }
+
+
+def test_union_handles_nested_touching_and_overlapping_observations():
+    result = summarize_intervals(
+        [
+            observation(10, 30),
+            observation(12, 15, "B"),
+            observation(25, 35, "C"),
+            observation(35, 40, "D"),
+            observation(50, 55),
+        ],
+        START,
+        END,
+    )
+    assert [i["duration_seconds"] for i in result["coverage_intervals"]] == [1800, 300]
+    assert len(result["coverage_intervals"][0]["contributors"]) == 4
+    assert [i["duration_seconds"] for i in result["gaps"]] == [600, 600, 300]
+    assert [i["boundary"] for i in result["gaps"]] == [True, False, True]
+    assert result["metrics"]["mean_complete_revisit_seconds"] == 600
+    assert result["metrics"]["observation_count"] == 5
+    assert (
+        result["metrics"]["covered_seconds"]
+        + sum(g["duration_seconds"] for g in result["gaps"])
+        == 3600
+    )
+
+
+@pytest.mark.parametrize(
+    "observations, covered, longest, mean",
+    [
+        ([], 0, 3600, None),
+        ([observation(20, 30)], 600, 1800, None),
+        ([observation(-10, 70)], 3600, 0, None),
+        ([observation(-20, -10), observation(70, 80)], 0, 3600, None),
+        ([observation(0, 10), observation(50, 60)], 1200, 2400, 2400),
+        ([observation(10, 10)], 0, 3600, None),
+    ],
+)
+def test_boundary_and_empty_cases(observations, covered, longest, mean):
+    result = summarize_intervals(observations, START, END)
+    assert result["metrics"]["covered_seconds"] == covered
+    assert result["metrics"]["longest_gap_seconds"] == longest
+    assert result["metrics"]["mean_complete_revisit_seconds"] == mean
+
+
+def test_normalizes_offsets_without_accepting_naive_times():
+    data = scenario()
+    data["start_time"] = "2026-10-06T17:00:00-07:00"
+    assert CoverageRequest.model_validate(data).start_time == START
+    data["start_time"] = "2026-10-07T00:00:00"
+    with pytest.raises(ValueError, match="UTC offset"):
+        CoverageRequest.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "change, match",
+    [
+        (lambda d: d.update(end_time=START.isoformat()), "24 hours"),
+        (
+            lambda d: d.update(end_time=(START + timedelta(days=2)).isoformat()),
+            "24 hours",
+        ),
+        (lambda d: d.update(display_step_seconds=0), "from 30 to 300"),
+        (lambda d: d["points"][0].update(latitude=float("nan")), "finite"),
+        (lambda d: d["points"].append(deepcopy(d["points"][0])), "unique"),
+        (lambda d: d["satellites"][0].pop("instruments"), "explicit instruments"),
+        (
+            lambda d: d["satellites"][0]["instruments"][0].pop("field_of_regard"),
+            "field_of_regard",
+        ),
+        (lambda d: d["satellites"][0]["orbit"].pop("epoch"), "explicit orbit epoch"),
+        (lambda d: d["satellites"][0]["orbit"].update(inclnation=50), "Unknown"),
+        # Observed Scout call: the error must name the field TATC accepts.
+        (
+            lambda d: d["satellites"][0]["orbit"].update(raan=10),
+            "Unknown CircularOrbit fields: raan. Accepted fields: .*right_ascension_ascending_node",
+        ),
+        (
+            lambda d: d["satellites"][0]["instruments"][0].update(field_of_view=30),
+            "Unknown",
+        ),
+        (lambda d: d["satellites"].append(deepcopy(d["satellites"][0])), "unique"),
+        (
+            lambda d: d["satellites"][0]["instruments"][0].update(min_access_time=-10),
+            "not be negative",
+        ),
+        (
+            lambda d: d["satellites"][0]["instruments"][0].update(
+                access_time_fixed=True
+            ),
+            "must be positive",
+        ),
+    ],
+)
+def test_rejects_invalid_or_ambiguous_scenarios(change, match):
+    data = scenario()
+    change(data)
+    with pytest.raises(ValueError, match=match):
+        build_satellites(CoverageRequest.model_validate(data))
+
+
+def test_workload_limit_is_checked_before_analysis():
+    data = scenario()
+    data["points"] = [{"name": str(i), "latitude": i, "longitude": 0} for i in range(8)]
+    data["satellites"] = [
+        dict(deepcopy(data["satellites"][0]), name=str(i)) for i in range(4)
+    ]
+    data["end_time"] = (START + timedelta(days=1)).isoformat()
+    with pytest.raises(ValueError, match="point-instrument-hours"):
+        build_satellites(CoverageRequest.model_validate(data))
+
+
+def test_supplied_tle_uses_its_own_epoch():
+    data = scenario()
+    data["start_time"] = "2021-06-05T00:00:00Z"
+    data["end_time"] = "2021-06-05T01:00:00Z"
+    data["satellites"][0]["orbit"] = {
+        "type": "tle",
+        "tle": [
+            "1 25544U 98067A   21156.30527927  .00003432  00000-0  70541-4 0  9993",
+            "2 25544  51.6455  41.4969 0003508  68.0432  78.3395 15.48957534286754",
+        ],
+    }
+    satellites = build_satellites(CoverageRequest.model_validate(data))
+    assert satellites[0].orbit.get_epoch().year == 2021
+
+
+def test_real_tatc_empty_location_and_display_independence():
+    request = CoverageRequest.model_validate(scenario())
+    result = analyze(request, include_tracks=True)
+    assert result["points"][0]["observations"] == []
+    assert result["points"][0]["metrics"]["longest_gap_seconds"] == 3600
+    assert len(result["tracks"][0]["samples"]) == 31
+    assert result["tracks"][0]["samples"][-1][0] == "2026-10-07T01:00:00Z"
+    with mock.patch(
+        "src.coverage_analysis._display_track", side_effect=ValueError("sample failed")
+    ):
+        with pytest.raises(ValueError, match="sample failed"):
+            analyze(request, include_tracks=True)
+        numerical = analyze(request)
+    assert numerical["points"] == result["points"]
+    assert "tracks" not in numerical
+
+
+def test_real_tatc_observations_match_reference_and_do_not_depend_on_display_step():
+    from tatc.analysis import collect_observations
+    from tatc.schemas import Point
+
+    path = Path(__file__).resolve().parents[1] / "src" / "coverage-scenario.json"
+    request = CoverageRequest.model_validate_json(path.read_text())
+    result = analyze(request)
+    phoenix = result["points"][0]
+    assert phoenix["metrics"]["observation_count"] > 0
+    satellites = build_satellites(request)
+    point = Point(id=0, **request.points[0].model_dump(exclude={"name"}))
+    reference = []
+    for satellite in satellites:
+        frame = collect_observations(
+            point, satellite, request.start_time, request.end_time
+        )
+        reference.extend(
+            (row.start.isoformat(), row.end.isoformat()) for row in frame.itertuples()
+        )
+    actual = [
+        (
+            datetime.fromisoformat(o["start"]).isoformat(),
+            datetime.fromisoformat(o["end"]).isoformat(),
+        )
+        for o in phoenix["observations"]
+    ]
+    assert sorted(actual) == sorted(reference)
+    slower = analyze(request.model_copy(update={"display_step_seconds": 300}))
+    assert slower["points"] == result["points"]
+    assert "tracks" not in result
+    # Recorded scenario is replayable after removing the derived epoch annotation.
+    replay = dict(result["scenario"])
+    replay.pop("orbit_epochs")
+    assert analyze(CoverageRequest.model_validate(replay))["points"] == result["points"]
+    json.dumps(result, allow_nan=False)
+
+
+def tle_line(body):
+    from src.validation import _tle_checksum
+
+    return body + str(_tle_checksum(body))
+
+
+# Observed Scout fabrications: catalog 27651 with a 2020-06-26 epoch, written
+# for 2022/2024 study windows. One has a bad checksum, one a 70-character line.
+FABRICATED_LINE1 = tle_line(
+    "1 27651U 03004A   20178.74061727  .00000023  00000-0  15761-4 0  999"
+)
+FABRICATED_LINE2 = tle_line(
+    "2 27651  97.7362 166.4522 0001235  89.5763 270.5576 14.5710853791739"
+)
+
+
+@pytest.mark.parametrize(
+    "tle, start, match",
+    [
+        (
+            [FABRICATED_LINE1[:-1] + "0", FABRICATED_LINE2],
+            "2024-06-01T00:00:00Z",
+            "checksum",
+        ),
+        (
+            # A valid checksum over the first 68 characters, then a stray digit.
+            [FABRICATED_LINE1, FABRICATED_LINE2[:-1] + "0" + FABRICATED_LINE2[-1]],
+            "2022-03-01T00:00:00Z",
+            "69 characters",
+        ),
+        (
+            [FABRICATED_LINE1, FABRICATED_LINE2],
+            "2024-06-01T00:00:00Z",
+            "TLE epoch 2020-06-26 .* is 1435 days from the study window",
+        ),
+    ],
+)
+def test_fabricated_or_stale_tles_are_rejected_with_a_source_hint(tle, start, match):
+    data = scenario()
+    data["satellites"][0]["orbit"] = {"type": "tle", "tle": tle}
+    data["start_time"] = start
+    data["end_time"] = start.replace("T00", "T01")
+    with mock.patch("tatc.analysis.collect_observations") as collect:
+        with pytest.raises(ValueError, match=match) as error:
+            analyze(CoverageRequest.model_validate(data))
+    collect.assert_not_called()
+    assert "Never write TLE lines yourself; ask the user" in str(error.value)
+
+
+def test_well_formed_tle_near_its_window_is_accepted():
+    data = scenario()
+    data["satellites"][0]["orbit"] = {
+        "type": "tle",
+        "tle": [FABRICATED_LINE1, FABRICATED_LINE2],
+    }
+    data["start_time"] = "2020-07-20T00:00:00Z"
+    data["end_time"] = "2020-07-20T01:00:00Z"
+    satellites = build_satellites(CoverageRequest.model_validate(data))
+    assert satellites[0].orbit.get_epoch().date().isoformat() == "2020-06-26"
