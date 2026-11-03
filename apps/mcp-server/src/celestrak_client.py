@@ -382,7 +382,9 @@ def get_satellite_info(satellite_identifier: str) -> Dict:
     norad_id = get_norad_id(satellite_identifier)
     if norad_id is None:
         raise ValueError(
-            f"Could not resolve satellite identifier '{satellite_identifier}' to NORAD ID"
+            f"Could not resolve satellite identifier '{satellite_identifier}' to NORAD ID. "
+            "No orbiting satellite matches; it may be a place or a non-catalog name. "
+            "Ask the user which satellite they mean; do not invent one or its TLE."
         )
 
     line1, line2 = fetch_tle(norad_id)
