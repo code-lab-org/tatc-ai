@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from .validation import validate_tle_format
+from .tatc_integration import create_orbit_from_omm
 
 # SGP4 error grows with time from the TLE epoch (for LEO roughly 1–3 km/day,
 # dominated by drag), so pass timing from an element set weeks away from the
@@ -28,8 +28,9 @@ MAX_TLE_EPOCH_DAYS = 30
 # the default 120 s display step; each sample adds a polygon to the scene.
 MAX_FOOTPRINT_SAMPLES = 5768
 TLE_SOURCE_HINT = (
-    "Use TLE lines returned by the satellite info tool for current windows, or "
-    "lines the user supplied for this window. Never write TLE lines yourself; ask the user."
+    "Use the OMM records returned by the satellite info tool as an omm orbit for current "
+    "windows, or TLE lines the user supplied for this window. Never write orbital elements "
+    "yourself; ask the user."
 )
 
 
@@ -107,8 +108,9 @@ class CoverageRequest(BaseModel):
         "optional roll_angle, pitch_angle (degrees) and is_rectangular; any instrument may "
         "set min_access_time (seconds), req_self_sunlit and req_target_sunlit (true for "
         "sunlit, false for eclipse). Supply an orbit "
-        "type and epoch, or a tle orbit with both TLE lines copied from the satellite "
-        "info tool or the user, with an epoch within 30 days of the window. "
+        "type and epoch, an omm orbit with elements=[records] copied from the satellite "
+        "info tool, or a tle orbit with both TLE lines from the user; element sets need "
+        "an epoch within 30 days of the window. "
         "Hypothetical circular orbits use mean_altitude (meters), inclination (degrees), "
         "and optional right_ascension_ascending_node and true_anomaly (degrees).",
     )
@@ -227,6 +229,63 @@ def _reject_unknown(raw, model):
                     _reject_unknown(item, parsed_item)
 
 
+def _tle_checksum(line: str) -> int:
+    """Compute the TLE checksum of the first 68 characters of a line."""
+    total = 0
+    for char in line[:68]:
+        if char.isdigit():
+            total += int(char)
+        elif char == "-":
+            total += 1
+    return total % 10
+
+
+def validate_tle_format(tle_line1: str, tle_line2: str) -> tuple[str, str]:
+    """Validate two TLE lines, including real checksum digits. Returns them stripped."""
+    if not isinstance(tle_line1, str) or not isinstance(tle_line2, str):
+        raise ValueError("TLE lines must be strings")
+
+    tle_line1 = tle_line1.strip()
+    tle_line2 = tle_line2.strip()
+
+    if len(tle_line1) < 69:
+        raise ValueError(
+            f"TLE line 1 too short: {len(tle_line1)} characters (minimum 69)"
+        )
+
+    if len(tle_line2) < 69:
+        raise ValueError(
+            f"TLE line 2 too short: {len(tle_line2)} characters (minimum 69)"
+        )
+
+    if not tle_line1.startswith("1 "):
+        raise ValueError("TLE line 1 must start with '1 '")
+
+    if not tle_line2.startswith("2 "):
+        raise ValueError("TLE line 2 must start with '2 '")
+
+    # Real checksum validation over the first 68 characters
+    try:
+        checksum1 = int(tle_line1[-1])
+        checksum2 = int(tle_line2[-1])
+    except ValueError:
+        raise ValueError("TLE checksums must be digits") from None
+
+    if _tle_checksum(tle_line1) != checksum1:
+        raise ValueError(
+            f"TLE line 1 checksum mismatch: expected {_tle_checksum(tle_line1)}, "
+            f"got {checksum1}"
+        )
+
+    if _tle_checksum(tle_line2) != checksum2:
+        raise ValueError(
+            f"TLE line 2 checksum mismatch: expected {_tle_checksum(tle_line2)}, "
+            f"got {checksum2}"
+        )
+
+    return tle_line1, tle_line2
+
+
 def check_tle(tle, start: datetime, end: datetime):
     """Reject malformed or out-of-date element sets before TATC propagates them."""
     if not isinstance(tle, list) or len(tle) != 2:
@@ -244,12 +303,17 @@ def check_tle(tle, start: datetime, end: datetime):
     epoch = datetime(
         year + (1900 if year >= 57 else 2000), 1, 1, tzinfo=timezone.utc
     ) + timedelta(days=float(line1[20:32]) - 1)
+    check_element_epoch(epoch, f"catalog {line1[2:7]}", start, end)
+
+
+def check_element_epoch(epoch: datetime, label: str, start: datetime, end: datetime):
+    """Reject element sets whose epoch is too far from the window for SGP4."""
     days = (
         max((start - epoch).total_seconds(), (epoch - end).total_seconds(), 0) / 86400
     )
     if days > MAX_TLE_EPOCH_DAYS:
         raise ValueError(
-            f"TLE epoch {epoch:%Y-%m-%d} (catalog {line1[2:7]}) is {days:.0f} days "
+            f"Element epoch {epoch:%Y-%m-%d} ({label}) is {days:.0f} days "
             f"from the study window; SGP4 is not reliable beyond {MAX_TLE_EPOCH_DAYS} "
             f"days. {TLE_SOURCE_HINT}"
         )
@@ -275,6 +339,10 @@ def build_satellites(request: CoverageRequest):
             raise ValueError("Each satellite requires an orbit with an explicit type")
         if orbit["type"] == "tle":
             check_tle(orbit.get("tle"), request.start_time, request.end_time)
+        if orbit["type"] == "omm":
+            # TATC stores CelesTrak OMM records as a gp orbit in its own units.
+            orbit = create_orbit_from_omm(orbit.get("elements")).model_dump(mode="json")
+            raw = {**raw, "orbit": orbit}
         satellite = Satellite.model_validate(raw)
         _reject_unknown(raw, satellite)
         for instrument in satellite.instruments:
@@ -301,6 +369,10 @@ def build_satellites(request: CoverageRequest):
             and "epoch" not in orbit
         ):
             raise ValueError("Supply an explicit orbit epoch")
+        if orbit["type"] == "gp":
+            check_element_epoch(
+                epoch, satellite.name, request.start_time, request.end_time
+            )
         # Pydantic may coerce strings such as 'NaN'; validate the parsed output too.
         json.dumps(satellite.model_dump(mode="python"), default=str, allow_nan=False)
         satellites.append(satellite)

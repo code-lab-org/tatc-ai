@@ -2,13 +2,18 @@
 
 import math
 from datetime import datetime, timedelta
-from typing import Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 MAX_GROUND_TRACK_POINTS = 2000
+MAX_NORAD_ID = 999_999_999
 
 
 def validate_norad_id(norad_id: int) -> int:
-    """Validate a NORAD catalog number (1-99999). Accepts numeric strings."""
+    """Validate a NORAD catalog number (1-999999999). Accepts numeric strings.
+
+    The upper bound covers the post-July-2026 six- and nine-digit catalog
+    numbers that replaced the exhausted five-digit range.
+    """
     if isinstance(norad_id, bool):
         raise ValueError(f"NORAD ID must be an integer, got {type(norad_id)}")
     if isinstance(norad_id, float):
@@ -21,67 +26,84 @@ def validate_norad_id(norad_id: int) -> int:
         except (ValueError, TypeError):
             raise ValueError(f"NORAD ID must be an integer, got {type(norad_id)}")
 
-    if norad_id < 1 or norad_id > 99999:
-        raise ValueError(f"NORAD ID must be between 1 and 99999, got {norad_id}")
+    if norad_id < 1 or norad_id > MAX_NORAD_ID:
+        raise ValueError(
+            f"NORAD ID must be between 1 and {MAX_NORAD_ID}, got {norad_id}"
+        )
 
     return norad_id
 
 
-def _tle_checksum(line: str) -> int:
-    """Compute the TLE checksum of the first 68 characters of a line."""
-    total = 0
-    for char in line[:68]:
-        if char.isdigit():
-            total += int(char)
-        elif char == "-":
-            total += 1
-    return total % 10
+OMM_REQUIRED_FIELDS = (
+    "EPOCH",
+    "MEAN_MOTION",
+    "ECCENTRICITY",
+    "INCLINATION",
+    "RA_OF_ASC_NODE",
+    "ARG_OF_PERICENTER",
+    "MEAN_ANOMALY",
+    "NORAD_CAT_ID",
+)
+
+OMM_NUMERIC_FIELDS = (
+    "MEAN_MOTION",
+    "ECCENTRICITY",
+    "INCLINATION",
+    "RA_OF_ASC_NODE",
+    "ARG_OF_PERICENTER",
+    "MEAN_ANOMALY",
+    "BSTAR",
+    "MEAN_MOTION_DOT",
+    "MEAN_MOTION_DDOT",
+)
 
 
-def validate_tle_format(tle_line1: str, tle_line2: str) -> Tuple[str, str]:
-    """Validate two TLE lines, including real checksum digits. Returns them stripped."""
-    if not isinstance(tle_line1, str) or not isinstance(tle_line2, str):
-        raise ValueError("TLE lines must be strings")
+def validate_omm_records(records: Any) -> List[Dict[str, Any]]:
+    """Validate CelesTrak OMM element records, returning them unchanged.
 
-    tle_line1 = tle_line1.strip()
-    tle_line2 = tle_line2.strip()
+    Checks the fields TAT-C needs to build GP elements, so malformed
+    responses fail here with a clear message instead of inside sgp4.
+    """
+    if not isinstance(records, list) or not records:
+        raise ValueError("OMM data must be a non-empty list of element records")
 
-    if len(tle_line1) < 69:
-        raise ValueError(
-            f"TLE line 1 too short: {len(tle_line1)} characters (minimum 69)"
-        )
+    validated: List[Dict[str, Any]] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError(f"OMM record {index} must be an object")
 
-    if len(tle_line2) < 69:
-        raise ValueError(
-            f"TLE line 2 too short: {len(tle_line2)} characters (minimum 69)"
-        )
+        missing = [field for field in OMM_REQUIRED_FIELDS if field not in record]
+        if missing:
+            raise ValueError(
+                f"OMM record {index} is missing required fields: {', '.join(missing)}"
+            )
 
-    if not tle_line1.startswith("1 "):
-        raise ValueError("TLE line 1 must start with '1 '")
+        if not str(record["EPOCH"]).strip():
+            raise ValueError(f"OMM record {index} has an empty EPOCH")
 
-    if not tle_line2.startswith("2 "):
-        raise ValueError("TLE line 2 must start with '2 '")
+        for field in OMM_NUMERIC_FIELDS:
+            if field not in record:
+                continue
+            value = record[field]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"OMM record {index} field {field} must be a number, got {value!r}"
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError(
+                    f"OMM record {index} field {field} must be finite, got {value!r}"
+                )
 
-    # Real checksum validation over the first 68 characters
-    try:
-        checksum1 = int(tle_line1[-1])
-        checksum2 = int(tle_line2[-1])
-    except ValueError:
-        raise ValueError("TLE checksums must be digits") from None
+        try:
+            validate_norad_id(record["NORAD_CAT_ID"])
+        except ValueError as exc:
+            raise ValueError(
+                f"OMM record {index} has an invalid NORAD_CAT_ID: {exc}"
+            ) from exc
 
-    if _tle_checksum(tle_line1) != checksum1:
-        raise ValueError(
-            f"TLE line 1 checksum mismatch: expected {_tle_checksum(tle_line1)}, "
-            f"got {checksum1}"
-        )
+        validated.append(record)
 
-    if _tle_checksum(tle_line2) != checksum2:
-        raise ValueError(
-            f"TLE line 2 checksum mismatch: expected {_tle_checksum(tle_line2)}, "
-            f"got {checksum2}"
-        )
-
-    return tle_line1, tle_line2
+    return validated
 
 
 def validate_time_range(

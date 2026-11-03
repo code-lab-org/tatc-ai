@@ -16,6 +16,7 @@ RUN python -c "import cartopy.io.shapereader as s; s.natural_earth(resolution='1
 COPY apps/mcp-server/src /app/src
 COPY --from=viewer-assets /assets/node_modules/cesium/Build/Cesium /app/viewer-assets/node_modules/cesium/Build/Cesium
 COPY --from=viewer-assets /assets/node_modules/cesium/LICENSE.md /app/viewer-assets/CESIUM-LICENSE.md
+COPY apps/mcp-server/data /app/data
 
 EXPOSE 8000
 

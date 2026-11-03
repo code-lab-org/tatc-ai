@@ -13,9 +13,38 @@ from dateutil import parser as date_parser
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
 from mcp.types import EmbeddedResource, TextContent, TextResourceContents
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 
-from . import celestrak_client
+from . import celestrak_client, oscar_client
+from .configuration_registry import (
+    lookup_instrument_configurations as _lookup_instrument_configurations,
+    record_instrument_configuration_refresh as _record_instrument_configuration_refresh,
+)
+from .conical_config import ConicalConfiguration, SourceEvidence
+from .conical_study import finish_conical_study as _finish_conical
+from .conical_study import get_conical_event_spacing as _conical_event_spacing
+from .conical_study import get_conical_events as _conical_events
+from .conical_study import prepare_conical_study as _prepare_conical
+from .conical_study import finish_pointed_study as _finish_pointed
+from .conical_study import get_pointed_cells as _pointed_cells
+from .conical_study import get_pointed_daily as _pointed_daily
+from .conical_study import get_pointed_event_spacing as _pointed_event_spacing
+from .conical_study import get_pointed_events as _pointed_events
+from .conical_study import get_pointed_revisit as _pointed_revisit
+from .conical_study import prepare_pointed_study as _prepare_pointed
+from .pointed_config import PointedConfiguration
+from .generic_coverage import get_access_cells as _access_cells
+from .generic_coverage import get_access_daily as _access_daily
+from .generic_coverage import get_access_revisit as _access_revisit
+from .generic_coverage import begin_access_run as _begin_run
+from .generic_coverage import finish_access_run as _finish_run
+from .generic_coverage import set_access_region as _set_region
+from .geometry import (
+    GeometryAssessment,
+    convert_swath_to_for,
+    extract_geometry_candidates,
+    numeric_certainty,
+)
 from .coverage_analysis import (
     CoverageRequest,
     json_string_or,
@@ -29,8 +58,7 @@ from .map_view import build_ground_track_map_html
 from .schema_formatter import format_ground_track_response
 from .static_map import render_static_map_png
 from .tatc_integration import (
-    calculate_footprint_from_position,
-    create_satellite_from_tle,
+    create_orbit_from_omm,
     generate_ground_track as compute_ground_track,
 )
 from .validation import (
@@ -67,14 +95,128 @@ def _build_auth():
 
 
 SERVER_INSTRUCTIONS = (
-    "Choose tools and output from the research question and conversation context, not trigger words. "
-    "A request to visualize can mean a chart, a table, a timeline, a geographic map, or an orbital simulation. "
-    "Do not treat every visualization request as a Cesium scene. Use supplied context to choose a useful "
-    "presentation; ask a focused question only when missing inputs or competing interpretations would "
-    "materially change the result. Do not ask the user to write tool names or special prompt syntax. "
-    "Use the satellite search tool to resolve ambiguous identities, the satellite info tool for metadata/TLEs, ground-track "
-    "computation for trajectory data, and the ground track map tool for an explicit ground-track map. "
-    "Use coverage analysis for numerical access/revisit questions about supplied mission designs. "
+    # Describe tools by role, not by their bare MCP names: chat clients
+    # register them under prefixed/suffixed names (e.g. search_satellites_mcp_tatc),
+    # and models that follow these instructions literally call the bare name,
+    # which fails with "tool not found".
+    "Use the satellite search tool when a satellite name is broad or ambiguous. "
+    "Use the satellite info tool for metadata and current GP (OMM) elements. "
+    "Use the ground-track tool only after resolving an exact satellite name or "
+    "NORAD ID; its times are UTC and its position altitude is in meters. "
+    "Use the instrument search tool to find sensors by name, acronym, or type. "
+    "Use the satellite-instruments tool when you need to compare the payloads "
+    "on a satellite. "
+    "Use the instrument info tool for an instrument's measurement specs and "
+    "carrying satellites; its spec values are source text, not parsed numbers. "
+    "The geometry resolver returns source context and numeric candidates; it "
+    "does not assess compatibility. Read the complete instrument context, identify "
+    "the source value and mode for this study, and assess whether the coverage "
+    "model represents that geometry. Mark geometry supported only when the "
+    "source evidence establishes continuous nadir-centered coverage without "
+    "gaps or separate pointing. For separated tracks with a documented overall "
+    "span, use that span only as an approximate filled envelope and warn that "
+    "gaps count as accessible in the model. Do not present it as continuous "
+    "coverage. For any known mismatch, provide status approximate and a specific "
+    "warning about what the model simplifies. Approximate runs automatically "
+    "without confirmation, and the warning remains with summaries and fetched "
+    "views. Before any run, ask the researcher to resolve an applicable mode or "
+    "value left unclear by the source, insufficient evidence, or conflicting "
+    "source facts. Never choose a typical, widest, or best-case option for the "
+    "researcher. Keep source_text faithful to returned evidence; never add a "
+    "selected value or mode to make it appear sourced. Supply a "
+    "geometry_assessment with relevant source_text and an "
+    "explanation to the finish tool. Its checks validate the structure and "
+    "numeric value, not the scientific interpretation or source authenticity. "
+    "A citation alone is not evidence. Do not fetch arbitrary reference URLs. "
+    "For a legacy run, a researcher-supplied synthetic study excerpt is valid "
+    "evidence for that study assumption. Do not mark a legacy run approximate "
+    "only because the excerpt is synthetic or because the real instrument is "
+    "more complex. Mark it approximate when the excerpt itself documents a gap, "
+    "separate pointing, or another mismatch with the continuous model, or when "
+    "the researcher's explicit assumption leaves that mismatch unresolved. "
+    "The conical source-conflict and approximation rules apply only to conical "
+    "preparation; they do not relabel a legacy geometry assessment. "
+    "For coverage, call the begin tool, then the region tool, then the finish "
+    "tool, then the fetch tools by result ID for daily rows, coverage cells "
+    "as GeoJSON, or "
+    "revisit numbers. The begin tool takes several satellites separated by "
+    "commas to model a constellation. Set daylight_only on the finish tool for "
+    "optical imagers. "
+    "For a conical scanner, use the separate conical preparation and finish "
+    "workflow instead of legacy field_of_regard_deg or swath_width_km. First "
+    "use the shared configuration lookup tool to inspect matching revisions. "
+    "It returns candidates but does not select one. Pass the researcher's "
+    "explicit configuration_id and revision to preparation; never choose the "
+    "latest revision implicitly. A researcher may instead supply one complete "
+    "study-specific sourced conical configuration. The "
+    "configuration: identity, spacecraft and orbit-provider identity, mode, "
+    "channel, applicability interval, typed angles with units and frames, "
+    "evidence excerpts with locators, source revision, interpretation, source "
+    "conflicts and chosen rationale, reported geometry checks, approximation "
+    "status, and approximations. Never invent cone angles, sector widths, "
+    "dates, or evidence. A nominal swath or ground incidence angle does not "
+    "establish the cone/sector mapping. The conical preparation tool returns "
+    "the region, grid, window, consequential settings, conflicts, "
+    "approximations, warnings, and a setup revision, but runs no calculation. "
+    "Show those choices to the researcher and obtain their acceptance; only "
+    "then call the conical finish tool with that exact setup revision and "
+    "accept_setup=true. Never set accept_setup true without the researcher's "
+    "acceptance. If region, grid, window, orbit, configuration, source choice, "
+    "approximation, or software changed, prepare again for a new revision. The "
+    "finish tool rejects stale revisions and runs no calculation for them. "
+    "Use the instrument configuration refresh tool only when the assistant or maintainer has "
+    "checked source evidence. It records unchanged, documentation-only, "
+    "changed-geometry, changed-applicability, or failed checks. A "
+    "documentation-only change adds a review notice without a new revision. A "
+    "geometry or applicability change creates a separate selectable immutable "
+    "revision and a notice on the prior one. A failed check means the source "
+    "status is unknown. The "
+    "established applicability interval must contain the full window; this "
+    "increment rejects uncovered dates and additional configurations. "
+    "Conical results preserve each valid TAT-C viewing epoch. The broader "
+    "field-of-regard period is envelope metadata only: never describe it as "
+    "continuous viewing, access duration, or uncovered duration. Daily area "
+    "counts a cell once per half-open UTC day when an event epoch falls in that "
+    "day. Cell-center sampling does not mean an entire cell was viewed. Event "
+    "spacing is null with fewer than two distinct events at a cell. Use the "
+    "viewing-event fetch tool for paged epochs, the event-spacing fetch tool "
+    "for paged per-cell spacing, and the usual daily, cell, and revisit fetches "
+    "for the other views. Every conical fetch returns the accepted setup "
+    "snapshot, provenance, warnings, and accounting definitions. Results and "
+    "drafts expire after 24 hours and can be lost earlier on restart or "
+    "capacity eviction. Study-specific settings are not promoted to a shared "
+    "registry. "
+    "For a side-looking radar, use the pointed preparation and finish workflow. "
+    "Inspect the spacecraft-specific registry record, choose an exact revision, "
+    "and keep off-nadir look angles separate from ground incidence angles. "
+    "Preserve look direction, velocity and nadir frames, roll and pitch "
+    "assumptions, applicability, subswath ranges by altitude, evidence, measured "
+    "residuals, tolerances, and approximation warnings. A limited pointed record "
+    "requires researcher acceptance and does not establish an acquisition "
+    "schedule or mission capability. Use its pointed event, daily, cell, and "
+    "revisit fetches. Field-of-regard envelopes remain metadata; count access "
+    "only at valid TAT-C event epochs. "
+    "Coverage is modeled access at each grid-cell center only: never claim "
+    "every point of the region was scanned or that an acquisition occurred. "
+    "A daily gap_area_km2 of 0 means every cell center had access that UTC "
+    "day, not continuous observation. "
+    "Talk to the researcher like a companion, in plain sentences with every "
+    "number that matters: the geometry value and its source, the metrics, "
+    "the window. Show the result ID once, since follow-up questions need it. "
+    "Never show draft IDs, function names, call syntax, or raw payloads, and "
+    "never narrate your tool steps. Ask for missing pieces conversationally, "
+    "like a place and dates. "
+    "When the user asks to visualize, map, plot, or show a ground track, use "
+    "the ground track map tool with the satellite, start time, duration, and "
+    "step interval you would give the ground-track tool. "
+    "Choose the presentation from the research question and conversation context, not trigger words. "
+    "A request to visualize can mean a chart, a table, a timeline, a geographic map, or an orbital simulation; "
+    "do not treat every visualization request as a Cesium scene. Ask a focused question only when missing "
+    "inputs or competing interpretations would materially change the result. Do not ask the user to write "
+    "tool names or special prompt syntax. "
+    "Point coverage studies of mission designs the user supplies (satellite orbits, instruments, and named "
+    "study locations) use the coverage analysis tool for numbers and the research visualization tool for the "
+    "study pane; gridded coverage of a region uses the begin, region and finish workflow above. "
     "Use the research visualization tool when a visual or interactive study is requested or clearly implied: "
     "coverage comparisons as overview charts, access/gap timing as timelines, exact values as tables, "
     "geography as map2d, and orbital motion or spatial geometry as simulation3d. "
@@ -83,24 +225,23 @@ SERVER_INSTRUCTIONS = (
     "Informational questions, TLE text, requests to write plotting code, and numerical answers do not "
     "automatically request an interactive scene. Requests for code are answered with code only; do not call any tool. "
     "Preserve requested time windows and scope; explain tool limits and ask before shortening or reducing inputs. "
-    "Coverage requires satellites, instruments and study locations supplied or agreed in this conversation. An orbit alone is not sensor coverage. "
+    "A point coverage study requires satellites, instruments and study locations supplied or agreed in this "
+    "conversation. An orbit alone is not sensor coverage. "
     "Use the built-in example only when the user requests an example. "
     "Answer follow-up questions about an earlier study from the exact values in its tool result, and re-show "
     "it in another presentation with the visualize call that result states; never rebuild it from memory. "
     "For UI-originated rerun_tatc_study intents, call the registered visualization tool using the exact params "
     "provided, preserving workspace_id so the study pane receives the new result. Do not substitute the example. "
-    "Use registered tool names as exposed by the client. "
     "Coverage gaps at the window boundaries are not complete revisits; interpolated display samples are not "
-    "the event analysis resolution. Only supplied points are evaluated, not the area between them. "
+    "the event analysis resolution. A point study evaluates only the supplied points, not the area between them. "
     "Use only values the user supplied or tools returned in this conversation; never invent satellites, TLEs, "
     "orbits, sensor field of regard, locations, dates or metrics. Place names such as Phoenix are study points "
     "or ground stations, not satellites. "
-    "Swath rendering, footprints of basic field-of-regard instruments, solar-illumination masks, "
-    "observation scheduling, downlink latency, area heatmaps, cost models and design-space optimization "
-    "are not supported: say so plainly, offer what is supported (point coverage studies with their table "
-    "and CSV export, and footprints of pointed instruments), and never suggest tool calls with "
-    "placeholder inputs. Never write tool-call syntax such as <function=...> in a reply; call the tool or answer "
-    "in prose. After an error that user-supplied values cannot fix, stop and ask the user. "
+    "The study pane draws footprints of pointed instruments only; it does not render swaths or "
+    "solar-illumination masks. Observation scheduling, downlink latency, cost models and design-space "
+    "optimization are not supported: say so plainly, offer what is supported, and never suggest tool calls "
+    "with placeholder inputs. Never write tool-call syntax such as <function=...> in a reply; call the tool or "
+    "answer in prose. After an error that user-supplied values cannot fix, stop and ask the user. "
     "All tools are read-only."
 )
 
@@ -317,41 +458,15 @@ def _compute_ground_track(
     validate_ground_track_sample_count(start_time_dt, end_time_dt, step_seconds)
 
     sat_info = celestrak_client.get_satellite_info(satellite_identifier)
-    satellite = create_satellite_from_tle(sat_info["tle_line1"], sat_info["tle_line2"])
-    ground_track = compute_ground_track(
-        satellite, start_time_dt, end_time_dt, step_seconds
-    )
+    satellite = create_orbit_from_omm(sat_info["omm"])
     # Footprints are 86%+ of the payload and models rendering tables never
     # need them, so they are opt-in. Skipping also saves the compute.
-    footprints = None
-    if include_footprint:
-        footprints = [
-            calculate_footprint_from_position(lat_deg, lon_deg, alt_m)
-            for _, lat_deg, lon_deg, alt_m in ground_track
-        ]
-
-    messages = format_ground_track_response(
-        str(sat_info["norad_id"]), ground_track, footprints
+    ground_track = compute_ground_track(
+        satellite, start_time_dt, end_time_dt, step_seconds,
+        include_footprint=include_footprint,
     )
+    messages = format_ground_track_response(str(sat_info["norad_id"]), ground_track)
     return sat_info, messages
-
-
-def _generate_ground_track(
-    satellite_identifier: str,
-    start_time: Optional[str] = None,
-    duration: Optional[str] = None,
-    step_interval: Optional[str] = None,
-    include_footprint: bool = False,
-) -> List[Dict[str, Any]]:
-    """Generate ground track telemetry for a satellite."""
-    _, messages = _compute_ground_track(
-        satellite_identifier,
-        start_time,
-        duration,
-        step_interval,
-        include_footprint,
-    )
-    return messages
 
 
 @mcp.tool
@@ -363,7 +478,7 @@ def generate_ground_track(
     include_footprint: bool = False,
 ) -> List[Dict[str, Any]]:
     """Generate a satellite ground track over a time period. To show it on an
-    interactive map, use the ground track map tool with the same arguments.
+    interactive map, use the ground track map tool instead.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -373,22 +488,21 @@ def generate_ground_track(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
-        include_footprint: Include the footprint_geojson visibility polygon
-            per point. Defaults to False: footprints are ~86% of the payload
-            and tabular answers never need them. Set True for mapping.
-            Dateline-crossing footprints may use GeoJSON MultiPolygon geometry.
+        include_footprint: Include footprint_geojson per point: the ground
+            area inside a 60 degree cone under the satellite, from TAT-C, as
+            a Polygon or a MultiPolygon split at the antimeridian. Defaults to
+            False: footprints are ~86% of the payload and tabular answers never
+            need them.
 
     Returns:
         Telemetry objects with id, time (ISO-8601 UTC), position_lla
         (lat_deg, lon_deg, alt_m), and optional footprint_geojson.
     """
-    return _generate_ground_track(
-        satellite_identifier,
-        start_time,
-        duration,
-        step_interval,
+    _, messages = _compute_ground_track(
+        satellite_identifier, start_time, duration, step_interval,
         include_footprint,
     )
+    return messages
 
 
 @mcp.tool
@@ -397,12 +511,12 @@ def ground_track_map(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
-    include_footprint: bool = True,
 ) -> ToolResult:
     """Visualize, map, or plot a satellite ground track on an interactive map.
-    Use when the request implies a geographic visual, not for metadata, TLEs,
-    tables, or numerical questions. For a 3D orbit replay use the visualize tool with the orbit view.
-    Takes the same arguments as the ground-track tool.
+    Use this whenever the user asks to see, show, draw, or visualize where a
+    satellite goes. The map always includes TAT-C footprints, which the user
+    can toggle.
+    For a 3D orbit replay use the visualize tool with the orbit view.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
@@ -412,19 +526,15 @@ def ground_track_map(
             Defaults to 1 hour. Maximum 30 days and 2000 output points.
         step_interval: Time step between points, e.g. "30 sec" or "1 minute".
             Defaults to 1 minute. Between 1 second and 1 hour.
-        include_footprint: Let the user show the visibility footprint on the
-            map. Defaults to True; footprints stay in the map, not the reply.
 
     Returns:
         A short text summary and the map (interactive and static views),
         which is shown to the user.
     """
+    # Footprints stay in the map page; they never reach the model.
     sat_info, messages = _compute_ground_track(
-        satellite_identifier,
-        start_time,
-        duration,
-        step_interval,
-        include_footprint,
+        satellite_identifier, start_time, duration, step_interval,
+        include_footprint=True,
     )
     norad_id = str(sat_info["norad_id"])
     name = sat_info.get("name", norad_id)
@@ -476,8 +586,9 @@ def visualize(
     which satellites and sensors to use. Never invent measurements or sensor assumptions.
     Not supported, so explain instead of calling: swath rendering, footprints of
     basic field-of-regard instruments, solar-illumination masks, observation
-    scheduling/tasking, ground-station downlink/latency, area/regional heatmaps,
-    cost models or design-space optimization. Never invent TLEs, orbits or field of regard to approximate them.
+    scheduling/tasking, ground-station downlink/latency, cost models or
+    design-space optimization. Regional coverage uses the begin, region and finish
+    coverage workflow instead. Never invent TLEs, orbits or field of regard to approximate them.
 
     presentation selects the initial view: overview for comparisons/charts,
     timeline for observation and gap timing, table for exact values, map2d for
@@ -503,7 +614,7 @@ def visualize(
 
     view='orbit': supply 1–4 resolved satellite identifiers. Optional start_time
     defaults to now, duration to '1 hour', sampling to 60 seconds; report defaults.
-    Uses current CelesTrak TLEs. Supports altitude overview, sampled-position table,
+    Uses current CelesTrak GP elements. Supports altitude overview, sampled-position table,
     map2d and simulation3d (default); no sensor or coverage is inferred.
 
     view='example': explicitly requested hypothetical coverage example, with no
@@ -679,9 +790,7 @@ def _orbit_view(
         if norad_id in ids:
             raise ValueError(f"Duplicate satellite: NORAD {norad_id}")
         ids.add(norad_id)
-        orbit = GeneralPerturbationsOrbit.from_tle(
-            [info["tle_line1"], info["tle_line2"]]
-        )
+        orbit = create_orbit_from_omm(info["omm"])
         sources.append({**info, "orbit_epoch": timestamp(orbit.get_epoch())})
         tracks.append(
             sample_orbit(
@@ -693,7 +802,7 @@ def _orbit_view(
         "end_time": timestamp(end),
         "display_step_seconds": display_step_seconds,
         "satellites": sources,
-        "source": "CelesTrak TLEs propagated with TATC; interpolated display, no coverage analysis",
+        "source": "CelesTrak GP elements propagated with TATC; interpolated display, no coverage analysis",
     }
     result = {
         "scenario": summary,
@@ -716,9 +825,9 @@ def _orbit_view(
                     f"Orbit view for {len(tracks)} satellites, "
                     f"{timestamp(start)} to {timestamp(end)}, "
                     f"sampled every {display_step_seconds} seconds. Playback starts paused. "
-                    "Orbital data: CelesTrak TLEs propagated with TATC, no sensors: "
+                    "Orbital data: CelesTrak GP elements propagated with TATC, no sensors: "
                     + "; ".join(
-                        f"{s['name']} (NORAD {s['norad_id']}), TLE epoch {s['orbit_epoch']}"
+                        f"{s['name']} (NORAD {s['norad_id']}), element epoch {s['orbit_epoch']}"
                         for s in sources
                     )
                     + ". Place the UI marker in your reply. For you only, not the user: "
@@ -753,13 +862,15 @@ def analyze_coverage(scenario: json_string_or(CoverageRequest)) -> Dict[str, Any
     ask for them before calling. Never invent TLEs or instrument field of regard.
     Not supported, so explain instead of calling: swath rendering, footprints of
     basic field-of-regard instruments, solar-illumination masks, observation
-    scheduling/tasking, ground-station downlink/latency, area/regional heatmaps,
-    cost models or design-space optimization. Never invent TLEs, orbits or field of regard to approximate them.
+    scheduling/tasking, ground-station downlink/latency, cost models or
+    design-space optimization. Regional coverage uses the begin, region and finish
+    coverage workflow instead. Never invent TLEs, orbits or field of regard to approximate them.
 
     Accepts a scenario with satellites (native TATC Satellite JSON), named points,
     explicit start_time/end_time with UTC offsets, and optional display_step_seconds.
-    Supports hypothetical orbit designs and supplied tle orbits (type='tle',
-    tle=[line1, line2]).
+    Supports hypothetical orbit designs, catalog orbits (type='omm',
+    elements=[records from the satellite info tool]) and supplied tle orbits
+    (type='tle', tle=[line1, line2]).
     Each satellite must specify instruments with name and field_of_regard in degrees.
     A pointed instrument adds cross_track_field_of_view and along_track_field_of_view
     (degrees) with optional roll_angle, pitch_angle and is_rectangular; any instrument
@@ -862,7 +973,7 @@ def _study_text(result: dict, scenario: CoverageRequest, example: bool) -> str:
         "Scope: access opportunities at the listed study points only. Nothing here is an "
         "area heatmap, swath, illumination mask, observation schedule, downlink or latency, "
         "or cost result; never describe it as one, and if the user asked for one, say that "
-        "it is not supported. The study map draws the instantaneous TATC footprint and "
+        "this point study does not provide it. The study map draws the instantaneous TATC footprint and "
         "boresight of pointed instruments only (those with cross_track_field_of_view), "
         "throughout the window, whether or not a study point is observed.",
         f"Satellites ({len(scenario.satellites)}; name each in your reply):",
@@ -960,13 +1071,13 @@ def _coverage_explorer_result(
 
 @mcp.tool
 def get_satellite_info(satellite_identifier: str) -> Dict[str, Any]:
-    """Get satellite metadata and current TLE data from CelesTrak.
+    """Get satellite metadata and current GP (OMM) elements from CelesTrak.
 
     Args:
         satellite_identifier: Satellite name (e.g., "ISS") or NORAD ID.
 
     Returns:
-        Object with norad_id, name, tle_line1, and tle_line2.
+        Object with norad_id, name, and omm (a list of OMM element records).
     """
     return celestrak_client.get_satellite_info(satellite_identifier)
 
@@ -997,6 +1108,651 @@ def search_satellites(query: str, limit: int = 10) -> List[Dict[str, Any]] | str
             "invent a satellite or its TLE."
         )
     return results
+
+
+@mcp.tool
+def search_instruments(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Search the WMO OSCAR database for Earth observation instruments.
+
+    Args:
+        query: Instrument name, acronym, or partial name (e.g., "ABI", "MODIS").
+        limit: Maximum number of results, between 1 and 50. Defaults to 10.
+
+    Returns:
+        Objects with slug, label, and oscar_url. Follow oscar_url for the
+        full OSCAR record, or use the satellite-instruments tool for a
+        satellite's instrument list with status and latency fields.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+        raise ValueError("limit must be an integer between 1 and 50")
+    return oscar_client.search_instruments(query, limit=limit)
+
+
+@mcp.tool
+def get_satellite_instruments(satellite_identifier: str) -> Dict[str, Any]:
+    """Get the instruments on a satellite, with OSCAR mission metadata.
+
+    Use this to build the instrument model input for observation or
+    coverage analysis. Resolves names and acronyms against the full OSCAR
+    satellite list; unknown or ambiguous names return an error.
+
+    Args:
+        satellite_identifier: Satellite acronym, name, or OSCAR slug.
+
+    Returns:
+        Satellite metadata (agency, status, orbit, altitude, launch and
+        end-of-life dates, oscar_url) plus instruments with per-satellite
+        status, start date, end of life, and data latency.
+    """
+    return oscar_client.resolve_satellite(satellite_identifier)
+
+
+@mcp.tool
+def get_instrument_info(instrument_identifier: str) -> Dict[str, Any]:
+    """Get an OSCAR instrument record with measurement specs.
+
+    Resolves an instrument by acronym, name, or OSCAR slug. Spec fields
+    such as Resolution, Coverage / Cycle, and Scanning Technique are source
+    text from the OSCAR instrument page, not parsed numbers.
+
+    Args:
+        instrument_identifier: Instrument acronym, name, or OSCAR slug.
+
+    Returns:
+        Instrument identity, classification, measured variables, carrying
+        satellites with dates and latency, spec fields, and oscar_url.
+    """
+    return oscar_client.get_instrument(instrument_identifier)
+
+
+@mcp.tool
+def resolve_instrument_geometry(instrument_identifier: str) -> Dict[str, Any]:
+    """Extract numeric candidates with provenance for assistant assessment.
+
+    Resolves an instrument by acronym, name, or OSCAR slug, then parses
+    numeric values from its specs and instrument descriptions. This tool
+    does not assess compatibility; read all returned context and provide a
+    geometry_assessment when finishing a run.
+
+    Args:
+        instrument_identifier: Instrument acronym, name, or OSCAR slug.
+
+    Returns:
+        Complete source context, numeric candidates with provenance, and
+        numeric certainty. No compatibility status is inferred.
+    """
+    record = oscar_client.get_instrument(instrument_identifier)
+    specs = record.get("specs") if isinstance(record, dict) else None
+    candidate_sources = dict(specs) if isinstance(specs, dict) else {}
+    for key, label in (
+        ("api_description", "API description"),
+        ("page_description", "Instrument page description"),
+        ("description", "Instrument description"),
+    ):
+        description = record.get(key)
+        if key == "description" and any(
+            description == record.get(source_key)
+            for source_key in ("api_description", "page_description")
+        ):
+            continue
+        if isinstance(description, str) and description.strip():
+            candidate_sources[label] = description
+    candidates = extract_geometry_candidates(candidate_sources)
+    return {
+        "source_context": record,
+        "geometry_candidates": candidates,
+        "numeric_certainty": numeric_certainty(candidates),
+        "next_step": (
+            "Read the complete source_context, choose the value and mode for "
+            "this study, and provide geometry_assessment to the finish tool. "
+            "Ask the researcher first if the evidence is unclear or conflicting."
+        ),
+    }
+
+
+@mcp.tool
+def convert_swath_to_field_of_regard(
+    swath_width_km: float,
+    orbit_altitude_m: float,
+) -> Dict[str, Any]:
+    """Convert a ground swath width at an altitude to a field of regard.
+
+    Uses the same TAT-C math the generic coverage tool uses, so the
+    number matches the later run. Both inputs are flat numbers.
+
+    Args:
+        swath_width_km: Ground swath width in km, positive and finite.
+        orbit_altitude_m: Orbit altitude in meters, positive and finite.
+
+    Returns:
+        Field of regard in degrees with the inputs echoed back.
+    """
+    return {
+        "field_of_regard_deg": convert_swath_to_for(swath_width_km, orbit_altitude_m),
+        "swath_width_km": float(swath_width_km),
+        "orbit_altitude_m": float(orbit_altitude_m),
+    }
+
+
+@mcp.tool
+def begin_access_run(
+    satellite_identifier: str,
+    start_time: str,
+    end_time: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Lock the satellites and UTC window for an access run.
+
+    Takes one satellite, or up to 6 separated by commas to model them
+    together as a constellation, e.g. "Sentinel-2A, Sentinel-2B".
+    Validates the inputs against current CelesTrak elements and returns
+    a draft ID with each satellite's orbit mean altitude. Set the region with the
+    region tool, then finish with grid size, geometry, and source. Start
+    must be an explicit UTC ISO-8601 value ending in Z or using +00:00.
+    End is the same format and defaults to 24 hours after the start when
+    omitted. The window is at most 366 days.
+
+    Args:
+        satellite_identifier: Satellite name or NORAD ID for CelesTrak, or
+            up to 6 of them separated by commas.
+        start_time: Inclusive UTC start, e.g. "2026-09-18T04:00:00Z".
+        end_time: Exclusive UTC end, later than start_time. Defaults to
+            24 hours after start_time when omitted.
+
+    Returns:
+        Draft ID, satellites with OMM epoch and mean altitude, window,
+        and the next step. No region or coverage numbers yet.
+    """
+    return _begin_run(satellite_identifier, start_time, end_time)
+
+
+@mcp.tool
+def set_access_region(
+    draft_id: str,
+    west_lon: float,
+    south_lat: float,
+    east_lon: float,
+    north_lat: float,
+) -> Dict[str, Any]:
+    """Set the region on a staged access draft.
+
+    Takes four separate numbers in west, south, east, north order; do
+    not nest them in a list. Longitude boxes must not cross the
+    antimeridian and must be narrower than 180 degrees. Returns the
+    draft with its region and the next step.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        west_lon: Bounding-box west longitude, from -180 through less than 180.
+        south_lat: Bounding-box south latitude, from -90 through less than 90.
+        east_lon: Bounding-box east longitude, greater than west and at most 180.
+        north_lat: Bounding-box north latitude, greater than south and at most 90.
+
+    Returns:
+        Draft ID, satellite, window, region, and the next step.
+    """
+    return _set_region(
+        draft_id, [west_lon, south_lat, east_lon, north_lat]
+    )
+
+
+@mcp.tool
+def finish_access_run(
+    draft_id: str,
+    grid_rows: int = 6,
+    grid_columns: int = 6,
+    field_of_regard_deg: Optional[float] = None,
+    swath_width_km: Optional[float] = None,
+    geometry_reference: Optional[str] = None,
+    instrument_name: Optional[str] = None,
+    daylight_only: bool = False,
+    *,
+    geometry_assessment: GeometryAssessment,
+) -> Dict[str, Any]:
+    """Run a staged access analysis and save it under a result ID.
+
+    Takes a draft ID with its region already set, plus grid size, exactly
+    one of field of regard or swath width, a citation, and a structured
+    geometry_assessment. The assistant supplies its interpretation of the
+    complete source context. The server checks that the source_text includes
+    the selected number, but does not verify the interpretation. Understood
+    approximations run automatically and return their warning. Unclear or
+    conflicting evidence must be clarified first. Do not fetch the reference
+    URL. For a constellation, the same geometry applies to every satellite.
+    Set daylight_only
+    for optical imagers so night passes do not count. Works for any staged
+    window up to 366 days. A swath is converted at each satellite's orbit
+    altitude with TAT-C math. Modeled access does not confirm an acquisition.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Number of equal latitude partitions, 1 through 12.
+        grid_columns: Number of equal longitude partitions, 1 through 12.
+        field_of_regard_deg: Full cross-track angle in degrees, 0 to 360.
+        swath_width_km: Ground swath width in km as an alternative.
+        geometry_reference: Source for the angle or swath, required.
+        instrument_name: Label for the modeled scan. Defaults to modeled scan.
+        daylight_only: Keep only accesses with the sun up at the cell
+            center, for optical imagers. Defaults to false.
+        geometry_assessment: Status, relevant source_text, explanation,
+            optional warning (required for approximate), and selected mode.
+
+    Returns:
+        Result ID, compact summary counts, metrics, geometry provenance,
+        and evidence flags. Daily rows and cells are saved, not returned.
+    """
+    return _finish_run(
+        draft_id,
+        grid_rows=grid_rows,
+        grid_columns=grid_columns,
+        field_of_regard_deg=field_of_regard_deg,
+        swath_width_km=swath_width_km,
+        geometry_reference=geometry_reference,
+        instrument_name=instrument_name,
+        daylight_only=daylight_only,
+        geometry_assessment=geometry_assessment,
+    )
+
+
+@mcp.tool
+def lookup_instrument_configurations(
+    instrument: Optional[str] = None,
+    spacecraft: Optional[str] = None,
+    operating_mode: Optional[str] = None,
+    configuration_id: Optional[str] = None,
+    revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Find reviewed shared instrument configuration revisions.
+
+    The lookup matches instrument, spacecraft name or alias, operating mode,
+    configuration ID, and revision. It returns identity, channel, applicability,
+    geometry, source evidence, geometry checks, source revision, interpretation,
+    approximations, source conflicts, and recorded source checks for each match.
+    It never chooses a configuration for a study. Pass the exact configuration
+    ID and revision returned here to the preparation tool.
+
+    Args:
+        instrument: Instrument name or part of its name.
+        spacecraft: Spacecraft name or alias.
+        operating_mode: Operating mode or part of its name.
+        configuration_id: Stable configuration identifier.
+        revision: Exact immutable configuration revision, matched by equality.
+
+    Returns:
+        Matching revision candidates and an explicit-selection requirement.
+    """
+    return _lookup_instrument_configurations(
+        instrument, spacecraft, operating_mode, configuration_id, revision
+    )
+
+
+@mcp.tool
+def record_instrument_configuration_refresh(
+    configuration_id: str,
+    base_revision: str,
+    status: Literal[
+        "unchanged",
+        "documentation_changed",
+        "geometry_changed",
+        "applicability_changed",
+        "failed",
+    ],
+    checked_at_utc: AwareDatetime,
+    checked_source_revision_id: str,
+    reported_by: Literal["assistant", "maintainer"],
+    summary: str,
+    evidence_ids: Optional[List[str]] = None,
+    source_evidence: Optional[List[SourceEvidence]] = None,
+    updated_configuration: Optional[ConicalConfiguration] = None,
+    failure_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record a source check supplied by the assistant or a maintainer.
+
+    This tool does not fetch source documents or edit the repository registry.
+    A changed geometry or applicability interval requires a complete sourced
+    configuration with a new immutable revision. The refresh record and candidate
+    remain in memory for this server process; a shared registry update requires a
+    reviewed repository change. A failed check records uncertainty and does not
+    claim that sources or geometry remain unchanged. Refresh state is capped at
+    256 records, 32 candidate revisions, and 1 MiB of serialized data. New checks
+    are rejected at capacity; existing notices are never evicted. Repeating an
+    identical check is idempotent, including equivalent UTC instants written with
+    other offsets. Source evidence for changed geometry or applicability must
+    exactly match the evidence retained in the updated configuration. A geometry
+    check may bind its reported value to a geometry parameter with
+    geometry_parameter. A revised geometry cannot keep a bound check that reports
+    the prior value, must cite the refresh evidence, and cannot silently remove
+    or narrow an approximation; removal requires evidence supporting
+    approximation.<id>.removed.
+
+    Args:
+        configuration_id: Stable ID of the reviewed shared configuration.
+        base_revision: Exact shared revision against which the source was checked.
+        status: Whether evidence was unchanged, changed without geometry or
+            applicability impact, changed the geometry or applicability, or could
+            not be checked.
+        checked_at_utc: UTC time when the source check was performed.
+        checked_source_revision_id: Source document revision or attempted check ID.
+        reported_by: Whether the supplied finding came from the assistant or maintainer.
+        summary: Short account of the source check and its findings.
+        evidence_ids: Existing evidence IDs supporting this check.
+        source_evidence: New source evidence retained with the check.
+        updated_configuration: Complete new configuration for a changed geometry
+            or applicability interval.
+        failure_reason: Required explanation when status is failed.
+
+    Returns:
+        The recorded check, any measured geometry or applicability differences,
+        and a new revision candidate when the supplied source reports changed
+        geometry or applicability.
+    """
+    return _record_instrument_configuration_refresh(
+        configuration_id=configuration_id,
+        base_revision=base_revision,
+        status=status,
+        checked_at_utc=checked_at_utc,
+        checked_source_revision_id=checked_source_revision_id,
+        reported_by=reported_by,
+        summary=summary,
+        evidence_ids=evidence_ids,
+        source_evidence=source_evidence,
+        updated_configuration=updated_configuration,
+        failure_reason=failure_reason,
+    )
+
+
+@mcp.tool
+def prepare_conical_study(
+    draft_id: str,
+    grid_rows: int,
+    grid_columns: int,
+    configuration: Optional[ConicalConfiguration] = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Prepare one sourced conical-scanning study without calculating.
+
+    Use this separate path for a conical scanner. Supply one complete
+    configuration with explicit units and reference frames, source evidence,
+    source revision, source conflicts and a chosen rationale, reported
+    geometry checks, applicability dates, and approximations, or select an
+    exact shared configuration ID and revision returned by the lookup tool.
+    The server validates the structure and values but does not authenticate
+    source text.
+    It returns the normalized proposal, region, grid, window, consequential
+    settings, warnings, and a setup revision. No TAT-C analysis runs yet.
+
+    The configuration describes one instrument on one spacecraft. Registry
+    lookup and explicit revision selection are supported, but multi-instrument
+    studies are not supported in this increment.
+    Cone angles, scan sector, velocity frame, nadir reference, and along-track
+    view are distinct from ground incidence and nominal swath width; do not
+    invent or silently convert them. Missing evidence, invalid units or
+    ranges, incompatible fields, unresolved source conflicts, failed checks,
+    unsupported model families, and windows outside the established
+    applicability interval are rejected before calculation.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Equal latitude partitions, 1 through 12.
+        grid_columns: Equal longitude partitions, 1 through 12.
+        configuration: One study-specific conical configuration with identity, spacecraft,
+            mode, channel, applicability, typed geometry, evidence, source
+            revision, interpretation, approximation status and approximations,
+            source conflicts with chosen options, and geometry checks.
+        configuration_id: Exact shared registry ID, used together with
+            configuration_revision and instead of configuration.
+        configuration_revision: Exact immutable shared registry revision. The
+            latest revision is never selected implicitly.
+
+    Returns:
+        Proposal with setup_revision, region, grid, window, configuration
+        snapshot, consequential settings, conflicts, approximations, warnings,
+        limits, and the explicit acceptance requirement. No result ID yet.
+    """
+    return _prepare_conical(
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configuration,
+        configuration_id,
+        configuration_revision,
+    )
+
+
+@mcp.tool
+def finish_conical_study(
+    draft_id: str,
+    accepted_setup_revision: str,
+    accept_setup: bool,
+) -> Dict[str, Any]:
+    """Run only a fully accepted, current conical study proposal.
+
+    Call the conical preparation tool first, show its choices and warnings to
+    the researcher, and wait for their acceptance. Pass the proposal's exact
+    setup revision and accept_setup=true only after that acceptance. This tool
+    runs real TAT-C conical analysis at grid-cell centers and saves a result.
+    A stale revision, changed region or grid, changed orbit, changed
+    configuration, or missing acceptance fails before calculation. Do not add
+    legacy field_of_regard_deg or swath_width_km arguments; use the legacy
+    finish tool for those.
+
+    Args:
+        draft_id: Draft ID from the begin tool with a prepared proposal.
+        accepted_setup_revision: Exact setup_revision returned by the latest
+            conical preparation for this draft.
+        accept_setup: True only when the researcher has accepted this proposal.
+
+    Returns:
+        Compact result ID, provenance, summary counts, event-spacing metrics,
+        warnings, limits, and fetch guidance. Events and daily/cell rows are
+        saved for paged retrieval, not returned in full.
+    """
+    return _finish_conical(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def prepare_pointed_study(
+    draft_id: str,
+    grid_rows: int,
+    grid_columns: int,
+    configuration: Optional[PointedConfiguration] = None,
+    configuration_id: Optional[str] = None,
+    configuration_revision: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Prepare one sourced pointed-instrument study without calculating.
+
+    Supply one complete typed pointed configuration or select an exact shared
+    configuration ID and revision returned by the lookup tool. Geometry must
+    state spacecraft, mode, look direction, off-nadir and incidence references
+    separately, cross-track and along-track angles, nadir and velocity frames,
+    roll and pitch assumptions, applicability, evidence, measured checks,
+    tolerances, and approximations. Multiple configured instruments are
+    rejected. No TAT-C analysis runs until the proposal is accepted.
+
+    Args:
+        draft_id: Draft ID from the begin tool.
+        grid_rows: Equal latitude partitions, 1 through 12.
+        grid_columns: Equal longitude partitions, 1 through 12.
+        configuration: One complete study-specific pointed configuration.
+        configuration_id: Exact shared registry ID, used with configuration_revision.
+        configuration_revision: Exact immutable shared registry revision.
+
+    Returns:
+        Proposal, source evidence, measured checks, warnings, and acceptance revision.
+    """
+    return _prepare_pointed(
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configuration,
+        configuration_id,
+        configuration_revision,
+    )
+
+
+@mcp.tool
+def finish_pointed_study(
+    draft_id: str,
+    accepted_setup_revision: str,
+    accept_setup: bool,
+) -> Dict[str, Any]:
+    """Run only the current accepted pointed study proposal."""
+    return _finish_pointed(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def get_pointed_events(
+    result_id: str, offset: int = 0, limit: int = 100
+) -> Dict[str, Any]:
+    """Fetch paged TAT-C pointed viewing epochs and envelope metadata."""
+    return _pointed_events(result_id, offset, limit)
+
+
+@mcp.tool
+def get_pointed_daily(
+    result_id: str, offset: int = 0, limit: int = 31
+) -> Dict[str, Any]:
+    """Fetch half-open UTC-day event accounting for a pointed study."""
+    return _pointed_daily(result_id, offset, limit)
+
+
+@mcp.tool
+def get_pointed_cells(
+    result_id: str,
+    include: str = "all",
+    offset: int = 0,
+    limit: int = 144,
+) -> Dict[str, Any]:
+    """Fetch paged GeoJSON cells and event counts for a pointed study."""
+    return _pointed_cells(result_id, include, offset, limit)
+
+
+@mcp.tool
+def get_pointed_revisit(result_id: str) -> Dict[str, Any]:
+    """Fetch event-spacing metrics for a pointed study."""
+    return _pointed_revisit(result_id)
+
+
+@mcp.tool
+def get_pointed_event_spacing(
+    result_id: str, offset: int = 0, limit: int = 50
+) -> Dict[str, Any]:
+    """Fetch paged per-cell event-spacing values for a pointed study."""
+    return _pointed_event_spacing(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_events(result_id: str, offset: int = 0, limit: int = 100) -> Dict[str, Any]:
+    """Fetch paged conical viewing events by result ID.
+
+    Returns each valid TAT-C viewing epoch with its cell, satellite,
+    instrument, configuration identity, and broader field-of-regard envelope.
+    The envelope is metadata only; it is not continuous viewing time. Offset
+    starts at 0 and limit is 1 through 366. Every page includes the accepted
+    setup snapshot, provenance, warnings, and accounting definitions.
+
+    Args:
+        result_id: Result ID from a saved conical study.
+        offset: Number of events to skip, 0 or more.
+        limit: Number of events to return, 1 through 366.
+
+    Returns:
+        Paged events plus provenance and accounting definitions.
+    """
+    return _conical_events(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_event_spacing(
+    result_id: str, offset: int = 0, limit: int = 50
+) -> Dict[str, Any]:
+    """Fetch paged per-cell event-spacing values for a conical result.
+
+    Spacing is the difference between consecutive distinct viewing epochs at
+    the same cell, in hours. Fewer than two distinct events gives null
+    spacing. Simultaneous duplicate events count once. Each page includes the
+    accepted setup snapshot, provenance, warnings, and definitions.
+
+    Args:
+        result_id: Result ID from a saved conical study.
+        offset: Number of cell rows to skip, 0 or more.
+        limit: Number of cell rows to return, 1 through 366.
+
+    Returns:
+        Paged per-cell spacing values and summary statistics.
+    """
+    return _conical_event_spacing(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_daily(result_id: str, offset: int = 0, limit: int = 31) -> Dict[str, Any]:
+    """Fetch saved daily observed and gap areas by result ID.
+
+    Pages through the daily rows of a saved access run without
+    re-running the analysis. Offset starts at 0 and limit is 1 to 366.
+    For conical studies, a cell counts on a UTC day only when a valid viewing
+    event epoch falls in that half-open day; envelope periods are not access.
+
+    Args:
+        result_id: Result ID from a saved access run.
+        offset: Number of daily rows to skip, 0 or more.
+        limit: Number of daily rows to return, 1 through 366.
+
+    Returns:
+        Daily rows with observed and gap areas and cell IDs, plus
+        the geometry status and warning, interpretation, and access evidence.
+    """
+    return _access_daily(result_id, offset, limit)
+
+
+@mcp.tool
+def get_access_cells(
+    result_id: str,
+    include: str = "all",
+    offset: int = 0,
+    limit: int = 144,
+) -> Dict[str, Any]:
+    """Fetch the saved grid map by result ID as paged GeoJSON.
+
+    Returns grid cells as a GeoJSON feature collection, each cell marked
+    observed or gap for the saved window with its access count, mean
+    access minutes, and mean revisit hours. For conical studies, properties
+    report event counts, observed days, and event spacing instead; an observed
+    cell means only that at least one event epoch occurred at its center.
+    The collection metadata and feature properties retain geometry status and
+    warning. Filter with all, observed, or gaps. Offset starts at 0 and limit
+    is 1 through 366. Modeled access does not confirm an acquisition.
+
+    Args:
+        result_id: Result ID from a saved access run.
+        include: Which cells to return: all, observed, or gaps.
+        offset: Number of matching cells to skip, 0 or more.
+        limit: Number of matching cells to return, 1 through 366.
+
+    Returns:
+        GeoJSON collection with per-cell status, geometry metadata, and access evidence.
+    """
+    return _access_cells(result_id, include, offset, limit)
+
+
+@mcp.tool
+def get_access_revisit(result_id: str) -> Dict[str, Any]:
+    """Fetch saved revisit numbers by result ID.
+
+    Returns mean, median, and max revisit hours, mean access minutes,
+    and the longest unobserved gap with their definitions, without
+    re-running the analysis. For conical studies this returns event-spacing
+    metrics instead and explicitly reports continuous viewing and uncovered
+    durations as unavailable. Modeled access does not confirm an acquisition.
+
+    Args:
+        result_id: Result ID from a saved access run.
+
+    Returns:
+        Revisit metrics with definitions, geometry status and warning,
+        interpretation, and access evidence.
+    """
+    return _access_revisit(result_id)
 
 
 def main() -> None:

@@ -15,10 +15,10 @@ Stub monorepo for an application stack with:
 
 ## MCP server
 
-`.github/workflows/build-mcp-server.yml` builds and pushes the MCP server
-image to `ghcr.io/code-lab-org/tatc-ai-mcp-server` on every push to `main`
-that touches `apps/mcp-server/**`, tagged with both `latest` and the commit
-SHA it was built from.
+`.github/workflows/deploy.yml` builds and pushes the MCP server image to
+`ghcr.io/code-lab-org/tatc-ai-mcp-server` on every push to `main` that
+touches `apps/mcp-server/**`, tagged with both `latest` and the commit SHA
+it was built from, then deploys it (see [Auto-deploy](#auto-deploy)).
 
 `docker-compose.deploy.yml` pulls `ghcr.io/code-lab-org/tatc-ai-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}`.
 Leave `MCP_SERVER_IMAGE_TAG` unset (or `latest`) so [Auto-deploy](#auto-deploy)
@@ -31,6 +31,24 @@ To build the image locally instead (e.g. to test before pushing):
 ```bash
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
+
+See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical and pointed-instrument studies.
+
+The **Study** button in LibreChat opens a research pane filled by the `visualize`
+tool: coverage results, charts, timelines, tables with CSV export, and 2D/3D
+Cesium maps with editable inputs. See the [coverage explorer guide](docs/coverage-explorer.md).
+
+### Tool-calling eval
+
+The eval checks how well Voyager models use the MCP tools. The server image
+uses Python 3.12; run tests and evals with a matching environment.
+
+```bash
+cd apps/mcp-server
+.venv/bin/python -m eval.run_eval --label mychange
+```
+
+See the [evaluation guide](docs/evaluation.md) for API key setup, comparison runs, and streaming checks.
 
 ## Development stack
 
@@ -53,43 +71,17 @@ chmod 600 apps/librechat/.env
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-Ground-track requests are capped at 2,000 output points. For example, a
-1-day request at 1-minute intervals produces 1,441 points.
+### Configured models
 
-The **Study** button in LibreChat opens an optional research pane. The `visualize`
-MCP tool supplies its contents:
-coverage comparisons, charts of supplied results, event timelines, tables with CSV
-export, and 2D/3D maps. The model chooses the output from the research question;
-plotting-code and numerical requests do not automatically open a scene.
-`analyze_coverage` remains available for numerical analysis alone. Analysis runs
-in TATC-AI; the map uses self-hosted CesiumJS without Cesium ion.
-The pane starts closed and opens empty before any visual result exists. Closing
-pauses playback and preserves the study and draft inputs until the conversation
-changes or the page reloads. Ask “Open the built-in coverage example” to try it. See the
-[visualization guide](docs/coverage-explorer.md) and
-[example scenario](apps/mcp-server/src/coverage-scenario.json).
+LibreChat is configured with these model labels:
 
-Local UI is branded as TATC AI (browser tab, welcome message, footer).
-Models are grouped under ASU Voyager, where all chat models come from for
-now. Every Voyager chat model has a labeled spec with its maker icon.
-The picker lists these specs only; raw provider entries are
-hidden. New chats default to the Llama 4 Scout 17B spec with TATC
-satellite tools pinned.
-
-When the proxy gains models, sync the picker:
-
-```bash
-python3 apps/librechat/sync_voyager_models.py
-docker compose -f docker-compose.dev.yml restart librechat
-```
-
-The script adds new chat models with a guessed label and icon for review,
-drops retired ones, and keeps embedding, transcription, image, and video
-models out of the picker. Review its diff before committing.
-
-A weekly workflow does the same automatically and opens a PR when the proxy
-gains or retires models. It needs one repo secret: VOYAGER_API_KEY holding
-an ASU proxy key. Merging that PR deploys through the normal path.
+- **ASU Voyager:** GLM-5.3, GLM-5.3-Flash, DeepSeek V4.1 Flash, MiMo-V2.6-Flash, Qwen 3.8 27B.
+- **ASU CreateAI:**
+  - Nova 2 Lite, Nova Lite, Nova Micro, Nova Pro.
+  - Claude Haiku 4.5, Claude Sonnet 4, Claude Sonnet 4.5, Claude Sonnet 5, Claude Opus 4.1, Claude Opus 4.5, Claude Opus 4.6, Claude Opus 4.7, Claude Opus 4.8, Claude Opus 5.
+  - Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, Gemini 3 Flash, Gemini 3.1 Flash-Lite, Gemini 3.1 Pro, Gemini 3.5 Flash, Gemini 3.7 Flash.
+  - Gemma 4 31B IT, Llama 4 Maverick 17B, Llama 4 Scout 17B, Muse Glimmer 30B.
+  - GPT-OSS 20B, GPT-OSS 120B, GPT-4o mini, GPT-4.1, GPT-4.1 mini, o3, GPT-5, GPT-5 mini, GPT-5 nano, GPT-5.1, GPT-5.1 Instant, GPT-5.1 Thinking, GPT-5.2, GPT-5.2 Pro, GPT-5.4 mini, GPT-5.4 nano, GPT-5.4 Thinking, GPT-5.4 Pro, GPT-5.5, GPT-5.5 Thinking, GPT-5.5 Pro, GPT-5.6 Luna, GPT-5.6 Sol, GPT-5.6 Terra, GPT-6 Astra.
 
 ## Deployment stack
 
@@ -142,13 +134,11 @@ same issuer URL without depending on outbound internet DNS.
 
 ## Auto-deploy
 
-`.github/workflows/deploy.yml` redeploys the EC2 instance over SSH:
-- on every push to `main` (picks up config/compose/Dex changes), and
-- after `build-mcp-server.yml` finishes pushing a new image (picks up mcp-server
-  code changes, after the image is actually available in GHCR rather than
-  racing it).
+Every push to `main`, including documentation changes, deploys to EC2 and restarts LibreChat.
+When MCP server inputs change, the workflow builds and publishes the image before deploying.
+A failed build prevents deployment. Manual runs and pushes that cannot be diffed always rebuild.
 
-Both triggers run the same thing: `config/deploy/deploy.sh` on the instance,
+The deploy runs `config/deploy/deploy.sh` on the instance,
 which does `git merge --ff-only` then `docker compose -f
 docker-compose.deploy.yml pull && ... up -d`. It fails loudly rather than
 overwriting anything if the checkout has diverged from `main`.

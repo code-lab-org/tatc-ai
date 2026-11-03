@@ -130,8 +130,27 @@ def test_incomplete_custom_scenario_is_rejected_without_substituting_demo():
 CATALOG_SATELLITE = {
     "norad_id": "25544",
     "name": "ISS",
-    "tle_line1": "1 25544U 98067A   21156.30527927  .00003432  00000-0  70541-4 0  9993",
-    "tle_line2": "2 25544  51.6455  41.4969 0003508  68.0432  78.3395 15.48957534286754",
+    "omm": [
+        {
+            "OBJECT_NAME": "ISS (ZARYA)",
+            "OBJECT_ID": "1998-067A",
+            "EPOCH": "2021-06-05T07:19:36.128928",
+            "MEAN_MOTION": 15.48957534,
+            "ECCENTRICITY": 0.0003508,
+            "INCLINATION": 51.6455,
+            "RA_OF_ASC_NODE": 41.4969,
+            "ARG_OF_PERICENTER": 68.0432,
+            "MEAN_ANOMALY": 78.3395,
+            "EPHEMERIS_TYPE": 0,
+            "CLASSIFICATION_TYPE": "U",
+            "NORAD_CAT_ID": 25544,
+            "ELEMENT_SET_NO": 999,
+            "REV_AT_EPOCH": 28675,
+            "BSTAR": 7.0541e-5,
+            "MEAN_MOTION_DOT": 3.432e-5,
+            "MEAN_MOTION_DDOT": 0,
+        }
+    ],
 }
 
 
@@ -154,9 +173,9 @@ def test_orbit_tool_uses_catalog_elements_without_inventing_a_sensor():
     assert summary["end_time"] == "2021-06-05T08:00:00Z"
     assert summary["display_step_seconds"] == 60
     assert summary["satellites"][0]["orbit_epoch"].startswith("2021-06-05")
-    assert summary["satellites"][0]["tle_line1"] == CATALOG_SATELLITE["tle_line1"]
+    assert summary["satellites"][0]["omm"] == CATALOG_SATELLITE["omm"]
     assert "tracks" not in summary
-    assert "ISS (NORAD 25544), TLE epoch 2021-06-05" in response.content[0].text
+    assert "ISS (NORAD 25544), element epoch 2021-06-05" in response.content[0].text
     assert (
         "view='orbit', satellite_identifiers=[\"25544\"], "
         "start_time='2021-06-05T07:00:00Z', duration='1 hour'"
@@ -408,7 +427,7 @@ def test_example_text_carries_exact_results_and_reshow_call():
     assert '"right_ascension_ascending_node": 45' in summary
     assert 'Study sensor {"field_of_regard": 100}' in summary
     assert "Svalbard (lat 78.2232, lon 15.6469" in summary
-    for count, gap in [(3, "791.324"), (14, "694.109"), (1, "858.978")]:
+    for count, gap in [(3, "791.327"), (14, "694.104"), (1, "858.983")]:
         assert f"{count} observations" in summary
         assert f"longest gap {gap} min" in summary
     assert "mean complete revisit none (no complete revisit)" in summary

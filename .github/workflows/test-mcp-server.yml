@@ -1,0 +1,49 @@
+name: Test MCP server
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check whether MCP tests are needed
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'apps/mcp-server' '.github/workflows/test-mcp-server.yml')"
+          if [ -n "$changed" ]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_tests=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python 3.12
+        if: steps.scope.outputs.run_tests == 'true'
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/mcp-server/requirements.txt
+
+      - name: Install server requirements and pytest
+        if: steps.scope.outputs.run_tests == 'true'
+        run: python -m pip install -r apps/mcp-server/requirements.txt pytest
+
+      - name: Preload Cartopy coastline
+        if: steps.scope.outputs.run_tests == 'true'
+        run: python -c 'import cartopy.io.shapereader as s; s.natural_earth(resolution="110m", category="physical", name="coastline")'
+
+      - name: Run MCP server tests
+        if: steps.scope.outputs.run_tests == 'true'
+        run: python -m pytest apps/mcp-server/tests

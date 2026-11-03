@@ -208,7 +208,8 @@ def test_real_tatc_observations_match_reference_and_do_not_depend_on_display_ste
             point, satellite, request.start_time, request.end_time
         )
         reference.extend(
-            (row.start.isoformat(), row.end.isoformat()) for row in frame.itertuples()
+            (row.start.floor("us").isoformat(), row.end.floor("us").isoformat())
+            for row in frame.itertuples()
         )
     actual = [
         (
@@ -229,7 +230,7 @@ def test_real_tatc_observations_match_reference_and_do_not_depend_on_display_ste
 
 
 def tle_line(body):
-    from src.validation import _tle_checksum
+    from src.coverage_analysis import _tle_checksum
 
     return body + str(_tle_checksum(body))
 
@@ -261,7 +262,7 @@ FABRICATED_LINE2 = tle_line(
         (
             [FABRICATED_LINE1, FABRICATED_LINE2],
             "2024-06-01T00:00:00Z",
-            "TLE epoch 2020-06-26 .* is 1435 days from the study window",
+            "Element epoch 2020-06-26 .* is 1435 days from the study window",
         ),
     ],
 )
@@ -274,7 +275,7 @@ def test_fabricated_or_stale_tles_are_rejected_with_a_source_hint(tle, start, ma
         with pytest.raises(ValueError, match=match) as error:
             analyze(CoverageRequest.model_validate(data))
     collect.assert_not_called()
-    assert "Never write TLE lines yourself; ask the user" in str(error.value)
+    assert "Never write orbital elements yourself; ask the user" in str(error.value)
 
 
 def test_well_formed_tle_near_its_window_is_accepted():
@@ -287,3 +288,39 @@ def test_well_formed_tle_near_its_window_is_accepted():
     data["end_time"] = "2020-07-20T01:00:00Z"
     satellites = build_satellites(CoverageRequest.model_validate(data))
     assert satellites[0].orbit.get_epoch().date().isoformat() == "2020-06-26"
+
+
+# The same element set as FABRICATED_LINE1/2, as CelesTrak OMM.
+OMM_RECORD = {
+    "OBJECT_NAME": "SPOT 5",
+    "OBJECT_ID": "2002-021A",
+    "EPOCH": "2020-06-26T17:46:29.332128",
+    "MEAN_MOTION": 14.57108537,
+    "ECCENTRICITY": 0.0001235,
+    "INCLINATION": 97.7362,
+    "RA_OF_ASC_NODE": 166.4522,
+    "ARG_OF_PERICENTER": 89.5763,
+    "MEAN_ANOMALY": 270.5576,
+    "EPHEMERIS_TYPE": 0,
+    "CLASSIFICATION_TYPE": "U",
+    "NORAD_CAT_ID": 27651,
+    "ELEMENT_SET_NO": 999,
+    "REV_AT_EPOCH": 91739,
+    "BSTAR": 1.5761e-5,
+    "MEAN_MOTION_DOT": 2.3e-7,
+    "MEAN_MOTION_DDOT": 0,
+}
+
+
+def test_omm_orbits_from_the_satellite_info_tool_are_tatc_gp_orbits():
+    data = scenario()
+    data["satellites"][0]["orbit"] = {"type": "omm", "elements": [OMM_RECORD]}
+    data["start_time"] = "2020-07-20T00:00:00Z"
+    data["end_time"] = "2020-07-20T01:00:00Z"
+    satellites = build_satellites(CoverageRequest.model_validate(data))
+    assert satellites[0].orbit.type == "gp"
+    assert satellites[0].orbit.get_epoch().date().isoformat() == "2020-06-26"
+    data["start_time"] = "2024-06-01T00:00:00Z"
+    data["end_time"] = "2024-06-01T01:00:00Z"
+    with pytest.raises(ValueError, match="Element epoch 2020-06-26 .* 1435 days"):
+        build_satellites(CoverageRequest.model_validate(data))
