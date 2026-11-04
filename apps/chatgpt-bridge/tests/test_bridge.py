@@ -194,6 +194,7 @@ def test_host_id_is_created_once_and_never_identifies_the_user(tmp_path):
     first = Connection(tmp_path / "connection.json")
     second = Connection(tmp_path / "connection.json")
     assert first.state["host_id"] == second.state["host_id"]
+    assert first.state["host_id"].startswith("urn:uuid:")
 
 
 def test_valid_token_is_used_without_refreshing(tmp_path, monkeypatch):
@@ -246,7 +247,7 @@ def test_authorization_url_registers_once_then_reuses_the_client(tmp_path, monke
     first = Connection(tmp_path / "first.json").begin_sign_in()
     assert "client_id=dynamic_agent_client" in first
     assert "agent_name_hint=TATC+AI" in first
-    assert "ext_agent_host_id=" in first
+    assert "ext_agent_host_id=urn%3Auuid%3A" in first
     assert "redirect_uri=http%3A%2F%2F127.0.0.1%3A8788%2Fauth%2Fcallback" in first
     assert "code_challenge_method=S256" in first
 
@@ -408,3 +409,16 @@ def test_unexpected_stream_shape_becomes_an_error_event(server, monkeypatch):
                      json.dumps({"model": "m", "messages": [{"role": "user", "content": "hi"}], "stream": True}))
     assert got == 200
     assert '"code": "invalid_stream"' in text
+
+
+def test_page_keeps_the_origin_header_its_own_forms_need(server, monkeypatch):
+    # With no-referrer, browsers post these forms with "Origin: null", which is refused.
+    monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
+    client = HTTPConnection("127.0.0.1", server, timeout=5)
+    client.request("GET", "/", headers={"Host": f"127.0.0.1:{server}"})
+    assert client.getresponse().getheader("Referrer-Policy") == "same-origin"
+
+
+def test_null_origin_is_refused(server, monkeypatch):
+    monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
+    assert call(server, "POST", "/connect", {"Host": f"127.0.0.1:{server}", "Origin": "null"})[0] == 403

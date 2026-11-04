@@ -310,7 +310,7 @@ class Connection:
         self.message = None
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {}
         if "host_id" not in self.state:
-            self.state["host_id"] = str(uuid.uuid4())
+            self.state["host_id"] = f"urn:uuid:{uuid.uuid4()}"
             self.save()
 
     def save(self):
@@ -541,7 +541,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Referrer-Policy", "no-referrer")
+        # Not no-referrer: browsers would then post this page's forms with "Origin: null".
+        self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Content-Security-Policy",
                          f"default-src 'none'; style-src 'unsafe-inline'; form-action 'self' {ISSUER}; frame-ancestors 'none'; base-uri 'none'")
         self.end_headers()
