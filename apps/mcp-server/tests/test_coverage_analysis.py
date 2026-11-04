@@ -235,6 +235,75 @@ def test_real_tatc_observations_match_reference_and_do_not_depend_on_display_ste
     json.dumps(result, allow_nan=False)
 
 
+def boundary_event_scenario():
+    data = scenario()
+    data["satellites"][0]["orbit"] = {
+        "type": "circular",
+        "mean_altitude": 550000,
+        "inclination": 97.5,
+        "right_ascension_ascending_node": 0,
+        "true_anomaly": 0,
+        "epoch": START.isoformat(),
+    }
+    data["satellites"][0]["instruments"] = [
+        {
+            "name": "Wide pointed",
+            "field_of_regard": 150,
+            "cross_track_field_of_view": 150,
+            "along_track_field_of_view": 150,
+        }
+    ]
+    data["points"] = [{"name": "P", "latitude": 45, "longitude": -100}]
+    data["start_time"] = (START + timedelta(hours=3, minutes=15)).isoformat()
+    data["end_time"] = (START + timedelta(hours=4, minutes=15)).isoformat()
+    return data
+
+
+def test_adjacent_windows_count_a_boundary_pass_once():
+    data = boundary_event_scenario()
+    whole = analyze(CoverageRequest.model_validate(data))["points"][0]
+    assert whole["metrics"]["distinct_event_count"] == 1
+    event = whole["observations"][0]
+    envelope_end = datetime.fromisoformat(event["envelope_end"])
+    assert envelope_end > datetime.fromisoformat(event["envelope_start"])
+    split = envelope_end - timedelta(seconds=10)
+    first = analyze(
+        CoverageRequest.model_validate({**data, "end_time": split.isoformat()})
+    )["points"][0]
+    second = analyze(
+        CoverageRequest.model_validate({**data, "start_time": split.isoformat()})
+    )["points"][0]
+    assert first["metrics"]["distinct_event_count"] == 1
+    assert second["metrics"]["distinct_event_count"] == 0
+    counts = [part["metrics"]["observation_count"] for part in (first, second)]
+    assert sum(counts) == 1
+    # The mirror split after the true epoch keeps the pass in the second window.
+    envelope_start = datetime.fromisoformat(event["envelope_start"])
+    split_after = envelope_start + timedelta(seconds=10)
+    first_after = analyze(
+        CoverageRequest.model_validate(
+            {**data, "end_time": split_after.isoformat()}
+        )
+    )["points"][0]
+    second_after = analyze(
+        CoverageRequest.model_validate(
+            {**data, "start_time": split_after.isoformat()}
+        )
+    )["points"][0]
+    assert first_after["metrics"]["distinct_event_count"] == 0
+    assert second_after["metrics"]["distinct_event_count"] == 1
+    # Padding checks min_access_time against the full pass, not the clipped piece.
+    near_epoch = datetime.fromisoformat(event["epoch"]) - timedelta(seconds=1)
+    with_min_access = deepcopy(data)
+    with_min_access["satellites"][0]["instruments"][0]["min_access_time"] = 300
+    at_epoch = analyze(
+        CoverageRequest.model_validate(
+            {**with_min_access, "start_time": near_epoch.isoformat()}
+        )
+    )["points"][0]
+    assert at_epoch["metrics"]["distinct_event_count"] == 1
+
+
 def tle_line(body):
     from src.coverage_analysis import _tle_checksum
 

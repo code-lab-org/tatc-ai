@@ -273,6 +273,8 @@ which satellite is meant instead of an empty list, which LibreChat shows as
 - At most 4 satellites, 2 instruments per satellite, and 8 unique named points.
 - Positive time window of at most 24 hours, with explicit UTC offsets or `Z`.
 - At most 384 point-instrument-hours and 4,000 returned observation opportunities.
+- Event queries pad the window by twice TATC's maximum-access bound. A very
+  eccentric or continuously visible pass can still be clipped at that padded edge.
 - Display sampling from 30 to 300 seconds, with at most 6,000 total samples.
 - At most 5,768 footprint samples per scene (8 pointed instruments over 24 hours
   at 120 seconds); otherwise the error asks for a larger display step.
@@ -309,8 +311,10 @@ epoch; the wider field-of-regard period around it is kept as `envelope_start` an
 
 - **Viewing events:** distinct valid TATC epochs in the half-open window
   `[start, end)`; `observation_count` also counts every satellite-instrument row.
-  The timeline marks each epoch. The map's observation link is held 30 seconds
-  either side so playback can show it; that hold is not a viewing duration.
+  A pass crossing a window edge is counted once, in the window that contains its
+  true epoch; its envelope may extend past the requested window. The timeline marks
+  each epoch. The map's observation link is held 30 seconds either side so playback
+  can show it; that hold is not a viewing duration.
 - **Mean event spacing:** mean time between distinct epochs at a point; `null` with
   fewer than two. It is not an uncovered interval. Median, minimum and maximum are
   in the result too.
@@ -324,7 +328,8 @@ epoch; the wider field-of-regard period around it is kept as `envelope_start` an
 
 TATC checks some instrument/illumination constraints at pass midpoints; reported
 intervals inherit those approximations. Opportunities are not scheduled or executed
-observations. Short windows can also truncate access durations used by the model.
+observations. Short windows clip basic-instrument intervals; event envelopes can
+extend past the requested window.
 Display samples are independent of these calculations and use Earth-fixed WGS84
 positions with linear Cartesian interpolation; a smooth replay is not a precision
 ephemeris. No observational accuracy or uncertainty is inferred from the display.

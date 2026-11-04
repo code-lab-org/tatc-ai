@@ -529,6 +529,33 @@ def _event_method(instrument) -> str | None:
     return None
 
 
+def _max_access_pad(satellite, instrument, elevation: float) -> timedelta:
+    """Twice TATC's maximum-access bound, used to find a boundary crossing.
+
+    The radius, elevation and one-degree margin mirror TATC 3.6.0's
+    `_collect_batch_observations`, which is the path behind
+    `collect_observations`. The bound is conservative for near-circular orbits;
+    a very eccentric or continuously visible pass can still be clipped at the
+    padded edge.
+    """
+    from tatc.constants import EARTH_POLAR_RADIUS
+    from tatc.utils import (
+        compute_apoapsis_radius,
+        compute_max_access_time,
+        compute_min_elevation_angle,
+    )
+
+    max_radius = compute_apoapsis_radius(
+        satellite.orbit.get_semimajor_axis(), satellite.orbit.get_eccentricity()
+    )
+    altitude = max_radius - (EARTH_POLAR_RADIUS + min(elevation, 0))
+    min_elevation = max(
+        0.0,
+        compute_min_elevation_angle(altitude, instrument.field_of_regard) - 1.0,
+    )
+    return timedelta(seconds=2 * compute_max_access_time(altitude, min_elevation))
+
+
 def analyze(request: CoverageRequest, include_tracks=False) -> dict:
     """Compute event-based observations; orbit samples are solely a display artifact."""
     from tatc.analysis import collect_observations
@@ -602,14 +629,26 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
         for satellite in satellites:
             for instrument_index, instrument in enumerate(satellite.instruments):
                 event_method = _event_method(instrument)
+                # TATC clips a pass crossing a window edge to that edge, which
+                # moves its epoch inside the window and counts the pass in both
+                # adjacent windows. Query event instruments with padding so the
+                # real crossing decides the owning window.
+                query_start, query_end = request.start_time, request.end_time
+                if event_method:
+                    pad = _max_access_pad(
+                        satellite, instrument, study_point.elevation
+                    )
+                    query_start -= pad
+                    query_end += pad
                 frame = collect_observations(
                     point,
                     satellite,
-                    request.start_time,
-                    request.end_time,
+                    query_start,
+                    query_end,
                     instrument_index=instrument_index,
                     omit_solar=True,
                 )
+                kept = 0
                 for row in frame.itertuples():
                     if event_method:
                         # Half-open window, as in conical_accounting.
@@ -627,6 +666,7 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
                                     "accounting_method": event_method,
                                 }
                             )
+                            kept += 1
                         continue
                     left, right = max(request.start_time, row.start), min(
                         request.end_time, row.end
@@ -644,7 +684,8 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
                             "accounting_method": INTERVAL_ACCOUNTING_METHOD,
                         }
                     )
-                event_count += len(frame)
+                    kept += 1
+                event_count += kept
                 if event_count > 4000:
                     raise ValueError(
                         "Study exceeds 4000 observations; reduce locations or duration"
