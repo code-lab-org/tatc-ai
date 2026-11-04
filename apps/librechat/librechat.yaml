@@ -122,6 +122,8 @@ endpoints:
       models:
         default:
           - gpt-6.1-sol
+          - gpt-6-astra
+          - gpt-6-luna
         fetch: false
       titleConvo: true
       titleModel: current_model
@@ -991,5 +993,33 @@ modelSpecs:
       preset:
         endpoint: ChatGPT Plan
         model: gpt-6.1-sol
+        modelLabel: ChatGPT plan
+        maxContextTokens: 1050000
+    - name: chatgpt-plan-gpt-6-astra
+      label: GPT-6 Astra · Using ChatGPT plan
+      description: Using ChatGPT plan. Counts toward your plan limits, not billed per request.
+      group: ChatGPT plan (local only)
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ChatGPT Plan
+        model: gpt-6-astra
+        modelLabel: ChatGPT plan
+        maxContextTokens: 1050000
+    - name: chatgpt-plan-gpt-6-luna
+      label: GPT-6 Luna · Using ChatGPT plan
+      description: Using ChatGPT plan. Counts toward your plan limits, not billed per request.
+      group: ChatGPT plan (local only)
+      iconURL: /assets/openai.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: ChatGPT Plan
+        model: gpt-6-luna
         modelLabel: ChatGPT plan
         maxContextTokens: 1050000
