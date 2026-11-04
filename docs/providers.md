@@ -37,11 +37,12 @@ Claude Haiku 5.5 is not offered because LibreChat 0.8.7 sends it a thinking sett
 
 This uses OpenAI's [Sign in with ChatGPT](https://developers.openai.com/siwc) for locally hosted open-source apps. It is available to eligible ChatGPT Plus and Pro subscribers. It does not read your Codex CLI login.
 
-1. Start the development stack and open `http://127.0.0.1:8788`.
-2. Select **Continue with ChatGPT** and approve access in your browser.
-3. Copy the connection key from that page.
-4. In TATC AI, add it as the **ChatGPT Plan** key under **Provider API keys**.
-5. Choose a model from **ChatGPT plan (local only)**.
+1. Start the development stack and open a chat at `http://localhost:3080`.
+2. Select **ChatGPT plan** in the header, then **Continue with ChatGPT**, and approve access in the new tab.
+3. Return to the panel and select **Use with this account**.
+4. Choose a model from **ChatGPT plan (local only)**.
+
+The panel only appears on local installs. To disconnect, select **Manage connection** in the panel. You can also connect at `http://127.0.0.1:8788` and paste the connection key under **Provider API keys**.
 
 Usage counts toward your existing plan limits. When a limit is reached, chat shows an error with a link to [Manage usage](https://chatgpt.com/settings/usage). In that page, the setting "Allow other apps to use credits after reaching your usage limit" decides whether connected apps can spend credits, so check it if you do not want that.
 
