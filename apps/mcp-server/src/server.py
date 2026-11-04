@@ -927,16 +927,25 @@ def _check_study_values(dataset: ResearchData) -> None:
             f"Labels must be study point names of {analysis_id}: {', '.join(metrics)}"
         )
     # The values stated in the study result text, by metric.
-    def scaled(value, factor):
-        return None if value is None else value * factor
-
+    # Only metrics the study has: an unavailable one must not match a null series.
     stated = {
         name: (
-            m["observation_count"],
-            scaled(m["coverage_fraction"], 100),
-            scaled(m["longest_gap_seconds"], 1 / 60),
-            scaled(m["mean_complete_revisit_seconds"], 1 / 60),
-            m.get("mean_event_spacing_hours"),
+            (
+                m["observation_count"],
+                m["coverage_fraction"] * 100,
+                m["longest_gap_seconds"] / 60,
+                (
+                    None
+                    if m["mean_complete_revisit_seconds"] is None
+                    else m["mean_complete_revisit_seconds"] / 60
+                ),
+            )
+            if m["continuous_viewing_duration_available"]
+            else (
+                m["observation_count"],
+                m["distinct_event_count"],
+                m["mean_event_spacing_hours"],
+            )
         )
         for name, m in metrics.items()
     }
@@ -953,13 +962,14 @@ def _check_study_values(dataset: ResearchData) -> None:
                 same(value, stated[label][metric])
                 for label, value in zip(dataset.labels, series.values)
             )
-            for metric in range(5)
+            for metric in range(len(stated[dataset.labels[0]]))
         ):
             raise ValueError(
                 f"Series {series.name!r} does not match study {analysis_id}. Each series "
                 "must copy one metric from the study result for each labelled point: "
-                "observations, percent covered, longest gap minutes, mean complete revisit "
-                "minutes, or mean event spacing hours (null when none or unavailable). Do "
+                "observations, percent covered, longest gap minutes or mean complete "
+                "revisit minutes (null when none), or for a pointed or conical study "
+                "observations, distinct viewing epochs or mean event spacing hours. Do "
                 "not chart invented or converted values."
             )
 

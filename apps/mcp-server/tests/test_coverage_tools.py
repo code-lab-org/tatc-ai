@@ -804,3 +804,33 @@ def test_instructions_scope_the_explorer_and_keep_other_workflows():
     # Some code requests legitimately need data first.
     assert "code only" not in instructions
     assert "do not call any tool" not in instructions
+
+
+def test_null_series_cannot_stand_in_for_a_metric_the_study_lacks():
+    # The example has revisits at two of its points, so an all-null series matches nothing.
+    rejected = example_chart([{"name": "Unknown", "values": [None, None, None]}])
+    assert rejected.is_error and "does not match" in text(rejected)
+    # A pointed study has no percent covered; with spacing, null matches nothing there too.
+    metrics = {
+        "observation_count": 3,
+        "distinct_event_count": 3,
+        "mean_event_spacing_hours": 2.0,
+        "coverage_fraction": None,
+        "longest_gap_seconds": None,
+        "mean_complete_revisit_seconds": None,
+        "continuous_viewing_duration_available": False,
+    }
+    server._remember_study("event-study", None, [{"name": "P", "metrics": metrics}])
+
+    def dataset(values):
+        return server.ResearchData(
+            title="Study",
+            labels=["P"],
+            series=[{"name": "Value", "values": values}],
+            kind="bar",
+            provenance={"kind": "study", "analysis_id": "event-study"},
+        )
+
+    server._check_study_values(dataset([2.0]))
+    with pytest.raises(ValueError, match="does not match"):
+        server._check_study_values(dataset([None]))
