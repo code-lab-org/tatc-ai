@@ -216,7 +216,7 @@ class ServerTests(unittest.TestCase):
     def test_instructions_ground_outputs_and_forbid_printed_tool_calls(self):
         instructions = self.server.SERVER_INSTRUCTIONS
         for phrase in (
-            "Use only values the user supplied or tools returned",
+            "use only values the user supplied or tools returned",
             "never invent satellites, TLEs",
             "Place names such as Phoenix are study points",
             "solar-illumination masks",

@@ -785,3 +785,22 @@ def test_event_study_charts_reject_values_the_study_does_not_have():
     # 193.6 s of envelope, as a percentage of the window.
     rejected = chart([0.448])
     assert rejected.is_error and "does not match" in text(rejected)
+
+
+def test_instructions_scope_the_explorer_and_keep_other_workflows():
+    instructions = server.SERVER_INSTRUCTIONS
+    ground_track = instructions.index("ground track map tool")
+    scope = instructions.index("Everything after this sentence")
+    assert ground_track < scope
+    assert "applies only to the point-coverage explorer" in instructions
+    for scoped in (
+        "choose the explorer's presentation",
+        "preserve a point study's requested time windows",
+        "the explorer does not support observation scheduling",
+        "after an explorer error",
+    ):
+        assert scoped in instructions.lower()
+        assert instructions.lower().index(scoped) > scope
+    # Some code requests legitimately need data first.
+    assert "code only" not in instructions
+    assert "do not call any tool" not in instructions
