@@ -50,6 +50,25 @@ const pointedFixture = JSON.parse(
   ),
 );
 const asPointedStudy = (data) => Object.assign(data, pointedFixture);
+const conicalFixture = JSON.parse(
+  execFileSync(
+    process.env.TATC_PYTHON || "python3",
+    [
+      "-c",
+      [
+        "from src.coverage_analysis import CoverageRequest, analyze",
+        "import json",
+        "request = CoverageRequest.model_validate({'satellites': [{'name': 'S', 'orbit': {'type': 'circular', 'mean_altitude': 550000, 'inclination': 97.5, 'right_ascension_ascending_node': 0, 'true_anomaly': 0, 'epoch': '2026-10-07T00:00:00Z'}, 'instruments': [{'name': 'Conical', 'cone_angle': 47.5, 'along_track_field_of_view': 1}]}], 'points': [{'name': 'P', 'latitude': 45, 'longitude': -100}], 'start_time': '2026-10-07T00:00:00Z', 'end_time': '2026-10-07T12:00:00Z'})",
+        "print(json.dumps(analyze(request, include_tracks=True)))",
+      ].join("\n"),
+    ],
+    {
+      cwd: root,
+      env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
+      encoding: "utf8",
+    },
+  ),
+);
 const html = fs.readFileSync(
   path.join(root, "apps/mcp-server/src/coverage_view.html"),
   "utf8",
@@ -995,6 +1014,92 @@ test("orbit views offer no study download without an analysis", async () => {
   try {
     assert.equal(get("export-json").hidden, true);
     assert.equal(get("export-csv").hidden, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("inputs edit a conical instrument that has no field of regard", async () => {
+  const instrument = {
+    name: "Conical",
+    cone_angle: 47.5,
+    along_track_field_of_view: 1,
+  };
+  const { dom, w, get, sizes } = await setup({
+    presentation: "overview",
+    editFixture: (data) => {
+      Object.assign(data, conicalFixture);
+      data.request = {
+        view: "coverage",
+        scenario: {
+          ...data.request.scenario,
+          satellites: [
+            {
+              name: "S",
+              orbit: conicalFixture.scenario.satellites[0].orbit,
+              instruments: [{ ...instrument }],
+            },
+          ],
+        },
+      };
+    },
+  });
+  try {
+    assert.equal(get("research-error").hidden, true);
+    const labels = [...w.document.querySelectorAll("label")];
+    const control = (label) =>
+      labels.find((e) => e.textContent.startsWith(label))?.querySelector("input");
+    assert.equal(control("Field of regard"), undefined);
+    assert.equal(control("Cone angle (°)").value, "47.5");
+    assert.equal(control("Along-track view (°)").value, "1");
+    // Shows TATC's values without adding them to the draft.
+    assert.equal(control("Scan center azimuth (°)").value, "0");
+    assert.equal(control("Scan half width (°)").value, "180");
+    assert.equal(get("study-form").checkValidity(), true);
+    const submit = () => {
+      get("study-form").dispatchEvent(
+        new w.Event("submit", { cancelable: true }),
+      );
+      return sizes.filter((m) => m.type === "tatc-workspace:run").at(-1).payload
+        .params.scenario.satellites[0].instruments[0];
+    };
+    assert.deepEqual({ ...submit() }, instrument);
+
+    const cone = control("Cone angle (°)");
+    cone.value = "90";
+    cone.dispatchEvent(new w.Event("input"));
+    assert.equal(cone.checkValidity(), false);
+    cone.value = "40";
+    cone.dispatchEvent(new w.Event("input"));
+    assert.equal(cone.checkValidity(), true);
+    const halfWidth = control("Scan half width (°)");
+    halfWidth.value = "60";
+    halfWidth.dispatchEvent(new w.Event("input"));
+    assert.deepEqual(
+      { ...submit() },
+      { ...instrument, cone_angle: 40, scan_half_width: 60 },
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("a conical field of regard stays editable when it was supplied", async () => {
+  const { dom, w } = await setup({
+    presentation: "overview",
+    editFixture: (data) => {
+      Object.assign(data.request.scenario.satellites[0].instruments[0], {
+        cone_angle: 47.5,
+        along_track_field_of_view: 1,
+        field_of_regard: 120,
+      });
+    },
+  });
+  try {
+    const value = [...w.document.querySelectorAll("label")]
+      .find((e) => e.textContent.startsWith("Field of regard"))
+      .querySelector("input").value;
+    assert.equal(value, "120");
   } finally {
     dom.window.close();
   }

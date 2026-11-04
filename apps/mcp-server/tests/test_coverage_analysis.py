@@ -480,3 +480,78 @@ def test_study_records_the_software_needed_to_reproduce_it():
     assert {"tatc", "skyfield", "sgp4", "python"} == analyze(sensor_request(BASIC))[
         "software"
     ].keys()
+
+
+BARE_CONICAL = {
+    "name": "Conical",
+    "cone_angle": 47.5,
+    "scan_half_width": 70,
+    "along_track_field_of_view": 1,
+}
+
+
+def test_conical_instrument_needs_no_field_of_regard():
+    from tatc.schemas import ConicalInstrument
+
+    request = sensor_request(BARE_CONICAL)
+    instrument = build_satellites(request)[0].instruments[0]
+    assert isinstance(instrument, ConicalInstrument)
+    # TATC's own derivation, stored with the study for reproducing it.
+    expected = ConicalInstrument(**BARE_CONICAL).field_of_regard
+    assert instrument.field_of_regard == expected
+    result = analyze(request)
+    stored = result["scenario"]["satellites"][0]["instruments"][0]
+    assert stored["field_of_regard"] == expected
+    assert stored["cone_angle"] == 47.5
+    assert "field_of_regard" not in request.satellites[0]["instruments"][0]
+    assert result["accounting"]["method"] == "conical_events_v1"
+    point = result["points"][0]
+    event = point["observations"][0]
+    assert in_view(request, event["epoch"])
+    assert not in_view(request, event["envelope_start"])
+    assert point["metrics"]["covered_seconds"] is None
+
+
+def test_supplied_conical_field_of_regard_is_kept():
+    instrument = build_satellites(sensor_request(CONICAL))[0].instruments[0]
+    assert instrument.field_of_regard == 120
+
+
+@pytest.mark.parametrize(
+    "instrument",
+    [
+        {"name": "Basic"},
+        {
+            "name": "Pointed",
+            "cross_track_field_of_view": 100,
+            "along_track_field_of_view": 2,
+        },
+        {"name": "Conical", "cone_angle": 47.5},
+        {"name": "Conical", "cone_angle": None, "along_track_field_of_view": 1},
+        {"name": "Conical", "cone_angle": 95, "along_track_field_of_view": 1},
+    ],
+)
+def test_instruments_without_enough_geometry_are_rejected(instrument):
+    with pytest.raises(ValueError) as error:
+        build_satellites(sensor_request(instrument))
+    assert "cone_angle" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "change, reason",
+    [
+        ({"cone_angle": 95}, "cone_angle"),
+        ({"along_track_field_of_view": 180}, "along_track_field_of_view"),
+        ({"scan_half_width": 200}, "scan_half_width"),
+    ],
+)
+def test_invalid_conical_input_names_the_real_problem(change, reason):
+    instrument = {
+        "name": "Conical",
+        "cone_angle": 47.5,
+        "along_track_field_of_view": 1,
+        **change,
+    }
+    with pytest.raises(ValueError, match=reason) as error:
+        build_satellites(sensor_request(instrument))
+    assert "Unknown" not in str(error.value)

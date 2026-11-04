@@ -44,7 +44,7 @@ The pane contains:
   analysis and offer CSV only.
 - **Inputs:** editable UTC analysis window, display sampling, circular-orbit
   altitude/inclination, sensor field of regard, pointed-instrument fields of view,
-  roll and pitch, minimum access time, satellite/target lighting requirements, and
+  roll and pitch, conical cone angle, along-track view and scan sector, minimum access time, satellite/target lighting requirements, and
   study-point coordinates. Other supplied orbital elements and instrument settings
   are preserved.
 
@@ -250,7 +250,11 @@ Each satellite uses the native TATC `Satellite` JSON schema. Explicit instrument
 in the output. A `PointedInstrument` (with `cross_track_field_of_view` and
 `along_track_field_of_view`) keeps a viewing epoch only if its footprint contains
 the point when its view sweeps over it, so roll and pitch change results. A
-`ConicalInstrument` keeps each valid crossing of its scanned cone. The model-visible
+`ConicalInstrument` keeps each valid crossing of its scanned cone. It needs `name`,
+`cone_angle` and `along_track_field_of_view`, with optional `scan_center_azimuth`
+and `scan_half_width`; TATC derives its field of regard when none is supplied, and
+the derived value appears in the result's scenario. The Inputs view shows a field
+of regard for a conical instrument only when one was supplied. The model-visible
 summary lists every supplied instrument setting. Circular and other Keplerian-family designs must specify an epoch
 with a timezone. Catalog satellites use `{"type": "omm", "elements": [records]}`
 in the orbit field, with the OMM records returned by the satellite-info tool;

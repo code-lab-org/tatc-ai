@@ -937,14 +937,61 @@
           );
         sat.instruments.forEach((inst, index) => {
           group.append(text("p", inst.name, "instrument-name"));
-          field(
-            group,
-            "Field of regard (°)",
-            inst.field_of_regard,
-            (v) => (inst.field_of_regard = v),
-            { min: "0", max: "360" },
-            (v) => (v <= 0 ? "Field of regard must be greater than zero." : ""),
-          );
+          const normalized = data.scenario.satellites?.find(
+            (s) => s.name === sat.name,
+          )?.instruments[index];
+          // TATC derives a conical field of regard from the cone unless one is supplied.
+          if ("field_of_regard" in inst || !("cone_angle" in inst))
+            field(
+              group,
+              "Field of regard (°)",
+              inst.field_of_regard,
+              (v) => (inst.field_of_regard = v),
+              { min: "0", max: "360" },
+              (v) =>
+                v <= 0 ? "Field of regard must be greater than zero." : "",
+            );
+          // An omitted scan setting shows TATC's value and stays omitted unless edited.
+          if ("cone_angle" in inst)
+            for (const [key, label, min, max, message] of [
+              [
+                "cone_angle",
+                "Cone angle (°)",
+                0,
+                90,
+                (v) =>
+                  v <= 0 || v >= 90
+                    ? "Cone angle must be between 0 and 90 degrees."
+                    : "",
+              ],
+              [
+                "along_track_field_of_view",
+                "Along-track view (°)",
+                0,
+                180,
+                (v) =>
+                  v <= 0 || v >= 180
+                    ? "Field of view must be between 0 and 180 degrees."
+                    : "",
+              ],
+              ["scan_center_azimuth", "Scan center azimuth (°)", -180, 180],
+              [
+                "scan_half_width",
+                "Scan half width (°)",
+                0,
+                180,
+                (v) =>
+                  v <= 0 ? "Scan half width must be greater than zero." : "",
+              ],
+            ])
+              field(
+                group,
+                label,
+                inst[key] ?? normalized?.[key],
+                (v) => (inst[key] = v),
+                { min: String(min), max: String(max) },
+                message,
+              );
           // Pointing limits accesses to the footprint, so it changes results.
           if ("cross_track_field_of_view" in inst)
             for (const [key, label, min, max] of [
@@ -964,9 +1011,6 @@
                     ? "Field of view must be greater than zero."
                     : "",
               );
-          const normalized = data.scenario.satellites?.find(
-            (s) => s.name === sat.name,
-          )?.instruments[index];
           field(
             group,
             "Minimum access (s)",

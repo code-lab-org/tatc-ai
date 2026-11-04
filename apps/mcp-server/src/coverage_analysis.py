@@ -109,7 +109,9 @@ class CoverageRequest(BaseModel):
         description="1–4 TATC Satellite JSON objects: name, orbit, and explicit instruments. "
         "Each instrument needs name and field_of_regard (degrees). A pointed instrument "
         "also has cross_track_field_of_view and along_track_field_of_view (degrees), and "
-        "optional roll_angle, pitch_angle (degrees) and is_rectangular; any instrument may "
+        "optional roll_angle, pitch_angle (degrees) and is_rectangular. A conical instrument "
+        "has cone_angle and along_track_field_of_view (degrees) instead of field_of_regard, "
+        "and optional scan_center_azimuth and scan_half_width (degrees); any instrument may "
         "set min_access_time (seconds), req_self_sunlit and req_target_sunlit (true for "
         "sunlit, false for eclipse). Supply an orbit "
         "type and epoch, an omm orbit with elements=[records] copied from the satellite "
@@ -328,7 +330,7 @@ def check_element_epoch(epoch: datetime, label: str, start: datetime, end: datet
 
 def build_satellites(request: CoverageRequest):
     """Validate explicit assumptions, retaining TATC's native schema flexibility."""
-    from tatc.schemas import Satellite
+    from tatc.schemas import ConicalInstrument, Satellite
 
     satellites = []
     for raw in request.satellites:
@@ -336,11 +338,28 @@ def build_satellites(request: CoverageRequest):
         if not isinstance(instruments, list) or not 1 <= len(instruments) <= 2:
             raise ValueError("Each satellite requires 1–2 explicit instruments")
         for instrument in instruments:
-            if (
-                not isinstance(instrument, dict)
-                or not {"name", "field_of_regard"} <= instrument.keys()
-            ):
-                raise ValueError("Each instrument requires name and field_of_regard")
+            # TATC derives a conical instrument's field of regard when it is omitted.
+            required = (
+                {"name", "cone_angle", "along_track_field_of_view"}
+                if isinstance(instrument, dict) and "cone_angle" in instrument
+                else {"name", "field_of_regard"}
+            )
+            if not isinstance(instrument, dict) or not required <= instrument.keys():
+                raise ValueError(
+                    "Each instrument requires name and field_of_regard; a conical "
+                    "instrument instead requires name, cone_angle and "
+                    "along_track_field_of_view"
+                )
+            if "cone_angle" in instrument:
+                # TATC's instrument union otherwise falls back to a basic instrument
+                # and hides the reason, reporting cone_angle as an unknown field.
+                try:
+                    ConicalInstrument.model_validate(instrument)
+                except TypeError:  # TATC derives a field of regard before validating.
+                    raise ValueError(
+                        "A conical instrument's cone_angle and "
+                        "along_track_field_of_view must be numbers in degrees"
+                    ) from None
         orbit = raw.get("orbit")
         if not isinstance(orbit, dict) or "type" not in orbit:
             raise ValueError("Each satellite requires an orbit with an explicit type")

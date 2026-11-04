@@ -608,7 +608,8 @@ def visualize(
     overview (a labelled chart with axes) or table. Never invent values or sources.
 
     view='coverage': supply the complete agreed scenario: TATC satellites with
-    explicit instruments (circular orbit fields: type, mean_altitude, inclination,
+    explicit instruments (name and field_of_regard, or for a conical instrument
+    cone_angle and along_track_field_of_view; circular orbit fields: type, mean_altitude, inclination,
     right_ascension_ascending_node, true_anomaly, epoch), study-point coordinates,
     UTC start/end, and optional display_step_seconds. Supports all presentations; defaults to overview.
     Missing mission or sensor inputs require clarification. Study-point coverage
@@ -874,7 +875,9 @@ def analyze_coverage(scenario: json_string_or(CoverageRequest)) -> Dict[str, Any
     Supports hypothetical orbit designs, catalog orbits (type='omm',
     elements=[records from the satellite info tool]) and supplied tle orbits
     (type='tle', tle=[line1, line2]).
-    Each satellite must specify instruments with name and field_of_regard in degrees.
+    Each satellite must specify instruments with name and field_of_regard in degrees;
+    a conical instrument instead gives cone_angle and along_track_field_of_view, with
+    optional scan_center_azimuth and scan_half_width, in degrees.
     A study with a pointed or conical instrument reports valid viewing epochs with
     field-of-regard envelopes as metadata; its time covered, gaps and revisit are null.
     A pointed instrument adds cross_track_field_of_view and along_track_field_of_view

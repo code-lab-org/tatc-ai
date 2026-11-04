@@ -806,6 +806,37 @@ def test_instructions_scope_the_explorer_and_keep_other_workflows():
     assert "do not call any tool" not in instructions
 
 
+def test_conical_study_without_field_of_regard_is_described_and_reshown():
+    data = pointed_event_scenario()
+    data["satellites"][0]["instruments"] = [
+        {
+            "name": "Conical",
+            "cone_angle": 47.5,
+            "scan_half_width": 70,
+            "along_track_field_of_view": 1,
+        }
+    ]
+    response = call("visualize", {"view": "coverage", "scenario": data})
+    assert not response.is_error, text(response)
+    assert '"cone_angle": 47.5' in text(response)
+    assert "1 distinct viewing epochs" in text(response)
+    result = scene(response.content[1].resource.text)
+    sent = result["request"]["scenario"]["satellites"][0]["instruments"][0]
+    assert "field_of_regard" not in sent
+    assert "footprints" not in result["tracks"][0]
+    # A rerun of the viewer's own draft and a re-show both reach the same study.
+    rerun = call(
+        "visualize", {"view": "coverage", "scenario": result["request"]["scenario"]}
+    )
+    assert rerun.structured_content["analysis_id"] == result["analysis_id"]
+    reshown = call(
+        "visualize", {"view": "coverage", "analysis_id": result["analysis_id"]}
+    )
+    assert not reshown.is_error, text(reshown)
+    assert reshown.structured_content["analysis_id"] == result["analysis_id"]
+    assert not call("analyze_coverage", {"scenario": data}).is_error
+
+
 def test_null_series_cannot_stand_in_for_a_metric_the_study_lacks():
     # The example has revisits at two of its points, so an all-null series matches nothing.
     rejected = example_chart([{"name": "Unknown", "values": [None, None, None]}])
