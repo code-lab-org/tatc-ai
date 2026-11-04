@@ -834,3 +834,10 @@ def test_null_series_cannot_stand_in_for_a_metric_the_study_lacks():
     server._check_study_values(dataset([2.0]))
     with pytest.raises(ValueError, match="does not match"):
         server._check_study_values(dataset([None]))
+
+
+def test_read_only_statement_stays_outside_the_explorer_scope():
+    instructions = server.SERVER_INSTRUCTIONS
+    assert instructions.index("All tools are read-only") < instructions.index(
+        "Everything after this sentence"
+    )

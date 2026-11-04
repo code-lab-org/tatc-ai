@@ -209,6 +209,7 @@ SERVER_INSTRUCTIONS = (
     "When the user asks to visualize, map, plot, or show a ground track, use "
     "the ground track map tool with the satellite, start time, duration, and "
     "step interval you would give the ground-track tool. "
+    "All tools are read-only. "
     "Never write tool-call syntax such as <function=...> in a reply; call the tool or answer in prose. "
     "Ground-track requests and regional studies keep the workflows above. Everything after this sentence "
     "applies only to the point-coverage explorer: the coverage analysis and research visualization tools. "
@@ -244,8 +245,7 @@ SERVER_INSTRUCTIONS = (
     "The study pane draws footprints of pointed instruments only; it does not render swaths or "
     "solar-illumination masks. The explorer does not support observation scheduling, downlink latency, cost "
     "models or design-space optimization: say so plainly, offer what is supported, and never suggest tool calls "
-    "with placeholder inputs. After an explorer error that user-supplied values cannot fix, stop and ask the user. "
-    "All tools are read-only."
+    "with placeholder inputs. After an explorer error that user-supplied values cannot fix, stop and ask the user."
 )
 
 mcp = FastMCP(
