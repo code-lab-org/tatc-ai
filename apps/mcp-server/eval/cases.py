@@ -10,7 +10,7 @@ import copy
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -20,6 +20,7 @@ FINISH_TOOLS = {
     "finish_year_access_run",
     "run_satellite_access",
 }
+POINT_TOOL = "analyze_coverage"
 
 
 def _load_study_config():
@@ -114,6 +115,26 @@ def successful_finish(trace: Trace) -> Tuple[Optional[Dict[str, Any]], List[str]
     return found
 
 
+def successful_study(
+    trace: Trace,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], List[str]]:
+    """Last successful legacy finish or point analysis, its path, and seen texts."""
+    seen = [trace.prompt]
+    found: Tuple[Optional[str], Optional[Dict[str, Any]], List[str]] = (
+        None,
+        None,
+        [],
+    )
+    for call in trace.calls:
+        if not call.error and call.parsed:
+            if call.name in FINISH_TOOLS and call.parsed.get("result_id"):
+                found = ("legacy", call.parsed, list(seen))
+            elif call.name == POINT_TOOL and call.parsed.get("analysis_id"):
+                found = ("point", call.parsed, list(seen))
+        seen.append(call.text)
+    return found
+
+
 def _parse(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -178,6 +199,214 @@ def _given(points, max_span, kind, value, window, status="supported"):
         return _base_checks(
             summary, seen, points, max_span,
             lambda start, duration: window(clock, start, duration), kind, value, status,
+        )
+
+    return checks
+
+
+def _epoch(value):
+    """Parse an ISO epoch as an aware UTC datetime, with or without Z."""
+    text = str(value)
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _same_epoch(left, right):
+    try:
+        return _epoch(left) == _epoch(right)
+    except (TypeError, ValueError):
+        return str(left).rstrip("Z") == str(right).rstrip("Z")
+
+
+def _match_points(study_points, points, slack=0.05):
+    """Match each expected point to one distinct study point."""
+    if len(study_points) != len(points):
+        return False
+    remaining = list(study_points)
+    for latitude, longitude in points:
+        match = next(
+            (
+                point
+                for point in remaining
+                if abs(float(point.get("latitude", 999)) - latitude) <= slack
+                and abs(float(point.get("longitude", 999)) - longitude) <= slack
+            ),
+            None,
+        )
+        if match is None:
+            return False
+        remaining.remove(match)
+    return not remaining
+
+
+def _lookup_epochs(trace, before):
+    """Epochs from successful satellite lookups before the study call."""
+    found = {}
+    for call in trace.calls[:before]:
+        if call.name != "get_satellite_info" or call.error:
+            continue
+        try:
+            payload = json.loads(call.text)
+        except (TypeError, ValueError):
+            continue
+        norad = payload.get("norad_id")
+        for record in payload.get("omm") or []:
+            epoch = record.get("EPOCH")
+            if norad is not None and epoch:
+                found.setdefault(norad, set()).add(str(epoch))
+    return found
+
+
+def _number_reported(text, target, absolute_slack=0.0):
+    if not isinstance(target, (int, float)):
+        return False
+    if target == 0:
+        return "0" in text or "zero" in text.lower()
+    # Timestamps are not reported metrics; strip ISO dates and clock times.
+    text = re.sub(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?", " ", text
+    )
+    text = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", " ", text)
+    text = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", " ", text)
+    numbers = _numbers(text) + _numbers(text.replace(",", ""))
+    tolerance = max(absolute_slack, 5e-4 * abs(target))
+    return any(abs(number - target) <= tolerance for number in numbers)
+
+
+def _reported(final, summary, mode):
+    metrics = [
+        point.get("metrics") or {} for point in summary.get("points") or []
+    ]
+    if mode == "totals":
+        total = sum(metric.get("observation_count") or 0 for metric in metrics)
+        gaps = [
+            metric.get("longest_gap_seconds")
+            for metric in metrics
+            if isinstance(metric.get("longest_gap_seconds"), (int, float))
+        ]
+        return (
+            _number_reported(final, total)
+            and bool(gaps)
+            and _number_reported(final, max(gaps), absolute_slack=1.0)
+        )
+    return any(
+        _number_reported(final, target, absolute_slack=slack)
+        for metric in metrics
+        for target, slack in (
+            (metric.get("observation_count"), 0.0),
+            (metric.get("covered_seconds"), 1.0),
+            ((metric.get("coverage_fraction") or 0) * 100, 0.01),
+        )
+        if isinstance(target, (int, float)) and target
+    )
+
+
+def _point_study(expected, points, window, report="any", points_key="region"):
+    """Strict checks for named points with catalog orbits from prior lookups."""
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        path, summary, seen = successful_study(trace)
+        empty = {
+            "completed": False,
+            "window": False,
+            points_key: False,
+            "geometry": False,
+            "orbit": False,
+            "sourced": False,
+            "reported": False,
+        }
+        if path != "point" or summary is None:
+            return empty
+        scenario = summary.get("scenario") or {}
+        satellites = scenario.get("satellites") or []
+        start = _parse(scenario["start_time"]) if scenario.get("start_time") else None
+        end = _parse(scenario["end_time"]) if scenario.get("end_time") else None
+        duration = end - start if start and end else timedelta(0)
+        shape = len(satellites) == len(expected)
+        actual = {}
+        for satellite in satellites:
+            orbit = satellite.get("orbit") or {}
+            elements = orbit.get("elements") or []
+            instruments = satellite.get("instruments") or []
+            if (
+                orbit.get("type") != "gp"
+                or len(elements) != 1
+                or len(instruments) != 1
+            ):
+                shape = False
+                continue
+            norad = elements[0].get("norad_cat_id")
+            if norad in actual:
+                shape = False
+            actual[norad] = (
+                instruments[0].get("field_of_regard"),
+                elements[0].get("epoch"),
+            )
+        geometry = shape and set(actual) == set(expected) and all(
+            isinstance(actual[norad][0], (int, float))
+            and abs(float(actual[norad][0]) - field_of_regard)
+            <= 0.005 * field_of_regard
+            for norad, field_of_regard in expected.items()
+        )
+        analysis = next(
+            (
+                index
+                for index, call in enumerate(trace.calls)
+                if call.name == POINT_TOOL and call.parsed is summary
+            ),
+            len(trace.calls),
+        )
+        lookups = _lookup_epochs(trace, analysis)
+        orbit = (
+            shape
+            and set(actual) == set(expected)
+            and all(
+                any(
+                    _same_epoch(actual[norad][1], epoch)
+                    for epoch in lookups.get(norad, set())
+                )
+                for norad in expected
+            )
+        )
+        sourced = shape and all(
+            _sourced(actual[norad][0], seen) for norad in actual
+        )
+        return {
+            "completed": True,
+            "window": window(clock, start, duration) if start and end else False,
+            points_key: _match_points(scenario.get("points") or [], points),
+            "geometry": geometry,
+            "orbit": orbit,
+            "sourced": sourced,
+            "reported": _reported(trace.final, summary, report),
+        }
+
+    return checks
+
+
+def _point_or_region(points, max_span, kind, value, window, status="supported"):
+    """Accept the legacy region result or an equally strict point result."""
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        path, summary, _ = successful_study(trace)
+        if path == "point" and summary is not None:
+            return _point_study(
+                {25994: value}, points, window, report="any", points_key="region"
+            )(trace, clock)
+        legacy, seen = successful_finish(trace)
+        return _base_checks(
+            legacy,
+            seen,
+            points,
+            max_span,
+            lambda start, duration: window(clock, start, duration),
+            kind,
+            value,
+            status,
         )
 
     return checks
@@ -888,6 +1117,19 @@ def _conical_unresolved():
     return checks
 
 
+def _explorer_point_study():
+    """Require two catalog satellites, three named points, and total metrics."""
+    return _point_study(
+        {25994: 110.0, 49260: 15.0},
+        (PHOENIX, TEMPE, DENVER),
+        lambda clock, start, duration: (
+            start == clock.d0 and duration == timedelta(hours=12)
+        ),
+        report="totals",
+        points_key="points",
+    )
+
+
 def build_cases(clock: Clock) -> List[Case]:
     d0 = clock.fmt(clock.d0)
     modis = (
@@ -903,9 +1145,21 @@ def build_cases(clock: Clock) -> List[Case]:
     )
     return [
         Case(
-            "short_given", ("short", "geometry_given"),
+            "short_given", ("short", "geometry_given", "point_or_region"),
             f"Estimate Terra access over Phoenix, Arizona for 24 hours starting {d0}. {modis}",
-            _given([PHOENIX], 5.0, "field_of_regard_deg", 110.0, _exact(1)),
+            _point_or_region(
+                [PHOENIX], 5.0, "field_of_regard_deg", 110.0, _exact(1)
+            ),
+        ),
+        Case(
+            "point_study_explicit", ("short", "point_study", "explorer"),
+            f"Use analyze_coverage for a named-point study. Compare Terra with a "
+            f"110 degree field of regard and Landsat 9 with a 15 degree field of "
+            f"regard at Phoenix, Tempe, and Denver for 12 hours starting {d0}. "
+            "Use current catalog orbits for both satellites, and report the "
+            "total observation count and the longest gap in seconds across "
+            "the three points.",
+            _explorer_point_study(),
         ),
         Case(
             "long_given", ("long", "geometry_given"),

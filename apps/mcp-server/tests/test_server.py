@@ -55,6 +55,8 @@ class ServerTests(unittest.TestCase):
                 "generate_ground_track",
                 "get_instrument_info",
                 "ground_track_map",
+                "analyze_coverage",
+                "visualize",
                 "get_satellite_info",
                 "get_satellite_instruments",
                 "resolve_instrument_geometry",
@@ -187,6 +189,42 @@ class ServerTests(unittest.TestCase):
             result = self.call_tool("search_satellites", {"query": "ISS"})
         self.assertFalse(result.is_error)
         self.assertEqual(json.loads(result.content[0].text), expected)
+
+    def test_empty_search_tells_the_model_not_to_invent_a_satellite(self):
+        # Observed G03: [] reached the model as "(No response)" and it invented
+        # a satellite named after the place.
+        with mock.patch.object(
+            self.server.celestrak_client, "search_satellites_by_name", return_value=[]
+        ):
+            result = self.call_tool("search_satellites", {"query": "Phoenix"})
+        self.assertFalse(result.is_error)
+        text = result.content[0].text
+        self.assertIn("No orbiting satellite matches 'Phoenix'", text)
+        self.assertIn("ask the user which satellite they mean", text)
+        self.assertIn("Do not invent a satellite or its TLE", text)
+
+    def test_unresolved_satellite_info_tells_the_model_to_ask(self):
+        with mock.patch.object(
+            self.server.celestrak_client, "get_norad_id", return_value=None
+        ):
+            result = self.call_tool(
+                "get_satellite_info", {"satellite_identifier": "Phoenix"}
+            )
+        self.assertTrue(result.is_error)
+        self.assertIn("Ask the user which satellite they mean", result.content[0].text)
+
+    def test_instructions_ground_outputs_and_forbid_printed_tool_calls(self):
+        instructions = self.server.SERVER_INSTRUCTIONS
+        for phrase in (
+            "use only values the user supplied or tools returned",
+            "never invent satellites, TLEs",
+            "Place names such as Phoenix are study points",
+            "solar-illumination masks",
+            "never suggest tool calls with placeholder inputs",
+            "Never write tool-call syntax such as <function=...>",
+            "stop and ask the user",
+        ):
+            self.assertIn(phrase, instructions)
 
     def test_search_satellites_rejects_bad_limit(self):
         result = self.call_tool("search_satellites", {"query": "ISS", "limit": 0})
