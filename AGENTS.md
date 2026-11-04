@@ -8,7 +8,8 @@ Read `README.md` before changing the stack or its deployment setup.
 - `apps/mcp-server/tests/` covers server behavior and offline unit checks.
 - `apps/librechat/librechat.yaml` configures the development LibreChat upstream image.
 - `apps/librechat/librechat.deploy.yaml.template` supplies deployment settings rendered into that upstream image at startup.
-- Keep shared LibreChat model and tool settings consistent across both files. Preserve the URLs and authentication settings for each environment.
+- Keep shared LibreChat model and tool settings consistent across both files. Preserve the URLs and authentication settings for each environment. The ChatGPT Plan endpoint and spec are development only, because OpenAI offers plan usage to locally hosted apps.
+- `apps/chatgpt-bridge/` handles ChatGPT plan sign-in and translates requests. See `docs/providers.md`.
 - `docker-compose.dev.yml` and `docker-compose.deploy.yml` define the development and deployment stacks.
 - `config/` contains Dex and EC2 deployment scripts. `docs/` contains research notebooks.
 
