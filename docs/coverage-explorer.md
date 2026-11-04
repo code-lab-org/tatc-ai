@@ -301,7 +301,8 @@ the regional studies instead. TATC validates such an instrument's view only at e
 epoch; the wider field-of-regard period around it is kept as `envelope_start` and
 `envelope_end` metadata and is not viewing time.
 
-- **Viewing events:** valid TATC epochs in the half-open window `[start, end)`.
+- **Viewing events:** distinct valid TATC epochs in the half-open window
+  `[start, end)`; `observation_count` also counts every satellite-instrument row.
   The timeline marks each epoch. The map's observation link is held 30 seconds
   either side so playback can show it; that hold is not a viewing duration.
 - **Mean event spacing:** mean time between distinct epochs at a point; `null` with

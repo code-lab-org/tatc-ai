@@ -879,7 +879,7 @@ test("pointed studies show epochs and never present envelopes as coverage", asyn
     assert.equal(get("research-error").hidden, true);
     assert.deepEqual(
       [...get("metric").options].map((o) => o.value),
-      ["observation_count", "mean_event_spacing_hours"],
+      ["distinct_event_count", "mean_event_spacing_hours"],
     );
     assert.deepEqual(
       [...get("table-kind").options].map((o) => o.value),
@@ -995,6 +995,37 @@ test("orbit views offer no study download without an analysis", async () => {
   try {
     assert.equal(get("export-json").hidden, true);
     assert.equal(get("export-csv").hidden, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("a mixed study counts only real viewing events", async () => {
+  const { dom, get, w } = await setup({
+    presentation: "overview",
+    editFixture: (data) => {
+      asPointedStudy(data);
+      const point = data.points[0];
+      point.observations.push({
+        satellite: "S",
+        instrument: "Basic",
+        start: point.observations[0].envelope_start,
+        end: point.observations[0].envelope_end,
+        epoch: point.observations[0].epoch,
+        duration_seconds: 100,
+        accounting_method: "interval_union",
+      });
+      point.metrics.observation_count = 2;
+    },
+  });
+  try {
+    assert.match(get("metrics-grid").textContent, /Viewing events1/);
+    assert.match(get("metrics").textContent, /^1 viewing events/);
+    w.document.querySelector('[data-tab="table"]').click();
+    assert.equal(
+      get("result-table").querySelector("tbody td:nth-child(2)").textContent,
+      "1",
+    );
   } finally {
     dom.window.close();
   }

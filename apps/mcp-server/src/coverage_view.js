@@ -205,7 +205,7 @@
     const point = points[index],
       metrics = point.metrics;
     $("metrics").textContent = eventStudy
-      ? metrics.observation_count +
+      ? metrics.distinct_event_count +
         " viewing events · Mean spacing " +
         (metrics.mean_event_spacing_hours == null
           ? "—"

@@ -48,7 +48,7 @@
   if (eventStudy) {
     $("chart-title").textContent = "Viewing events by location";
     $("metric").replaceChildren(
-      new Option("Viewing events", "observation_count"),
+      new Option("Viewing events", "distinct_event_count"),
       new Option("Mean event spacing (h)", "mean_event_spacing_hours"),
     );
     $("table-kind").replaceChildren(
@@ -517,8 +517,8 @@
     $("chart-note").textContent = (
       eventStudy
         ? {
-            observation_count:
-              "Valid TATC viewing epochs at each study point. Time covered and gaps are unavailable for pointed and conical instruments.",
+            distinct_event_count:
+              "Distinct valid TATC viewing epochs at each study point. Time covered and gaps are unavailable for pointed and conical instruments.",
             mean_event_spacing_hours:
               "Mean time between distinct viewing epochs, not an uncovered interval. — means fewer than two epochs.",
           }
@@ -539,7 +539,7 @@
     for (const [label, value] of eventStudy
       ? [
           ["Location", p.name],
-          ["Viewing events", fmt(m.observation_count, 0)],
+          ["Viewing events", fmt(m.distinct_event_count, 0)],
           ["First event", m.first_event_utc ? utc(m.first_event_utc) : "—"],
           ["Last event", m.last_event_utc ? utc(m.last_event_utc) : "—"],
           [
@@ -638,7 +638,7 @@
         ],
         ...data.points.map((p) => [
           p.name,
-          p.metrics.observation_count,
+          p.metrics.distinct_event_count,
           p.metrics.first_event_utc,
           p.metrics.last_event_utc,
           p.metrics.mean_event_spacing_hours,
