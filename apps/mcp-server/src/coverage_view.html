@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TATC research workspace</title>
+    <link rel="stylesheet" href="./viewer.css" />
+  </head>
+  <body class="study-viewer">
+    <div class="study-toolbar">
+      <header class="study-header">
+        <div>
+          <h1 id="view-title">Study workspace</h1>
+          <p id="study-subtitle"></p>
+        </div>
+        <div class="study-actions">
+          <button id="export-csv" class="quiet">Export CSV</button>
+          <button id="export-json" class="quiet" hidden>
+            Download study JSON
+          </button>
+        </div>
+      </header>
+      <div class="view-toolbar">
+        <nav class="tabs" aria-label="Study views">
+          <button data-tab="overview" aria-pressed="true">Results</button
+          ><button data-tab="map">Map</button
+          ><button data-tab="table">Table</button
+          ><button data-tab="inputs">Inputs</button>
+        </nav>
+        <span id="study-context"></span>
+      </div>
+    </div>
+    <div id="research-error" role="alert" hidden></div>
+    <div id="study-notice" role="alert" hidden></div>
+    <main id="visual" hidden>
+      <section id="overview-panel" class="panel">
+        <div class="section-heading">
+          <h2 id="chart-title">Coverage by location</h2>
+          <label id="metric-label"
+            >Metric
+            <select id="metric">
+              <option value="longest_gap_seconds">Longest gap (min)</option>
+              <option value="coverage_fraction">Time covered (%)</option>
+              <option value="observation_count">Observation count</option>
+              <option value="mean_complete_revisit_seconds">
+                Mean complete revisit (min)
+              </option>
+            </select></label
+          >
+        </div>
+        <div class="chart-surface">
+          <div id="comparison-chart" aria-label="Study comparison"></div>
+          <p id="chart-note" class="muted"></p>
+        </div>
+        <div id="metrics-grid"></div>
+        <details id="distribution">
+          <summary>Gap duration distribution</summary>
+          <div id="gap-chart"></div>
+          <p class="muted">Includes gaps touching the study window.</p>
+        </details>
+      </section>
+      <section id="map-panel" hidden>
+        <div id="status" role="status">Loading map…</div>
+        <div class="scene">
+          <div id="globe" aria-label="Study map"></div>
+          <div class="map-tools">
+            <button id="view-2d" aria-pressed="false">2D</button
+            ><button id="view-3d" aria-pressed="true">3D</button>
+            <details>
+              <summary>Layers</summary>
+              <div class="layer-menu">
+                <label
+                  ><input
+                    id="show-orbits"
+                    type="checkbox"
+                    checked
+                  />Orbits</label
+                ><label
+                  ><input id="show-ground" type="checkbox" checked />Ground
+                  tracks</label
+                ><label id="links-label"
+                  ><input
+                    id="show-links"
+                    type="checkbox"
+                    checked
+                  />Observations</label
+                ><label id="footprints-label" hidden
+                  ><input
+                    id="show-footprints"
+                    type="checkbox"
+                    checked
+                  />Footprints</label
+                ><label
+                  >Trail (min)<input
+                    id="trail-minutes"
+                    type="number"
+                    value="30"
+                    min="0"
+                    max="1440"
+                /></label>
+              </div>
+            </details>
+          </div>
+          <div id="legend" aria-label="Satellite legend">
+            <strong>Satellites</strong>
+          </div>
+        </div>
+      </section>
+      <section id="table-panel" class="panel" hidden>
+        <div class="section-heading">
+          <h2>Values & events</h2>
+          <label id="table-kind-label"
+            >Rows
+            <select id="table-kind">
+              <option value="locations">Location summary</option>
+              <option value="observations">Observation events</option>
+              <option value="gaps">Coverage gaps</option>
+            </select></label
+          >
+        </div>
+        <div id="result-table" class="table-scroll"></div>
+      </section>
+      <section id="inputs-panel" class="panel" hidden>
+        <h2>Study inputs</h2>
+        <p class="muted">
+          Edit parameters, then run the study to calculate new results.
+        </p>
+        <form id="study-form">
+          <div id="study-fields"></div>
+          <div class="form-actions">
+            <button type="submit" id="run-study" class="primary">
+              Run updated study in chat
+            </button>
+            <p id="run-status" role="status">
+              Changes stay in draft until you run the study.
+            </p>
+          </div>
+        </form>
+        <details class="method">
+          <summary>Methods & source</summary>
+          <div id="provenance"></div>
+        </details>
+      </section>
+      <footer id="study-timeline">
+        <section id="coverage" class="panel" hidden>
+          <div class="section-heading">
+            <h2>Coverage timeline</h2>
+            <label
+              >Location
+              <select id="location"></select
+            ></label>
+          </div>
+          <p id="metrics" class="muted"></p>
+          <div class="row">
+            <span>Observations</span>
+            <div id="observations" class="lane"></div>
+          </div>
+          <div class="row">
+            <span>Gaps</span>
+            <div id="gaps" class="lane"></div>
+          </div>
+          <div
+            class="timeline-axis"
+            id="timeline-axis"
+            aria-label="Timeline in UTC"
+          ></div>
+          <p id="event-detail" aria-live="polite">
+            Select an interval to inspect it.
+          </p>
+        </section>
+        <section id="time-controls">
+          <div class="controls">
+            <button id="play" disabled>Play</button
+            ><input
+              id="time-slider"
+              type="range"
+              min="0"
+              value="0"
+              step="0.1"
+              aria-label="Study time"
+            /><select id="speed" aria-label="Playback speed">
+              <option value="60">60×</option>
+              <option value="300" selected>300×</option>
+              <option value="900">900×</option></select
+            ><output id="time"></output>
+          </div>
+        </section>
+      </footer>
+    </main>
+    <script src="./scene-data.js"></script>
+    <script src="./research.js"></script>
+    <script src="./viewer.js"></script>
+  </body>
+</html>

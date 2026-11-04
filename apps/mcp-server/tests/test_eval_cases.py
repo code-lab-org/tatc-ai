@@ -1,6 +1,7 @@
 """Offline checks for geometry behavior scored by the tool-calling eval."""
 
-from datetime import datetime, timezone
+import copy
+from datetime import datetime, timedelta, timezone
 
 from eval.cases import (
     CONICAL_CONFIG,
@@ -152,6 +153,315 @@ def test_clarification_eval_requires_source_lookup_and_no_completed_run():
     assert checks["looked_up_relevant_source"]
     assert not checks["did_not_run"]
     assert not all(checks.values())
+
+
+def _short_point_trace(final="2 observations"):
+    clock = _clock()
+    start = clock.d0
+    end = start + timedelta(days=1)
+    summary = {
+        "analysis_id": "point-1",
+        "scenario": {
+            "satellites": [
+                {
+                    "name": "TERRA",
+                    "instruments": [
+                        {"name": "MODIS", "field_of_regard": 110.0}
+                    ],
+                    "orbit": {
+                        "type": "gp",
+                        "elements": [
+                            {
+                                "norad_cat_id": 25994,
+                                "epoch": "2026-10-09T07:30:04.256064Z",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "points": [
+                {
+                    "name": "Phoenix",
+                    "latitude": 33.4484,
+                    "longitude": -112.074,
+                    "elevation": 0,
+                }
+            ],
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        },
+        "points": [
+            {
+                "metrics": {
+                    "observation_count": 2,
+                    "covered_seconds": 520.0,
+                    "coverage_fraction": 0.006,
+                    "longest_gap_seconds": 3600.0,
+                }
+            }
+        ],
+    }
+    trace = Trace(
+        prompt="Estimate Terra access over Phoenix for 24 hours using 110 degrees.",
+        calls=[
+            Call(
+                "get_satellite_info",
+                {"satellite_identifier": "Terra"},
+                False,
+                '{"norad_id":25994,"omm":[{"EPOCH":"2026-10-09T07:30:04.256064"}]}',
+            ),
+            Call("analyze_coverage", {"scenario": {}}, False, "{}", parsed=summary),
+        ],
+        final=final,
+    )
+    return trace, clock
+
+
+def _short_legacy_trace():
+    clock = _clock()
+    start = clock.d0
+    end = start + timedelta(days=1)
+    summary = {
+        "result_id": "legacy-1",
+        "window_start_utc": start.isoformat(),
+        "window_end_utc_exclusive": end.isoformat(),
+        "roi_bbox": [-113.0, 32.0, -111.0, 35.0],
+        "geometry_model": {
+            "geometry_input_kind": "field_of_regard_deg",
+            "geometry_input_value": 110.0,
+        },
+        "geometry_assessment": {
+            "status": "supported",
+            "source_text": "A full field of regard of 110 degrees.",
+        },
+    }
+    trace = Trace(
+        prompt="Estimate Terra access over Phoenix for 24 hours using 110 degrees.",
+        calls=[Call("finish_access_run", {}, False, "{}", parsed=summary)],
+        final="The estimate is complete.",
+    )
+    return trace, clock
+
+
+def test_short_given_accepts_a_strict_point_study_or_the_legacy_region():
+    case = next(
+        case for case in build_cases(_clock()) if case.id == "short_given"
+    )
+
+    point, clock = _short_point_trace()
+    assert all(case.checks(point, clock).values()), case.checks(point, clock)
+
+    legacy, clock = _short_legacy_trace()
+    assert all(case.checks(legacy, clock).values()), case.checks(legacy, clock)
+
+
+def test_short_given_point_path_rejects_wrong_location_geometry_window_or_orbit():
+    case = next(
+        case for case in build_cases(_clock()) if case.id == "short_given"
+    )
+
+    location, clock = _short_point_trace()
+    location.calls[1].parsed["scenario"]["points"][0]["latitude"] = 40.0
+    assert not case.checks(location, clock)["region"]
+
+    geometry, clock = _short_point_trace()
+    geometry.calls[1].parsed["scenario"]["satellites"][0]["instruments"][0][
+        "field_of_regard"
+    ] = 100.0
+    assert not case.checks(geometry, clock)["geometry"]
+
+    window, clock = _short_point_trace()
+    window.calls[1].parsed["scenario"]["end_time"] = (
+        clock.d0 + timedelta(days=2)
+    ).isoformat()
+    assert not case.checks(window, clock)["window"]
+
+    invented, clock = _short_point_trace()
+    invented.calls[1].parsed["scenario"]["satellites"][0]["orbit"]["elements"][0][
+        "norad_cat_id"
+    ] = 99999
+    assert not case.checks(invented, clock)["orbit"]
+
+    wrong_epoch, clock = _short_point_trace()
+    wrong_epoch.calls[1].parsed["scenario"]["satellites"][0]["orbit"]["elements"][
+        0
+    ]["epoch"] = "2026-10-10T07:30:04.256064Z"
+    assert not case.checks(wrong_epoch, clock)["orbit"]
+
+    no_lookup, clock = _short_point_trace()
+    no_lookup.calls.pop(0)
+    assert not case.checks(no_lookup, clock)["orbit"]
+
+    lookup_after, clock = _short_point_trace()
+    lookup_after.calls.reverse()
+    assert not case.checks(lookup_after, clock)["orbit"]
+
+    by_norad, clock = _short_point_trace()
+    by_norad.calls[0].args["satellite_identifier"] = "25994"
+    assert all(case.checks(by_norad, clock).values())
+
+    unreported, clock = _short_point_trace("The estimate is complete.")
+    assert not case.checks(unreported, clock)["reported"]
+
+
+def _explicit_point_trace(final="3 observations; longest gap 3600 s."):
+    clock = _clock()
+    start = clock.d0
+    end = start + timedelta(hours=12)
+    summary = {
+        "analysis_id": "point-2",
+        "scenario": {
+            "satellites": [
+                {
+                    "name": "TERRA",
+                    "instruments": [
+                        {"name": "MODIS", "field_of_regard": 110.0}
+                    ],
+                    "orbit": {
+                        "type": "gp",
+                        "elements": [
+                            {
+                                "norad_cat_id": 25994,
+                                "epoch": "2026-10-09T07:30:04.256064Z",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "name": "LANDSAT 9",
+                    "instruments": [
+                        {"name": "OLI-2", "field_of_regard": 15.0}
+                    ],
+                    "orbit": {
+                        "type": "gp",
+                        "elements": [
+                            {
+                                "norad_cat_id": 49260,
+                                "epoch": "2026-10-08T11:00:00.000000Z",
+                            }
+                        ],
+                    },
+                },
+            ],
+            "points": [
+                {"name": "Phoenix", "latitude": 33.4484, "longitude": -112.074},
+                {"name": "Tempe", "latitude": 33.4255, "longitude": -111.94},
+                {"name": "Denver", "latitude": 39.7392, "longitude": -104.9903},
+            ],
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        },
+        "points": [
+            {
+                "metrics": {
+                    "observation_count": 1,
+                    "covered_seconds": 100.0,
+                    "longest_gap_seconds": 3600.0,
+                }
+            }
+            for _ in range(3)
+        ],
+    }
+    trace = Trace(
+        prompt=(
+            "Use analyze_coverage for Phoenix, Tempe, and Denver with 110 and "
+            "15 degree fields of regard."
+        ),
+        calls=[
+            Call(
+                "get_satellite_info",
+                {"satellite_identifier": "Terra"},
+                False,
+                '{"norad_id":25994,"omm":[{"EPOCH":"2026-10-09T07:30:04.256064"}]}',
+            ),
+            Call(
+                "get_satellite_info",
+                {"satellite_identifier": "Landsat 9"},
+                False,
+                '{"norad_id":49260,"omm":[{"EPOCH":"2026-10-08T11:00:00.000000"}]}',
+            ),
+            Call("analyze_coverage", {"scenario": {}}, False, "{}", parsed=summary),
+        ],
+        final=final,
+    )
+    return trace, clock
+
+
+def test_explicit_point_study_requires_two_catalog_orbits_and_three_points():
+    case = next(
+        case for case in build_cases(_clock())
+        if case.id == "point_study_explicit"
+    )
+
+    valid, clock = _explicit_point_trace()
+    assert all(case.checks(valid, clock).values()), case.checks(valid, clock)
+
+    missing_satellite, clock = _explicit_point_trace()
+    missing_satellite.calls[2].parsed["scenario"]["satellites"].pop()
+    assert not case.checks(missing_satellite, clock)["geometry"]
+
+    duplicate_satellite, clock = _explicit_point_trace()
+    duplicate_satellite.calls[2].parsed["scenario"]["satellites"][1] = copy.deepcopy(
+        duplicate_satellite.calls[2].parsed["scenario"]["satellites"][0]
+    )
+    checks = case.checks(duplicate_satellite, clock)
+    assert not checks["geometry"] and not checks["orbit"]
+
+    missing_point, clock = _explicit_point_trace()
+    missing_point.calls[2].parsed["scenario"]["points"].pop()
+    assert not case.checks(missing_point, clock)["points"]
+
+    duplicate_point, clock = _explicit_point_trace()
+    duplicate_point.calls[2].parsed["scenario"]["points"][1] = copy.deepcopy(
+        duplicate_point.calls[2].parsed["scenario"]["points"][0]
+    )
+    assert not case.checks(duplicate_point, clock)["points"]
+
+    wrong_orbit, clock = _explicit_point_trace()
+    wrong_orbit.calls[2].parsed["scenario"]["satellites"][1]["orbit"]["elements"][
+        0
+    ]["norad_cat_id"] = 99999
+    assert not case.checks(wrong_orbit, clock)["orbit"]
+
+    wrong_epoch, clock = _explicit_point_trace()
+    wrong_epoch.calls[2].parsed["scenario"]["satellites"][1]["orbit"]["elements"][
+        0
+    ]["epoch"] = "2026-10-09T11:00:00.000000Z"
+    assert not case.checks(wrong_epoch, clock)["orbit"]
+
+    lookup_after, clock = _explicit_point_trace()
+    lookup_after.calls.reverse()
+    assert not case.checks(lookup_after, clock)["orbit"]
+
+    named_landsat, clock = _explicit_point_trace()
+    named_landsat.calls[2].parsed["scenario"]["satellites"][1]["name"] = "Landsat-9"
+    assert all(case.checks(named_landsat, clock).values())
+
+    comma, clock = _explicit_point_trace("3 observations; longest gap 3,600 s.")
+    assert all(case.checks(comma, clock).values())
+
+    partial, clock = _explicit_point_trace("3 observations.")
+    assert not case.checks(partial, clock)["reported"]
+
+    single_point, clock = _explicit_point_trace(
+        "1 observation at 03:01 UTC; its longest gap was 3600 s."
+    )
+    assert not case.checks(single_point, clock)["reported"]
+
+    timestamp_only, clock = _explicit_point_trace(
+        "The pass was at 03:00 UTC; the longest gap was 3600 s."
+    )
+    assert not case.checks(timestamp_only, clock)["reported"]
+
+    non_max_gap, clock = _explicit_point_trace()
+    non_max_gap.calls[2].parsed["points"][0]["metrics"][
+        "longest_gap_seconds"
+    ] = 3500.0
+    non_max_gap.final = "3 observations; longest gap 3500 s."
+    assert not case.checks(non_max_gap, clock)["reported"]
+
+    unreported, clock = _explicit_point_trace("The study is complete.")
+    assert not case.checks(unreported, clock)["reported"]
 
 
 def _supported_lookup_trace(include_lookup=True):
