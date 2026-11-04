@@ -56,6 +56,7 @@
       new Option("Viewing events", "observations"),
     );
   }
+  $("export-json").hidden = !coverage;
   $("table-kind-label").hidden = !coverage;
   $("time-controls").hidden = !!dataset;
   document.querySelector('[data-tab="map"]').hidden = !!dataset;
@@ -763,6 +764,34 @@
         }),
       );
   };
+  function download(content, type, filename) {
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  // The complete study, so a researcher can reproduce it from this one file.
+  function studyDocument() {
+    return {
+      schema_version: data.schema_version,
+      analysis_id: data.analysis_id,
+      method: data.method,
+      accounting: data.accounting,
+      software: data.software,
+      assumptions: data.assumptions,
+      scenario: data.scenario,
+      request: data.request,
+      results: { points: data.points, tracks: data.tracks },
+    };
+  }
+  $("export-json").onclick = () =>
+    download(
+      JSON.stringify(studyDocument(), null, 2),
+      "application/json",
+      `tatc-study-${data.analysis_id}.json`,
+    );
   $("export-csv").onclick = () => {
     const quote = (value) =>
       '"' +
@@ -774,14 +803,7 @@
     const csv = tableRows()
       .map((row) => row.map(quote).join(","))
       .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob([csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "tatc-study.csv";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    download(csv, "text/csv;charset=utf-8", "tatc-study.csv");
   };
   if (!dataset) {
     const draft = structuredClone(data.request || {}),

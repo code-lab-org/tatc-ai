@@ -149,13 +149,20 @@ small,
   justify-content: flex-end;
   padding-block: 0;
 }
+.study-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .quiet {
   background: transparent;
   font-size: 11px;
   color: #c3c6cc;
   white-space: nowrap;
 }
-#export-csv::before {
+#export-csv::before,
+#export-json::before {
   content: "";
   display: inline-block;
   width: 13px;

@@ -16,7 +16,7 @@ reviewed.
 
 | TATC API | Where TATC-AI uses it | Visualization |
 | --- | --- | --- |
-| `analysis.coverage.collect_observations` | `analyze_coverage` and `visualize(view="coverage")` | Study pane: results, observation/gap timeline, tables, CSV, Cesium 2D/3D orbits and observation links |
+| `analysis.coverage.collect_observations` | `analyze_coverage` and `visualize(view="coverage")` | Study pane: results, observation/gap timeline, tables, CSV and study JSON downloads, Cesium 2D/3D orbits and observation links |
 | `analysis.track.compute_ground_track` | `ground_track_map` | Inline MapLibre map with a circular footprint from an assumed 60° field of view; not in the Cesium pane |
 | `schemas.Satellite` with any TATC orbit type | Coverage scenarios | Orbit tracks in Cesium |
 | `schemas.Instrument`, `schemas.PointedInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |

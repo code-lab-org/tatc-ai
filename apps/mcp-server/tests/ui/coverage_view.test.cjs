@@ -948,3 +948,54 @@ test("a pointed study's map link marks the epoch, not its envelope", async () =>
     dom.window.close();
   }
 });
+
+test("the study download holds inputs, results and provenance", async () => {
+  const { dom, w, get, data } = await setup({
+    presentation: "overview",
+    editFixture: asPointedStudy,
+  });
+  try {
+    let content, type, filename;
+    w.Blob = class {
+      constructor(parts, options) {
+        content = parts.join("");
+        type = options.type;
+      }
+    };
+    w.URL.createObjectURL = () => "blob:study";
+    w.URL.revokeObjectURL = () => {};
+    w.HTMLAnchorElement.prototype.click = function () {
+      filename = this.download;
+    };
+    assert.equal(get("export-json").hidden, false);
+    get("export-json").click();
+    assert.equal(type, "application/json");
+    assert.equal(filename, `tatc-study-${data.analysis_id}.json`);
+    const study = JSON.parse(content);
+    assert.equal(study.analysis_id, data.analysis_id);
+    assert.deepEqual(study.scenario, data.scenario);
+    assert.deepEqual(study.request, data.request);
+    assert.deepEqual(study.results.points, data.points);
+    assert.deepEqual(study.results.tracks, data.tracks);
+    assert.deepEqual(study.assumptions, data.assumptions);
+    assert.deepEqual(study.software, data.software);
+    assert.equal(study.accounting.event_based, true);
+    assert.equal(study.ui, undefined);
+
+    get("export-csv").click();
+    assert.match(type, /^text\/csv/);
+    assert.equal(filename, "tatc-study.csv");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("orbit views offer no study download without an analysis", async () => {
+  const { dom, get } = await setup({ orbitOnly: true });
+  try {
+    assert.equal(get("export-json").hidden, true);
+    assert.equal(get("export-csv").hidden, false);
+  } finally {
+    dom.window.close();
+  }
+});

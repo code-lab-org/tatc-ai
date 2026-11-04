@@ -6,6 +6,7 @@ from importlib.metadata import version
 from itertools import pairwise
 import json
 import math
+import platform
 from typing import Annotated, Any
 
 from pydantic import (
@@ -524,7 +525,10 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
     scenario["orbit_epochs"] = {
         s.name: timestamp(s.orbit.get_epoch()) for s in satellites
     }
-    software = {name: version(name) for name in ("tatc", "skyfield")}
+    software = {
+        **{name: version(name) for name in ("tatc", "skyfield", "sgp4")},
+        "python": platform.python_version(),
+    }
     identity = json.dumps(
         {"scenario": scenario, "software": software}, sort_keys=True, allow_nan=False
     )

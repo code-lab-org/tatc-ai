@@ -474,3 +474,9 @@ def test_event_spacing_uses_distinct_epochs_and_ignores_basic_intervals():
     assert metrics["max_event_spacing_hours"] == 3
     assert metrics["mean_event_spacing_hours"] == 2
     assert metrics["last_event_utc"].startswith("2026-10-07T05:00:00")
+
+
+def test_study_records_the_software_needed_to_reproduce_it():
+    assert {"tatc", "skyfield", "sgp4", "python"} == analyze(sensor_request(BASIC))[
+        "software"
+    ].keys()

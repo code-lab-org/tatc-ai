@@ -37,6 +37,9 @@ The pane contains:
 - **Table:** computed values and individual events, with CSV export of the current
   table. Selecting an observation or gap seeks the shared clock to its midpoint, or
   to its viewing epoch for a pointed or conical instrument.
+- **Download study JSON:** one coverage study's scenario inputs, results, analysis
+  ID, accounting, assumptions and software versions, for reproducing it. Orbit and
+  data views have no such analysis and offer CSV only.
 - **Inputs:** editable UTC analysis window, display sampling, circular-orbit
   altitude/inclination, sensor field of regard, pointed-instrument fields of view,
   roll and pitch, minimum access time, satellite/target lighting requirements, and
