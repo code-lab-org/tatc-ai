@@ -6,6 +6,10 @@
     end = Date.parse(DATA.scenario.end_time);
   const duration = (end - start) / 1000;
   const points = DATA.points;
+  const eventStudy = !!DATA.accounting?.event_based;
+  // An epoch is an instant; hold its map link this long either side so playback
+  // can show it. This is a display aid, not a viewing duration.
+  const EVENT_LINK_HOLD_MS = 30000;
 
   let cancelGlobeLoad = () => {};
   let paneVisible = true;
@@ -152,21 +156,30 @@
     const lane = $(id);
     lane.replaceChildren();
     for (const interval of records) {
-      const left = Date.parse(interval.start),
-        right = Date.parse(interval.end);
+      const epochOnly = !!interval.envelope_start;
+      const left = Date.parse(epochOnly ? interval.epoch : interval.start),
+        right = epochOnly ? left : Date.parse(interval.end);
       const label = gap
         ? "Gap"
         : interval.satellite + " / " + interval.instrument;
-      const detail =
-        label +
-        ": " +
-        interval.start +
-        " – " +
-        interval.end +
-        " (" +
-        minutes(interval.duration_seconds) +
-        ")" +
-        (interval.boundary ? "; touches window boundary" : "");
+      const detail = epochOnly
+        ? label +
+          ": viewing epoch " +
+          interval.epoch +
+          "; field-of-regard envelope " +
+          interval.envelope_start +
+          " – " +
+          interval.envelope_end +
+          " (metadata, not viewing time)"
+        : label +
+          ": " +
+          interval.start +
+          " – " +
+          interval.end +
+          " (" +
+          minutes(interval.duration_seconds) +
+          ")" +
+          (interval.boundary ? "; touches window boundary" : "");
       const button = document.createElement("button");
       button.type = "button";
       button.className = "event" + (gap ? " gap" : "");
@@ -191,13 +204,19 @@
     $("location").value = String(index);
     const point = points[index],
       metrics = point.metrics;
-    $("metrics").textContent =
-      metrics.observation_count +
-      " opportunities · " +
-      (metrics.coverage_fraction * 100).toFixed(1) +
-      "% time covered · Longest gap " +
-      minutes(metrics.longest_gap_seconds) +
-      " (includes boundaries)";
+    $("metrics").textContent = eventStudy
+      ? metrics.observation_count +
+        " viewing events · Mean spacing " +
+        (metrics.mean_event_spacing_hours == null
+          ? "—"
+          : metrics.mean_event_spacing_hours.toFixed(2) + " h") +
+        " · Continuous coverage and gaps unavailable"
+      : metrics.observation_count +
+        " opportunities · " +
+        (metrics.coverage_fraction * 100).toFixed(1) +
+        "% time covered · Longest gap " +
+        minutes(metrics.longest_gap_seconds) +
+        " (includes boundaries)";
     intervals("observations", point.observations, false);
     intervals("gaps", point.gaps, true);
     $("event-detail").textContent = "Select an interval to inspect it.";
@@ -205,6 +224,7 @@
     setTime(seconds);
     window.dispatchEvent(new CustomEvent("tatc-point", { detail: index }));
   }
+  $("gaps").parentElement.hidden = eventStudy;
   points.forEach((point, i) => {
     const option = document.createElement("option");
     option.value = i;
@@ -498,7 +518,14 @@
       for (const [name, satellite] of satellites) {
         const events = point.observations
           .filter((e) => e.satellite === name)
-          .map((e) => [Date.parse(e.start), Date.parse(e.end)]);
+          .map((e) =>
+            e.envelope_start
+              ? [
+                  Date.parse(e.epoch) - EVENT_LINK_HOLD_MS,
+                  Date.parse(e.epoch) + EVENT_LINK_HOLD_MS,
+                ]
+              : [Date.parse(e.start), Date.parse(e.end)],
+          );
         viewer.entities.add({
           polyline: {
             width: 2,

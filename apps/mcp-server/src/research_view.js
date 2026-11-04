@@ -3,7 +3,8 @@
   const data = await window.tatcStudy;
   const $ = (id) => document.getElementById(id);
   const coverage = !!data.points?.length,
-    dataset = data.dataset;
+    dataset = data.dataset,
+    eventStudy = !!data.accounting?.event_based;
   let pointIndex = 0,
     rows = [],
     currentTab = "overview";
@@ -42,7 +43,19 @@
   $("chart-title").parentElement.hidden = !!dataset;
   $("metrics-grid").hidden = !coverage;
   $("metric-label").hidden = !coverage;
-  $("distribution").hidden = !coverage;
+  // Continuous metrics do not exist for an event study, so they are not offered.
+  $("distribution").hidden = !coverage || eventStudy;
+  if (eventStudy) {
+    $("chart-title").textContent = "Viewing events by location";
+    $("metric").replaceChildren(
+      new Option("Viewing events", "observation_count"),
+      new Option("Mean event spacing (h)", "mean_event_spacing_hours"),
+    );
+    $("table-kind").replaceChildren(
+      new Option("Location summary", "locations"),
+      new Option("Viewing events", "observations"),
+    );
+  }
   $("table-kind-label").hidden = !coverage;
   $("time-controls").hidden = !!dataset;
   document.querySelector('[data-tab="map"]').hidden = !!dataset;
@@ -495,39 +508,65 @@
         ? "%"
         : key.endsWith("_seconds")
           ? " min"
-          : "",
+          : key.endsWith("_hours")
+            ? " h"
+            : "",
       selectPoint,
     );
-    $("chart-note").textContent = {
-      longest_gap_seconds:
-        "Study points only. Longest gaps include the study window boundaries.",
-      coverage_fraction:
-        "Study time covered by at least one instrument, at each study point.",
-      observation_count:
-        "Individual opportunities at each study point. Overlapping opportunities are counted separately.",
-      mean_complete_revisit_seconds:
-        "Mean gap bounded by coverage on both sides. — means no complete gap was measured.",
-    }[key];
+    $("chart-note").textContent = (
+      eventStudy
+        ? {
+            observation_count:
+              "Valid TATC viewing epochs at each study point. Time covered and gaps are unavailable for pointed and conical instruments.",
+            mean_event_spacing_hours:
+              "Mean time between distinct viewing epochs, not an uncovered interval. — means fewer than two epochs.",
+          }
+        : {
+            longest_gap_seconds:
+              "Study points only. Longest gaps include the study window boundaries.",
+            coverage_fraction:
+              "Study time covered by at least one instrument, at each study point.",
+            observation_count:
+              "Individual opportunities at each study point. Overlapping opportunities are counted separately.",
+            mean_complete_revisit_seconds:
+              "Mean gap bounded by coverage on both sides. — means no complete gap was measured.",
+          }
+    )[key];
     const p = data.points[pointIndex],
       m = p.metrics;
     $("metrics-grid").replaceChildren();
-    for (const [label, value] of [
-      ["Location", p.name],
-      ["Observations", fmt(m.observation_count, 0)],
-      ["Time covered", fmt(m.coverage_fraction * 100) + "%"],
-      ["Longest gap", fmt(m.longest_gap_seconds / 60) + " min"],
-      [
-        "Mean complete revisit",
-        m.mean_complete_revisit_seconds == null
-          ? "—"
-          : fmt(m.mean_complete_revisit_seconds / 60) + " min",
-      ],
-      ["Covered duration", fmt(m.covered_seconds / 60) + " min"],
-    ]) {
+    for (const [label, value] of eventStudy
+      ? [
+          ["Location", p.name],
+          ["Viewing events", fmt(m.observation_count, 0)],
+          ["First event", m.first_event_utc ? utc(m.first_event_utc) : "—"],
+          ["Last event", m.last_event_utc ? utc(m.last_event_utc) : "—"],
+          [
+            "Mean event spacing",
+            m.mean_event_spacing_hours == null
+              ? "—"
+              : fmt(m.mean_event_spacing_hours, 2) + " h",
+          ],
+          ["Time covered and gaps", "Unavailable"],
+        ]
+      : [
+          ["Location", p.name],
+          ["Observations", fmt(m.observation_count, 0)],
+          ["Time covered", fmt(m.coverage_fraction * 100) + "%"],
+          ["Longest gap", fmt(m.longest_gap_seconds / 60) + " min"],
+          [
+            "Mean complete revisit",
+            m.mean_complete_revisit_seconds == null
+              ? "—"
+              : fmt(m.mean_complete_revisit_seconds / 60) + " min",
+          ],
+          ["Covered duration", fmt(m.covered_seconds / 60) + " min"],
+        ]) {
       const cell = text("div", "", "metric");
       cell.append(text("small", label), text("strong", value));
       $("metrics-grid").append(cell);
     }
+    if (eventStudy) return;
     const longest = Math.max(1, ...p.gaps.map((g) => g.duration_seconds / 60)),
       bins = Array.from({ length: 5 }, (_, i) => ({
         name: `${fmt((i * longest) / 5)}–${fmt(((i + 1) * longest) / 5)} min`,
@@ -568,6 +607,42 @@
         ),
       ];
     const p = data.points[pointIndex];
+    if (eventStudy && $("table-kind").value === "observations")
+      return [
+        [
+          "Satellite",
+          "Instrument",
+          "Epoch (UTC)",
+          "Field-of-regard start (UTC)",
+          "Field-of-regard end (UTC)",
+          "Viewing time",
+        ],
+        ...p.observations.map((e) => [
+          e.satellite,
+          e.instrument,
+          e.epoch,
+          e.envelope_start ?? e.start,
+          e.envelope_end ?? e.end,
+          e.envelope_start ? "Epoch only" : "Full interval",
+        ]),
+      ];
+    if (eventStudy)
+      return [
+        [
+          "Location",
+          "Viewing events",
+          "First event (UTC)",
+          "Last event (UTC)",
+          "Mean event spacing (h)",
+        ],
+        ...data.points.map((p) => [
+          p.name,
+          p.metrics.observation_count,
+          p.metrics.first_event_utc,
+          p.metrics.last_event_utc,
+          p.metrics.mean_event_spacing_hours,
+        ]),
+      ];
     if ($("table-kind").value === "observations")
       return [
         ["Satellite", "Instrument", "Start (UTC)", "End (UTC)", "Duration (s)"],
@@ -651,13 +726,16 @@
           window.dispatchEvent(
             new CustomEvent("tatc-seek", {
               detail:
-                ((Date.parse(e.start) + Date.parse(e.end)) / 2 -
+                ((e.envelope_start
+                  ? Date.parse(e.epoch)
+                  : (Date.parse(e.start) + Date.parse(e.end)) / 2) -
                   Date.parse(data.scenario.start_time)) /
                 1000,
             }),
           );
-          $("event-detail").textContent =
-            `${e.start} — ${e.end} · ${fmt(e.duration_seconds)} s${e.boundary ? " · touches window boundary" : ""}`;
+          $("event-detail").textContent = e.envelope_start
+            ? `Viewing epoch ${e.epoch} · field-of-regard envelope ${e.envelope_start} — ${e.envelope_end} (metadata, not viewing time)`
+            : `${e.start} — ${e.end} · ${fmt(e.duration_seconds)} s${e.boundary ? " · touches window boundary" : ""}`;
           $("event-detail").title = $("event-detail").textContent;
         };
         tr.onclick = select;

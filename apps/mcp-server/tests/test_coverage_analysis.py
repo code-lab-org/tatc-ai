@@ -12,6 +12,7 @@ from src.coverage_analysis import (
     CoverageRequest,
     analyze,
     build_satellites,
+    summarize_events,
     summarize_intervals,
 )
 
@@ -329,3 +330,147 @@ def test_omm_orbits_from_the_satellite_info_tool_are_tatc_gp_orbits():
     data["end_time"] = "2024-06-01T01:00:00Z"
     with pytest.raises(ValueError, match="Element epoch 2020-06-26 .* 1435 days"):
         build_satellites(CoverageRequest.model_validate(data))
+
+
+POINTED = {
+    "name": "Pointed",
+    "field_of_regard": 100,
+    "cross_track_field_of_view": 100,
+    "along_track_field_of_view": 2,
+}
+CONICAL = {
+    "name": "Conical",
+    "field_of_regard": 120,
+    "cone_angle": 47.5,
+    "scan_half_width": 70,
+    "along_track_field_of_view": 1,
+}
+BASIC = {"name": "Basic", "field_of_regard": 100}
+
+
+def sensor_request(*instruments):
+    """A pass over 45N 100W, seen by each of these instruments in the window."""
+    return CoverageRequest.model_validate(
+        {
+            "satellites": [
+                {
+                    "name": "S",
+                    "orbit": {
+                        "type": "circular",
+                        "mean_altitude": 550000,
+                        "inclination": 97.5,
+                        "right_ascension_ascending_node": 0,
+                        "true_anomaly": 0,
+                        "epoch": START.isoformat(),
+                    },
+                    "instruments": list(instruments),
+                }
+            ],
+            "points": [{"name": "P", "latitude": 45, "longitude": -100}],
+            "start_time": START.isoformat(),
+            "end_time": (START + timedelta(hours=12)).isoformat(),
+        }
+    )
+
+
+def in_view(request, time):
+    from skyfield.api import wgs84
+
+    satellite = build_satellites(request)[0]
+    moment = datetime.fromisoformat(time)
+    track = satellite.orbit.to_gp_orbit().get_orbit_track([moment, moment])
+    target = wgs84.latlon([45, 45], [-100, -100])
+    return bool(satellite.instruments[0].is_in_field_of_view(track, target)[0])
+
+
+@pytest.mark.parametrize(
+    "instrument, method",
+    [(POINTED, "pointed_events_v1"), (CONICAL, "conical_events_v1")],
+)
+def test_sensor_counts_valid_epochs_and_never_its_field_of_regard_envelope(
+    instrument, method
+):
+    # Review reproduction: TATC's period was reported as continuous coverage,
+    # including times when TATC says this sensor cannot see the target.
+    request = sensor_request(instrument)
+    result = analyze(request)
+    point = result["points"][0]
+    event = point["observations"][0]
+    assert in_view(request, event["epoch"])
+    assert not in_view(request, event["envelope_start"])
+    assert not in_view(request, event["envelope_end"])
+    assert event["envelope_duration_seconds"] > 100
+    assert event["accounting_method"] == method
+    assert not {"start", "end", "duration_seconds"} & event.keys()
+
+    metrics = point["metrics"]
+    assert metrics["observation_count"] == metrics["distinct_event_count"] == 1
+    assert metrics["first_event_utc"] == metrics["last_event_utc"] == event["epoch"]
+    for unavailable in (
+        "coverage_period_count",
+        "covered_seconds",
+        "coverage_fraction",
+        "longest_gap_seconds",
+        "mean_complete_revisit_seconds",
+    ):
+        assert metrics[unavailable] is None
+    assert metrics["continuous_viewing_duration_available"] is False
+    assert metrics["continuous_uncovered_duration_available"] is False
+    assert point["coverage_intervals"] == [] and point["gaps"] == []
+    assert result["accounting"]["event_based"] is True
+    assert result["accounting"]["method"] == method
+    assert "envelope" in " ".join(result["assumptions"])
+
+
+def test_basic_instrument_keeps_interval_accounting():
+    result = analyze(sensor_request(BASIC))
+    point = result["points"][0]
+    assert result["accounting"]["event_based"] is False
+    assert point["metrics"]["covered_seconds"] > 0
+    assert point["metrics"]["coverage_fraction"] > 0
+    assert point["metrics"]["continuous_viewing_duration_available"] is True
+    assert point["coverage_intervals"] and point["gaps"]
+    assert {"start", "end", "duration_seconds"} <= point["observations"][0].keys()
+
+
+def test_study_mixing_basic_and_event_instruments_reports_no_continuous_metrics():
+    result = analyze(sensor_request(BASIC, POINTED))
+    point = result["points"][0]
+    assert result["accounting"]["event_based"] is True
+    assert point["metrics"]["covered_seconds"] is None
+    assert point["metrics"]["observation_count"] == 2
+    # Only the pointed row is a viewing event.
+    assert point["metrics"]["distinct_event_count"] == 1
+    assert {"start", "end"} <= next(
+        o for o in point["observations"] if o["instrument"] == "Basic"
+    ).keys()
+
+
+def test_event_study_without_events_is_unavailable_not_zero():
+    request = sensor_request(POINTED)
+    request.end_time = START + timedelta(hours=1)  # Before the first pass.
+    metrics = analyze(request)["points"][0]["metrics"]
+    assert metrics["observation_count"] == 0
+    assert metrics["first_event_utc"] is None
+    assert metrics["mean_event_spacing_hours"] is None
+    assert metrics["coverage_fraction"] is None
+
+
+def test_event_spacing_uses_distinct_epochs_and_ignores_basic_intervals():
+    def event(hour):
+        return {
+            "epoch": (START + timedelta(hours=hour)).isoformat(),
+            "envelope_start": "ignored",
+        }
+
+    basic = {"epoch": (START + timedelta(hours=9)).isoformat()}
+    metrics = summarize_events(
+        [event(1), event(1), event(2), event(5), basic], "pointed_events_v1"
+    )["metrics"]
+    assert metrics["observation_count"] == 5
+    assert metrics["distinct_event_count"] == 3
+    assert metrics["event_spacing_sample_count"] == 2
+    assert metrics["min_event_spacing_hours"] == 1
+    assert metrics["max_event_spacing_hours"] == 3
+    assert metrics["mean_event_spacing_hours"] == 2
+    assert metrics["last_event_utc"].startswith("2026-10-07T05:00:00")

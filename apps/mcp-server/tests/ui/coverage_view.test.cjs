@@ -29,6 +29,27 @@ const fixture = JSON.parse(
     },
   ),
 );
+// A real pointed study: TATC gives one valid epoch inside a wider envelope.
+const pointedFixture = JSON.parse(
+  execFileSync(
+    process.env.TATC_PYTHON || "python3",
+    [
+      "-c",
+      [
+        "from src.coverage_analysis import CoverageRequest, analyze",
+        "import json",
+        "request = CoverageRequest.model_validate({'satellites': [{'name': 'S', 'orbit': {'type': 'circular', 'mean_altitude': 550000, 'inclination': 97.5, 'right_ascension_ascending_node': 0, 'true_anomaly': 0, 'epoch': '2026-10-07T00:00:00Z'}, 'instruments': [{'name': 'Pointed', 'field_of_regard': 100, 'cross_track_field_of_view': 100, 'along_track_field_of_view': 2}]}], 'points': [{'name': 'P', 'latitude': 45, 'longitude': -100}], 'start_time': '2026-10-07T00:00:00Z', 'end_time': '2026-10-07T12:00:00Z'})",
+        "print(json.dumps(analyze(request, include_tracks=True)))",
+      ].join("\n"),
+    ],
+    {
+      cwd: root,
+      env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
+      encoding: "utf8",
+    },
+  ),
+);
+const asPointedStudy = (data) => Object.assign(data, pointedFixture);
 const html = fs.readFileSync(
   path.join(root, "apps/mcp-server/src/coverage_view.html"),
   "utf8",
@@ -844,6 +865,85 @@ test("supplied revisit values form a labelled chart with a shared zero baseline"
     assert.equal(get("study-subtitle").hidden, true);
     assert.equal(get("metrics-grid").hidden, true);
     assert.equal(get("chart-note").hidden, true);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("pointed studies show epochs and never present envelopes as coverage", async () => {
+  const { dom, w, data, get } = await setup({
+    presentation: "overview",
+    editFixture: asPointedStudy,
+  });
+  try {
+    assert.equal(get("research-error").hidden, true);
+    assert.deepEqual(
+      [...get("metric").options].map((o) => o.value),
+      ["observation_count", "mean_event_spacing_hours"],
+    );
+    assert.deepEqual(
+      [...get("table-kind").options].map((o) => o.value),
+      ["locations", "observations"],
+    );
+    assert.equal(get("distribution").hidden, true);
+    const grid = get("metrics-grid").textContent;
+    assert.match(grid, /Viewing events1/);
+    assert.match(grid, /Time covered and gapsUnavailable/);
+    assert.doesNotMatch(grid, /NaN|Covered duration|Longest gap/);
+    assert.match(get("metrics").textContent, /gaps unavailable/);
+    assert.equal(get("gaps").parentElement.hidden, true);
+
+    const event = data.points[0].observations[0];
+    const marker = w.document.querySelector("#observations .event");
+    // Zero duration: CSS min-width alone makes the epoch visible.
+    assert.equal(marker.style.width, "0%");
+    assert.match(marker.title, /metadata, not viewing time/);
+    marker.click();
+    const expected =
+      (Date.parse(event.epoch) - Date.parse(data.scenario.start_time)) / 1000;
+    assert.ok(Math.abs(Number(get("time-slider").value) - expected) < 0.2);
+
+    w.document.querySelector('[data-tab="table"]').click();
+    get("table-kind").value = "observations";
+    get("table-kind").dispatchEvent(new w.Event("change"));
+    const cells = [...get("result-table").querySelectorAll("tbody td")].map(
+      (e) => e.textContent,
+    );
+    assert.deepEqual(cells, [
+      "S",
+      "Pointed",
+      event.epoch,
+      event.envelope_start,
+      event.envelope_end,
+      "Epoch only",
+    ]);
+    get("result-table").querySelector("tbody tr").click();
+    assert.match(get("event-detail").textContent, /^Viewing epoch/);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("a pointed study's map link marks the epoch, not its envelope", async () => {
+  const { dom, get, data, viewer } = await setup({ editFixture: asPointedStudy });
+  try {
+    assert.ok(viewer, get("status").textContent);
+    const event = data.points[0].observations[0];
+    const at = (time) => Cesium.JulianDate.fromIso8601(time);
+    // The Observations layer alone; the footprint boresight line is always drawn.
+    const shown = () =>
+      viewer.entities.values.filter((e) =>
+        e.polyline?.show?.getValue(at(event.epoch)),
+      );
+    const withLinks = shown();
+    get("show-links").checked = false;
+    const withoutLinks = shown();
+    get("show-links").checked = true;
+    const links = withLinks.filter((e) => !withoutLinks.includes(e));
+    assert.equal(links.length, 1);
+    const link = links[0].polyline.show;
+    assert.equal(link.getValue(at(event.envelope_start)), false);
+    assert.equal(link.getValue(at(event.envelope_end)), false);
   } finally {
     dom.window.close();
   }

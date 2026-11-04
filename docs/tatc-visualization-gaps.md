@@ -33,7 +33,7 @@ the result does not show them.
 
 | Input | Computed | Model-visible summary | Editable in Inputs | Shown in Cesium |
 | --- | --- | --- | --- | --- |
-| `PointedInstrument` (`roll_angle`, `pitch_angle`, cross/along-track field of view, `is_rectangular`) | Yes; TATC keeps an access window only if the footprint contains the point at its midpoint | Yes | Yes, except `is_rectangular` and pixel fields | Yes; footprint and boresight |
+| `PointedInstrument` (`roll_angle`, `pitch_angle`, cross/along-track field of view, `is_rectangular`) | Yes; TATC keeps a viewing epoch only if the footprint contains the point when its view sweeps over it; the study reports epochs, with continuous metrics unavailable | Yes | Yes, except `is_rectangular` and pixel fields | Yes; footprint and boresight |
 | Instrument constraints (`req_self_sunlit`, `req_target_sunlit`, `min_access_time`, `access_time_fixed`) | Yes | Yes | Yes, except `access_time_fixed` | No day/night context |
 | Non-circular orbits (`sso`, `keplerian`, `molniya`, `tundra`, `geosynchronous`) | Yes; orbit JSON is listed | Yes | No; "Orbital elements are preserved" | Yes, as tracks |
 | Circular RAAN and true anomaly | Yes | Yes | No; only altitude and inclination | Yes |

@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from importlib.metadata import version
+from itertools import pairwise
 import json
 import math
 from typing import Annotated, Any
@@ -17,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from .conical_accounting import ACCOUNTING_METHOD, POINTED_ACCOUNTING_METHOD, _stats
 from .tatc_integration import create_orbit_from_omm
 
 # SGP4 error grows with time from the TLE epoch (for LEO roughly 1–3 km/day,
@@ -27,6 +29,7 @@ MAX_TLE_EPOCH_DAYS = 30
 # Footprints of 4 satellites with 2 pointed instruments each over 24 hours at
 # the default 120 s display step; each sample adds a polygon to the scene.
 MAX_FOOTPRINT_SAMPLES = 5768
+INTERVAL_ACCOUNTING_METHOD = "interval_union"
 TLE_SOURCE_HINT = (
     "Use the OMM records returned by the satellite info tool as an omm orbit for current "
     "windows, or TLE lines the user supplied for this window. Never write orbital elements "
@@ -454,8 +457,56 @@ def summarize_intervals(observations, start: datetime, end: datetime):
             "mean_complete_revisit_seconds": (
                 sum(complete) / len(complete) if complete else None
             ),
+            "continuous_viewing_duration_available": True,
+            "continuous_uncovered_duration_available": True,
+            "accounting_method": INTERVAL_ACCOUNTING_METHOD,
         },
     }
+
+
+def summarize_events(observations, accounting_method: str):
+    """Per-point metrics at valid viewing epochs of pointed and conical instruments.
+
+    TATC returns each epoch but no per-point summary, so this applies the
+    definitions of conical_accounting to one point. Continuous metrics are null,
+    not zero: the field-of-regard envelope is not viewing time, and the time
+    between epochs is not an uncovered interval.
+    """
+    epochs = sorted(
+        {datetime.fromisoformat(o["epoch"]) for o in observations if "envelope_start" in o}
+    )
+    spacings = [(right - left).total_seconds() / 3600 for left, right in pairwise(epochs)]
+    return {
+        "coverage_intervals": [],
+        "gaps": [],
+        "metrics": {
+            "observation_count": len(observations),
+            "distinct_event_count": len(epochs),
+            "first_event_utc": timestamp(epochs[0]) if epochs else None,
+            "last_event_utc": timestamp(epochs[-1]) if epochs else None,
+            "event_spacing_sample_count": len(spacings),
+            **_stats(spacings),
+            "coverage_period_count": None,
+            "covered_seconds": None,
+            "coverage_fraction": None,
+            "longest_gap_seconds": None,
+            "mean_complete_revisit_seconds": None,
+            "continuous_viewing_duration_available": False,
+            "continuous_uncovered_duration_available": False,
+            "accounting_method": accounting_method,
+        },
+    }
+
+
+def _event_method(instrument) -> str | None:
+    """The event accounting of an instrument whose TATC period is only an envelope."""
+    from tatc.schemas import ConicalInstrument, PointedInstrument
+
+    if isinstance(instrument, PointedInstrument):
+        return POINTED_ACCOUNTING_METHOD
+    if isinstance(instrument, ConicalInstrument):
+        return ACCOUNTING_METHOD
+    return None
 
 
 def analyze(request: CoverageRequest, include_tracks=False) -> dict:
@@ -477,17 +528,46 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
     identity = json.dumps(
         {"scenario": scenario, "software": software}, sort_keys=True, allow_nan=False
     )
+    event_methods = {
+        method
+        for satellite in satellites
+        for instrument in satellite.instruments
+        if (method := _event_method(instrument))
+    }
+    event_based = bool(event_methods)
+    # One discrete event cannot be unioned with intervals, so any pointed or conical
+    # instrument makes the study's continuous metrics unavailable.
+    accounting_method = "+".join(sorted(event_methods)) or INTERVAL_ACCOUNTING_METHOD
     result = {
-        "schema_version": "1.0",
-        "analysis_id": sha256(identity.encode()).hexdigest()[:20],
+        "schema_version": "1.1",        "analysis_id": sha256(identity.encode()).hexdigest()[:20],
         "scenario": scenario,
         "software": software,
-        "method": "TATC collect_observations; union of observation intervals per study point",
+        "method": (
+            "TATC collect_observations; valid viewing epochs per study point"
+            if event_based
+            else "TATC collect_observations; union of observation intervals per study point"
+        ),
+        "accounting": {
+            "method": accounting_method,
+            "event_based": event_based,
+            "continuous_viewing_duration_available": not event_based,
+            "continuous_uncovered_duration_available": not event_based,
+        },
         "assumptions": [
             "Only the supplied study points are evaluated; no area coverage is inferred between them.",
             "Observation opportunities use the supplied instrument model, not an executed task schedule.",
-            "TATC checks some instrument and illumination constraints at pass midpoints; interval boundaries inherit that approximation.",
-            "Longest gap includes uncovered time at window boundaries; mean complete revisit excludes boundary gaps.",
+            *(
+                [
+                    "Pointed and conical instruments count only TATC's valid viewing epochs. Their field-of-regard period is kept as envelope metadata; it is wider than the instrument's view and is not viewing time.",
+                    "Time covered, covered duration, gaps and revisit are unavailable for this study, not zero. Event spacing is the time between distinct viewing epochs, not an uncovered interval.",
+                    "Basic field-of-regard instruments in a study with pointed or conical instruments keep their own intervals, which do not count toward event spacing.",
+                ]
+                if event_based
+                else [
+                    "TATC checks some instrument and illumination constraints at pass midpoints; interval boundaries inherit that approximation.",
+                    "Longest gap includes uncovered time at window boundaries; mean complete revisit excludes boundary gaps.",
+                ]
+            ),
             "Orbit display samples and interpolation do not determine coverage results. Heights use WGS84 meters.",
         ],
         "points": [],
@@ -498,6 +578,7 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
         observations = []
         for satellite in satellites:
             for instrument_index, instrument in enumerate(satellite.instruments):
+                event_method = _event_method(instrument)
                 frame = collect_observations(
                     point,
                     satellite,
@@ -507,6 +588,23 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
                     omit_solar=True,
                 )
                 for row in frame.itertuples():
+                    if event_method:
+                        # Half-open window, as in conical_accounting.
+                        if request.start_time <= row.epoch < request.end_time:
+                            observations.append(
+                                {
+                                    "satellite": satellite.name,
+                                    "instrument": instrument.name,
+                                    "epoch": timestamp(row.epoch),
+                                    "envelope_start": timestamp(row.start),
+                                    "envelope_end": timestamp(row.end),
+                                    "envelope_duration_seconds": (
+                                        row.end - row.start
+                                    ).total_seconds(),
+                                    "accounting_method": event_method,
+                                }
+                            )
+                        continue
                     left, right = max(request.start_time, row.start), min(
                         request.end_time, row.end
                     )
@@ -520,6 +618,7 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
                             "end": timestamp(right),
                             "epoch": timestamp(row.epoch),
                             "duration_seconds": (right - left).total_seconds(),
+                            "accounting_method": INTERVAL_ACCOUNTING_METHOD,
                         }
                     )
                 event_count += len(frame)
@@ -527,14 +626,20 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
                     raise ValueError(
                         "Study exceeds 4000 observations; reduce locations or duration"
                     )
-        observations.sort(key=lambda o: (o["start"], o["end"], o["satellite"]))
+        observations.sort(
+            key=lambda o: (o.get("start", o["epoch"]), o.get("end", ""), o["satellite"])
+        )
         result["points"].append(
             {
                 **study_point.model_dump(),
                 "id": index,
                 "observations": observations,
-                **summarize_intervals(
-                    observations, request.start_time, request.end_time
+                **(
+                    summarize_events(observations, accounting_method)
+                    if event_based
+                    else summarize_intervals(
+                        observations, request.start_time, request.end_time
+                    )
                 ),
             }
         )

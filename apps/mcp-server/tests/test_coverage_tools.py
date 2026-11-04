@@ -723,3 +723,65 @@ def test_tool_schemas_leave_constraints_to_server_validation():
             "exclusiveMaximum",
             "pattern",
         }, name
+
+
+def pointed_event_scenario():
+    data = pointed_scenario()
+    data["satellites"][0]["orbit"] = {
+        "type": "circular",
+        "mean_altitude": 550000,
+        "inclination": 97.5,
+        "right_ascension_ascending_node": 0,
+        "true_anomaly": 0,
+        "epoch": "2026-10-07T00:00:00Z",
+    }
+    data["satellites"][0]["instruments"] = [
+        {
+            "name": "Pointed",
+            "field_of_regard": 100,
+            "cross_track_field_of_view": 100,
+            "along_track_field_of_view": 2,
+        }
+    ]
+    data["points"] = [{"name": "P", "latitude": 45, "longitude": -100}]
+    data["start_time"] = "2026-10-07T00:00:00Z"
+    data["end_time"] = "2026-10-07T12:00:00Z"
+    return data
+
+
+def test_event_study_text_gives_epochs_and_marks_continuous_metrics_unavailable():
+    response = call("visualize", {"view": "coverage", "scenario": pointed_event_scenario()})
+    assert not response.is_error, text(response)
+    body = text(response)
+    assert "1 distinct viewing epochs" in body
+    assert "are unavailable, not zero" in body
+    assert "% covered" not in body and "longest gap" not in body
+    summary = response.structured_content["points"][0]
+    assert summary["coverage_fraction"] is None
+    assert summary["accounting_method"] == "pointed_events_v1"
+    assert scene(response.content[1].resource.text)["accounting"]["event_based"] is True
+
+
+def test_event_study_charts_reject_values_the_study_does_not_have():
+    response = call("visualize", {"view": "coverage", "scenario": pointed_event_scenario()})
+    analysis_id = response.structured_content["analysis_id"]
+
+    def chart(values):
+        return call(
+            "visualize",
+            {
+                "view": "data",
+                "dataset": {
+                    "title": "Study",
+                    "labels": ["P"],
+                    "series": [{"name": "Value", "values": values}],
+                    "kind": "bar",
+                    "provenance": {"kind": "study", "analysis_id": analysis_id},
+                },
+            },
+        )
+
+    assert not chart([1]).is_error
+    # 193.6 s of envelope, as a percentage of the window.
+    rejected = chart([0.448])
+    assert rejected.is_error and "does not match" in text(rejected)

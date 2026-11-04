@@ -872,6 +872,8 @@ def analyze_coverage(scenario: json_string_or(CoverageRequest)) -> Dict[str, Any
     elements=[records from the satellite info tool]) and supplied tle orbits
     (type='tle', tle=[line1, line2]).
     Each satellite must specify instruments with name and field_of_regard in degrees.
+    A study with a pointed or conical instrument reports valid viewing epochs with
+    field-of-regard envelopes as metadata; its time covered, gaps and revisit are null.
     A pointed instrument adds cross_track_field_of_view and along_track_field_of_view
     (degrees) with optional roll_angle, pitch_angle and is_rectangular; any instrument
     may set min_access_time (seconds), req_self_sunlit and req_target_sunlit.
@@ -922,16 +924,16 @@ def _check_study_values(dataset: ResearchData) -> None:
             f"Labels must be study point names of {analysis_id}: {', '.join(metrics)}"
         )
     # The values stated in the study result text, by metric.
+    def scaled(value, factor):
+        return None if value is None else value * factor
+
     stated = {
         name: (
             m["observation_count"],
-            m["coverage_fraction"] * 100,
-            m["longest_gap_seconds"] / 60,
-            (
-                None
-                if m["mean_complete_revisit_seconds"] is None
-                else m["mean_complete_revisit_seconds"] / 60
-            ),
+            scaled(m["coverage_fraction"], 100),
+            scaled(m["longest_gap_seconds"], 1 / 60),
+            scaled(m["mean_complete_revisit_seconds"], 1 / 60),
+            m.get("mean_event_spacing_hours"),
         )
         for name, m in metrics.items()
     }
@@ -948,13 +950,14 @@ def _check_study_values(dataset: ResearchData) -> None:
                 same(value, stated[label][metric])
                 for label, value in zip(dataset.labels, series.values)
             )
-            for metric in range(4)
+            for metric in range(5)
         ):
             raise ValueError(
                 f"Series {series.name!r} does not match study {analysis_id}. Each series "
                 "must copy one metric from the study result for each labelled point: "
-                "observations, percent covered, longest gap minutes, or mean complete "
-                "revisit minutes (null when none). Do not chart invented or converted values."
+                "observations, percent covered, longest gap minutes, mean complete revisit "
+                "minutes, or mean event spacing hours (null when none or unavailable). Do "
+                "not chart invented or converted values."
             )
 
 
@@ -987,12 +990,28 @@ def _study_text(result: dict, scenario: CoverageRequest, example: bool) -> str:
         lines.append(
             f"- {satellite['name']}: orbit {json.dumps(satellite['orbit'])}; instruments {instruments}"
         )
+    event_based = result["accounting"]["event_based"]
     lines.append(
-        "Study points (TATC event-based results; longest gap includes window-boundary "
+        "Study points (valid TATC viewing epochs of pointed or conical instruments. "
+        "Field-of-regard envelopes are not viewing time; time covered, gaps and revisit "
+        "are unavailable, not zero; do not report or estimate them):"
+        if event_based
+        else "Study points (TATC event-based results; longest gap includes window-boundary "
         "gaps; mean complete revisit excludes them):"
     )
     for point in result["points"]:
         metrics = point["metrics"]
+        if event_based:
+            spacing = metrics["mean_event_spacing_hours"]
+            lines.append(
+                f"- {point['name']} (lat {point['latitude']}, lon {point['longitude']}, "
+                f"elevation {point['elevation']} m): {metrics['observation_count']} observations, "
+                f"{metrics['distinct_event_count']} distinct viewing epochs, first "
+                f"{metrics['first_event_utc'] or 'none'}, last "
+                f"{metrics['last_event_utc'] or 'none'}, mean event spacing "
+                + ("none (fewer than two epochs)" if spacing is None else f"{spacing:.3f} h")
+            )
+            continue
         longest = max(point["gaps"], key=lambda g: g["duration_seconds"], default=None)
         revisit = metrics["mean_complete_revisit_seconds"]
         lines.append(

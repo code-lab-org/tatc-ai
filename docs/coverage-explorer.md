@@ -34,8 +34,9 @@ The pane contains:
   the instantaneous footprint from TATC `PointedInstrument.compute_footprint` and a
   boresight line from the satellite, sampled at the display step and interpolated
   between samples. Cesium loads only when this view opens.
-- **Table:** computed values and individual events, with CSV export. Selecting an
-  observation or gap seeks the shared clock to its midpoint.
+- **Table:** computed values and individual events, with CSV export of the current
+  table. Selecting an observation or gap seeks the shared clock to its midpoint, or
+  to its viewing epoch for a pointed or conical instrument.
 - **Inputs:** editable UTC analysis window, display sampling, circular-orbit
   altitude/inclination, sensor field of regard, pointed-instrument fields of view,
   roll and pitch, minimum access time, satellite/target lighting requirements, and
@@ -74,7 +75,9 @@ of a coverage or example result therefore carries the exact study: `analysis_id`
 UTC window, display step, satellites (supplied orbit and instrument field of
 regard), point coordinates, and per-point observation count, percent covered,
 longest gap in minutes (flagged when at a window boundary), and mean complete
-revisit in minutes or "none". It ends with a conditional, model-only note naming
+revisit in minutes or "none". A study with a pointed or conical instrument instead
+gives viewing-epoch counts, first and last epochs and mean event spacing, and states
+that continuous metrics are unavailable. It ends with a conditional, model-only note naming
 the call that re-shows the same study if the user later asks for another view:
 `visualize(view='example', presentation=<one>)` for the built-in example, or
 `visualize(view='coverage', analysis_id=..., presentation=<one>)` for a custom
@@ -240,8 +243,9 @@ resolved values are returned. CelesTrak must be reachable for catalog orbit requ
 Each satellite uses the native TATC `Satellite` JSON schema. Explicit instrument
 `name` and `field_of_regard` are required; other instrument defaults are preserved
 in the output. A `PointedInstrument` (with `cross_track_field_of_view` and
-`along_track_field_of_view`) keeps an access only if its footprint contains the
-point at the access midpoint, so roll and pitch change results. The model-visible
+`along_track_field_of_view`) keeps a viewing epoch only if its footprint contains
+the point when its view sweeps over it, so roll and pitch change results. A
+`ConicalInstrument` keeps each valid crossing of its scanned cone. The model-visible
 summary lists every supplied instrument setting. Circular and other Keplerian-family designs must specify an epoch
 with a timezone. Catalog satellites use `{"type": "omm", "elements": [records]}`
 in the orbit field, with the OMM records returned by the satellite-info tool;
@@ -276,9 +280,10 @@ studies the model should explain rather than approximate with invented inputs.
 ## Interpretation
 
 TATC `collect_observations` calculates event-based opportunities for each point,
-satellite, and instrument. This feature clips observations to the requested window
-and unions overlapping or touching intervals before computing uncovered time.
-Individual observations retain their satellite and instrument identities.
+satellite, and instrument. For basic field-of-regard instruments this feature clips
+observations to the requested window and unions overlapping or touching intervals
+before computing uncovered time. Individual observations retain their satellite and
+instrument identities.
 
 - **Time covered:** union duration divided by the requested window duration.
 - **Longest gap:** largest uncovered interval inside the window, including leading
@@ -287,6 +292,25 @@ Individual observations retain their satellite and instrument identities.
   coverage on both sides. Boundary gaps are excluded; the value is `null` when
   there are no complete gaps. This is an explicitly defined point-level metric,
   not TATC's gridded revisit aggregation.
+
+A study with any pointed or conical instrument uses the event-based accounting of
+the regional studies instead. TATC validates such an instrument's view only at each
+epoch; the wider field-of-regard period around it is kept as `envelope_start` and
+`envelope_end` metadata and is not viewing time.
+
+- **Viewing events:** valid TATC epochs in the half-open window `[start, end)`.
+  The timeline marks each epoch. The map's observation link is held 30 seconds
+  either side so playback can show it; that hold is not a viewing duration.
+- **Mean event spacing:** mean time between distinct epochs at a point; `null` with
+  fewer than two. It is not an uncovered interval. Median, minimum and maximum are
+  in the result too.
+- **Unavailable:** time covered, covered duration, gaps and revisit are `null`,
+  flagged by `continuous_viewing_duration_available` and
+  `continuous_uncovered_duration_available`. The charts and table do not offer them.
+- **Mixed studies:** a discrete event cannot be unioned with an interval, so one
+  pointed or conical instrument makes these metrics unavailable for the whole study.
+  Basic instruments keep their own intervals in the observation rows, outside event
+  spacing.
 
 TATC checks some instrument/illumination constraints at pass midpoints; reported
 intervals inherit those approximations. Opportunities are not scheduled or executed
