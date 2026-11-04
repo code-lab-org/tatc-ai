@@ -47,6 +47,7 @@ services:
       - ./apps/librechat/assets/tatc-workspace.js:/app/client/dist/assets/tatc-workspace.js:ro
       - ./apps/librechat/assets/tatc-workspace.css:/app/client/dist/assets/tatc-workspace.css:ro
       - ./apps/librechat/assets/install-workspace.cjs:/app/install-workspace.cjs:ro
+      - ./apps/librechat/assets/chatgpt-plan.js:/app/client/dist/assets/chatgpt-plan.js:ro
       - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-16x16.png:ro
       - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-32x32.png:ro
       - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/apple-touch-icon-180x180.png:ro
@@ -60,6 +61,12 @@ services:
           -e 's#href="assets/apple-touch-icon-180x180.png"#href="assets/apple-touch-icon-180x180.png?v=tatc-1"#' \
           /app/client/dist/index.html
         node /app/install-workspace.cjs
+        # Development only, like the chatgpt-bridge service it talks to.
+        version=$$(md5sum /app/client/dist/assets/chatgpt-plan.js | cut -c1-12)
+        sed -i \
+          -e 's#<script defer src="/assets/chatgpt-plan.js[^>]*></script>##' \
+          -e "s#</body>#<script defer src=\"/assets/chatgpt-plan.js?v=$$version\"></script></body>#" \
+          /app/client/dist/index.html
         exec npm run backend
     depends_on:
       - mongodb

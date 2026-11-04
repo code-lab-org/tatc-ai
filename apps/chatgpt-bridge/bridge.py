@@ -37,6 +37,8 @@ HOST = f"127.0.0.1:{PORT}"
 PAGE_URL = f"http://{HOST}"
 REDIRECT_URI = f"{PAGE_URL}/auth/callback"
 USAGE_URL = "https://chatgpt.com/settings/usage"
+# The TATC AI pages that may read the connection status, which includes the key.
+APP_ORIGINS = {"http://localhost:3080", "http://127.0.0.1:3080"}
 STATE_PATH = Path("/data/connection.json")
 # LibreChat's client silently retries 429 and 5xx for minutes, leaving an empty
 # reply, and OpenAI asks apps to pause at a usage limit. LangChain does not retry
@@ -499,6 +501,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
         elif route.path == "/":
             self.send_page()
+        elif route.path == "/status":
+            self.send_status()
         elif route.path == "/auth/callback":
             try:
                 connection.finish_sign_in(parse_qs(route.query))
@@ -514,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
             self.api(self.chat)
         elif not self.on_loopback():
             self.send_error(404)
-        elif self.headers.get("Origin") != f"http://{HOST}":
+        elif not self.allowed_origin(route):
             self.send_error(403)
         elif route == "/connect":
             try:
@@ -534,6 +538,30 @@ class Handler(BaseHTTPRequestHandler):
     def on_loopback(self):
         # Stops other websites reaching this page through DNS rebinding.
         return self.headers.get("Host") == HOST
+
+    def allowed_origin(self, route):
+        origin = self.headers.get("Origin")
+        return origin == f"http://{HOST}" or (route == "/connect" and origin in APP_ORIGINS)
+
+    def send_status(self):
+        origin = self.headers.get("Origin")
+        if origin not in APP_ORIGINS:
+            self.send_error(403)
+            return
+        payload = json.dumps({
+            "connected": connection.connected,
+            "plan_enabled": connection.plan_enabled,
+            "email": connection.state.get("email"),
+            "key": connection.state.get("key") if connection.connected else None,
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
 
     def send_page(self):
         page = render_page().encode()

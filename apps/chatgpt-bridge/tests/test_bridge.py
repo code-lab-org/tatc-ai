@@ -422,3 +422,46 @@ def test_page_keeps_the_origin_header_its_own_forms_need(server, monkeypatch):
 def test_null_origin_is_refused(server, monkeypatch):
     monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
     assert call(server, "POST", "/connect", {"Host": f"127.0.0.1:{server}", "Origin": "null"})[0] == 403
+
+
+def loopback(port, **headers):
+    return {"Host": f"127.0.0.1:{port}", **headers}
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:3080", "http://127.0.0.1:3080"])
+def test_app_can_read_status_with_the_key(server, monkeypatch, origin):
+    monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
+    client = HTTPConnection("127.0.0.1", server, timeout=5)
+    client.request("GET", "/status", headers=loopback(server, Origin=origin))
+    response = client.getresponse()
+    assert response.getheader("Access-Control-Allow-Origin") == origin
+    assert json.loads(response.read()) == {
+        "connected": True, "plan_enabled": True, "email": "a@example.com", "key": "bridge-key",
+    }
+
+
+@pytest.mark.parametrize("headers", [{"Origin": "https://evil.example"}, {"Origin": "null"}, {}])
+def test_other_sites_cannot_read_status(server, monkeypatch, headers):
+    monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
+    status, text = call(server, "GET", "/status", loopback(server, **headers))
+    assert status == 403
+    assert "bridge-key" not in text
+
+
+def test_status_is_not_served_on_other_hosts(server):
+    assert call(server, "GET", "/status", {"Host": "evil.example", "Origin": "http://localhost:3080"})[0] == 404
+
+
+def test_status_without_a_connection_has_no_key(server, monkeypatch):
+    monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
+    for field in ("access_token", "refresh_token"):
+        bridge.connection.state.pop(field)
+    _, text = call(server, "GET", "/status", loopback(server, Origin="http://localhost:3080"))
+    assert json.loads(text) == {"connected": False, "plan_enabled": True, "email": "a@example.com", "key": None}
+
+
+def test_app_can_start_sign_in_but_cannot_disconnect(server, monkeypatch):
+    monkeypatch.setattr(bridge, "HOST", f"127.0.0.1:{server}")
+    monkeypatch.setattr(bridge, "discovery", lambda: {"authorization_endpoint": "https://a/authorize"})
+    assert call(server, "POST", "/connect", loopback(server, Origin="http://localhost:3080"))[0] == 303
+    assert call(server, "POST", "/disconnect", loopback(server, Origin="http://localhost:3080"))[0] == 403
