@@ -1,9 +1,44 @@
 import json
 
+import pytest
 import requests
 
 from src import celestrak_client
 from test_celestrak_client import ISS_OMM
+
+
+@pytest.mark.parametrize("status", [429, 403])
+def test_rate_limit_status_survives_a_body_timeout(monkeypatch, status):
+    import pytest
+
+    now = [100000.0]
+    monkeypatch.setattr("src.celestrak_cache.time.time", lambda: now[0])
+    calls = []
+
+    class StalledResponse(requests.Response):
+        def __init__(self):
+            super().__init__()
+            self.status_code = status
+
+        def iter_content(self, chunk_size):
+            yield b"Excessive downloads temporarily blocked for 2 hours"
+            raise requests.Timeout("response body stalled")
+
+        def close(self):
+            pass
+
+    def get(*args, **kwargs):
+        calls.append(1)
+        return StalledResponse()
+
+    monkeypatch.setattr(requests, "get", get)
+    with pytest.raises(requests.RequestException, match=str(status)) as error:
+        celestrak_client.fetch_omm(25544)
+    assert "cache storage" not in str(error.value)
+    now[0] += 7199
+    with pytest.raises(requests.RequestException, match=f"{status}.*retry"):
+        celestrak_client.fetch_omm(20580)
+    assert len(calls) == 1
 
 
 def test_gp_cache_reuses_success(monkeypatch):
@@ -21,6 +56,94 @@ def test_gp_cache_reuses_success(monkeypatch):
     assert celestrak_client.fetch_omm(25544) == [ISS_OMM]
     assert celestrak_client.fetch_omm(25544) == [ISS_OMM]
     assert len(calls) == 1
+
+
+def test_invalid_response_values_are_not_reported_or_logged(monkeypatch, caplog):
+    import pytest
+
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps(
+        [{**ISS_OMM, "MEAN_MOTION": "token=sample-private-value"}]
+    ).encode()
+    response._content_consumed = True
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: response)
+    for norad_id in (25544, 20580):
+        with pytest.raises(requests.RequestException) as error:
+            celestrak_client.fetch_omm(norad_id)
+        assert "sample-private-value" not in str(error.value)
+    assert "sample-private-value" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "status, body, cause, paused",
+    [
+        (429, b"limited", "rate limit", True),
+        (
+            403,
+            b"Excessive downloads temporarily blocked for 2 hours",
+            "rate limit",
+            True,
+        ),
+        (503, b"maintenance", "service failure", True),
+        (404, b"missing", "not found", False),
+    ],
+)
+def test_http_failures_explain_the_cause_and_pause_state(
+    monkeypatch, status, body, cause, paused
+):
+    response = requests.Response()
+    response.status_code = status
+    response._content = body
+    response._content_consumed = True
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: response)
+    with pytest.raises(requests.RequestException) as error:
+        celestrak_client.fetch_omm(25544)
+    message = str(error.value)
+    assert f"HTTP {status}" in message
+    assert cause in message.lower()
+    if paused:
+        assert "downloads paused" in message and "UTC" in message
+    else:
+        assert "no service-wide pause" in message
+
+
+def test_failure_history_and_successful_recovery_are_reported(monkeypatch, caplog):
+    import logging
+
+    now = [100000.0]
+    monkeypatch.setattr("src.celestrak_cache.time.time", lambda: now[0])
+    caplog.set_level(logging.WARNING, logger="src.celestrak_cache")
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(1)
+        response = requests.Response()
+        response.status_code = 503 if len(calls) == 2 else 200
+        response._content = (
+            b"maintenance" if len(calls) == 2 else json.dumps([ISS_OMM]).encode()
+        )
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(requests, "get", get)
+    celestrak_client.fetch_omm(25544)
+    for _ in range(80):
+        celestrak_client.fetch_omm(25544)
+    with pytest.raises(requests.RequestException, match="503"):
+        celestrak_client.fetch_omm(20580)
+    warning = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    )
+    assert "cache_hit" in warning and "cache_miss" in warning
+    assert len(warning) < 5000
+    assert len(caplog.records) < 10
+    now[0] += 600
+    assert celestrak_client.fetch_omm(20580) == [ISS_OMM]
+    assert "recovered" in caplog.text
+    assert len(calls) == 3
 
 
 def test_rate_limit_pauses_other_queries_but_serves_cached_data(monkeypatch):
@@ -290,7 +413,11 @@ def test_full_cache_stops_downloads_until_expired_entries_are_reclaimed(monkeypa
         calls.append(url)
         response = requests.Response()
         response.status_code = 200
-        response._content = large_body
+        response._content = (
+            json.dumps([ISS_OMM]).encode()
+            if url == celestrak_client.GP_URL
+            else large_body
+        )
         response._content_consumed = True
         return response
 
@@ -299,12 +426,14 @@ def test_full_cache_stops_downloads_until_expired_entries_are_reclaimed(monkeypa
     with pytest.raises(requests.RequestException, match="cache is full"):
         celestrak_client.search_satellites_by_name("OTHER")
     with pytest.raises(requests.RequestException, match="cache is full"):
-        celestrak_client.search_satellites_by_name("THIRD")
+        celestrak_client.search_satellites_by_name("OTHER")
     assert len(calls) == 2
+    assert celestrak_client.fetch_omm(25544) == [ISS_OMM]
+    assert len(calls) == 3
     assert celestrak_client.search_satellites_by_name("TARGET")[0]["norad_id"] == 1
     now[0] += 43200
     assert celestrak_client.search_satellites_by_name("OTHER")[0]["norad_id"] == 1
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 def test_temporary_403_locks_for_two_hours_and_redacts_logs(monkeypatch, caplog):
@@ -373,3 +502,33 @@ def test_processes_coalesce_concurrent_misses(monkeypatch):
         assert process.exitcode == 0
     assert [queue.get(timeout=2) for _ in processes] == [[ISS_OMM]] * 4
     assert count.value == 1
+
+
+def test_cached_gp_does_not_wait_for_another_inflight_download(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    entered = Event()
+    release = Event()
+
+    def get(url, **kwargs):
+        if kwargs["params"]["CATNR"] == 20580:
+            entered.set()
+            assert release.wait(10), "stalled request was not released"
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps([ISS_OMM]).encode()
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(requests, "get", get)
+    assert celestrak_client.fetch_omm(25544) == [ISS_OMM]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        waiting = executor.submit(celestrak_client.fetch_omm, 20580)
+        try:
+            assert entered.wait(5)
+            cached = executor.submit(celestrak_client.fetch_omm, 25544)
+            assert cached.result(timeout=2) == [ISS_OMM]
+        finally:
+            release.set()
+            waiting.result(timeout=5)

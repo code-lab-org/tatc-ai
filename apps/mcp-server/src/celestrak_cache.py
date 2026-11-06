@@ -10,6 +10,7 @@ import sqlite3
 import time
 from contextlib import closing
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -30,18 +31,102 @@ def _retry_time(timestamp: float) -> str:
     )
 
 
+def _http_failure(status: int, body: bytes = b"") -> tuple[str, int]:
+    text = unescape(
+        re.sub(r"<[^>]*>", " ", body[:8192].decode("utf-8", errors="replace"))
+    )
+    text = " ".join(text.lower().split())
+    temporary = status == 429 or (
+        status == 403
+        and (
+            (
+                "excessive downloads" in text
+                and "temporar" in text
+                and ("2 hours" in text or "two hours" in text)
+            )
+            or "gp data has not updated since your last successful download" in text
+        )
+    )
+    if temporary:
+        return f"HTTP {status}: temporary rate limit", 7200
+    if status >= 500:
+        return f"HTTP {status}: service failure", 600
+    if 300 <= status < 400:
+        cause = "unexpected redirect"
+    else:
+        cause = {
+            400: "request rejected",
+            401: "access denied",
+            403: "access denied",
+            404: "requested resource not found",
+        }.get(status, "request failed")
+    return f"HTTP {status}: {cause}", 0
+
+
+def _record_activity(db: sqlite3.Connection, key: str, event: str) -> None:
+    db.execute(
+        "INSERT INTO activity (at, event, query_key) VALUES (?, ?, ?)",
+        (time.time(), event, key[:12]),
+    )
+    db.execute(
+        "DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY id DESC LIMIT 64)"
+    )
+    db.commit()
+
+
 def cached(
     url: str,
     params: dict[str, str | int],
     ttl: int,
     validate: Callable[[str], _T],
 ) -> _T:
-    """Fetch and validate a response once while holding a cross-process lock."""
+    """Return fresh cached data or serialize one validated upstream fetch."""
     path = Path(
         os.environ.get("CELESTRAK_CACHE_PATH", "~/.cache/tatc-ai/celestrak.sqlite3")
     ).expanduser()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        key = hashlib.sha256(
+            json.dumps([url, params], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if path.exists():
+            with closing(
+                sqlite3.connect(
+                    path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1
+                )
+            ) as reader:
+                try:
+                    row = reader.execute(
+                        "SELECT body FROM responses WHERE key=? AND expires>?",
+                        (key, time.time()),
+                    ).fetchone()
+                except sqlite3.OperationalError as exc:
+                    # A missing table is valid only while first-use initialization
+                    # holds the same lock used for all schema creation.
+                    if str(exc) != "no such table: responses":
+                        raise
+                    with open(str(path) + ".lock", "a+b") as initializing:
+                        try:
+                            fcntl.flock(initializing, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            row = None
+                        else:
+                            raise requests.RequestException(
+                                "CelesTrak cache storage contains an invalid schema"
+                            ) from exc
+            if row is not None:
+                try:
+                    result = validate(row[0].decode("utf-8"))
+                except (ValueError, TypeError, UnicodeError, AttributeError) as exc:
+                    raise requests.RequestException(
+                        "CelesTrak cache storage contains invalid data"
+                    ) from exc
+                try:
+                    with closing(sqlite3.connect(path, timeout=0)) as activity_db:
+                        _record_activity(activity_db, key, "cache_hit")
+                except sqlite3.Error:
+                    pass
+                return result
         with open(str(path) + ".lock", "a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             with closing(sqlite3.connect(path, timeout=60)) as db:
@@ -57,18 +142,17 @@ def cached(
                     "CREATE TABLE IF NOT EXISTS storage_check (id INTEGER PRIMARY KEY CHECK (id=1), value INTEGER NOT NULL)"
                 )
                 db.execute(
-                    "CREATE TABLE IF NOT EXISTS capacity_block (id INTEGER PRIMARY KEY CHECK (id=1), until REAL NOT NULL)"
+                    "CREATE TABLE IF NOT EXISTS capacity_failures (key TEXT PRIMARY KEY, until REAL NOT NULL)"
                 )
-                key = hashlib.sha256(
-                    json.dumps(
-                        [url, params], sort_keys=True, separators=(",", ":")
-                    ).encode()
-                ).hexdigest()
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY, at REAL NOT NULL, event TEXT NOT NULL, query_key TEXT NOT NULL)"
+                )
                 now = time.time()
                 row = db.execute(
                     "SELECT body FROM responses WHERE key=? AND expires>?", (key, now)
                 ).fetchone()
                 if row is not None:
+                    _record_activity(db, key, "cache_hit")
                     try:
                         return validate(row[0].decode("utf-8"))
                     except (ValueError, TypeError, UnicodeError, AttributeError) as exc:
@@ -76,7 +160,7 @@ def cached(
                             "CelesTrak cache storage contains invalid data"
                         ) from exc
                 full = db.execute(
-                    "SELECT until FROM capacity_block WHERE id=1"
+                    "SELECT until FROM capacity_failures WHERE key=?", (key,)
                 ).fetchone()
                 if full and full[0] > now:
                     raise requests.RequestException(
@@ -87,10 +171,11 @@ def cached(
                 ).fetchone()
                 if pause and pause[0] > now:
                     raise requests.RequestException(
-                        f"CelesTrak unavailable: {pause[1]}; retry after {_retry_time(pause[0])}."
+                        f"CelesTrak unavailable: {pause[1]}; downloads paused; retry after {_retry_time(pause[0])}."
                     )
                 # Commit reclamation before a fetch so storage failures fail closed.
                 db.execute("DELETE FROM responses WHERE expires<=?", (now,))
+                db.execute("DELETE FROM capacity_failures WHERE until<=?", (now,))
                 db.execute(
                     "INSERT INTO storage_check VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value=1-value"
                 )
@@ -102,7 +187,16 @@ def cached(
                     raise requests.RequestException(
                         "CelesTrak cache is full; wait for entries to expire."
                     )
+                if (
+                    db.execute("SELECT count(*) FROM capacity_failures").fetchone()[0]
+                    >= 1024
+                ):
+                    raise requests.RequestException(
+                        "CelesTrak cache capacity records are full; wait for entries to expire."
+                    )
+                _record_activity(db, key, "cache_miss")
                 reason, duration, status, excerpt, headers = None, 0, None, "", {}
+                chunks: list[bytes] = []
                 try:
                     response = requests.get(
                         url,
@@ -113,12 +207,13 @@ def cached(
                     )
                     try:
                         status = response.status_code
+                        if status != 200:
+                            reason, duration = _http_failure(status)
                         headers = {
                             name: str(response.headers[name])[:200]
                             for name in ("Content-Type", "Retry-After")
                             if name in response.headers
                         }
-                        chunks = []
                         size = 0
                         for chunk in response.iter_content(chunk_size=65536):
                             size += len(chunk)
@@ -127,7 +222,7 @@ def cached(
                                     "response exceeds the 50 MiB limit"
                                 )
                             chunks.append(chunk)
-                            if status != 200 and size >= 2048:
+                            if status != 200 and size >= 8192:
                                 break
                         body = b"".join(chunks)
                         excerpt = (
@@ -137,39 +232,24 @@ def cached(
                             .replace("\r", " ")
                         )
                         if status != 200:
-                            lower = (
-                                body[:2048].decode("utf-8", errors="replace").lower()
-                            )
-                            temporary = status == 429 or (
-                                status == 403
-                                and (
-                                    (
-                                        "excessive downloads" in lower
-                                        and "temporar" in lower
-                                        and ("2 hours" in lower or "two hours" in lower)
-                                    )
-                                    or "gp data has not updated since your last successful download"
-                                    in lower
-                                )
-                            )
-                            duration = (
-                                7200 if temporary else 600 if status >= 500 else 0
-                            )
-                            reason = f"HTTP {status}"
+                            reason, duration = _http_failure(status, body)
                         else:
                             try:
                                 text = body.decode("utf-8")
                                 result = validate(text)
                             except (ValueError, UnicodeError, TypeError) as exc:
-                                raise _ServiceFailure(
-                                    f"invalid response: {str(exc)[:200]}"
-                                ) from exc
+                                excerpt = "[invalid response body omitted]"
+                                raise _ServiceFailure("invalid response") from exc
                     finally:
                         response.close()
                 except requests.RequestException as exc:
-                    reason, duration = type(exc).__name__, 600
+                    if status is not None and status != 200:
+                        reason, duration = _http_failure(status, b"".join(chunks))
+                    else:
+                        reason, duration = type(exc).__name__, 600
                 except _ServiceFailure as exc:
-                    reason, duration = str(exc), 600
+                    if reason is None:
+                        reason, duration = str(exc), 600
                 if reason is not None:
                     now = time.time()
                     until = now + duration
@@ -179,6 +259,10 @@ def cached(
                             (until, reason),
                         )
                         db.commit()
+                    _record_activity(db, key, "download_failed")
+                    history = db.execute(
+                        "SELECT at, event, query_key FROM activity ORDER BY id DESC LIMIT 12"
+                    ).fetchall()
                     excerpt = re.sub(
                         r"(?i)bearer\s+[^\s<,;\"]+", "Bearer [redacted]", excerpt
                     )
@@ -188,7 +272,7 @@ def cached(
                         excerpt,
                     )
                     _LOG.warning(
-                        "CelesTrak failure at %s url=%s params=%s status=%s headers=%s reason=%s excerpt=%r",
+                        "CelesTrak failure at %s url=%s params=%s status=%s headers=%s reason=%s excerpt=%r recent_activity=%s",
                         _retry_time(now),
                         url,
                         str(params)[:500],
@@ -196,10 +280,17 @@ def cached(
                         headers,
                         reason,
                         excerpt,
+                        history,
                     )
                     message = f"CelesTrak unavailable: {reason}"
                     if duration:
-                        message += f"; retry after {_retry_time(until)}"
+                        message += (
+                            f"; downloads paused; retry after {_retry_time(until)}"
+                        )
+                    else:
+                        message += (
+                            "; this lookup stopped; no service-wide pause was applied"
+                        )
                     raise requests.RequestException(message)
                 used = db.execute(
                     "SELECT coalesce(sum(length(body)), 0) FROM responses"
@@ -210,8 +301,8 @@ def cached(
                     ).fetchone()[0]
                     if earliest is not None:
                         db.execute(
-                            "INSERT OR REPLACE INTO capacity_block VALUES (1, ?)",
-                            (earliest,),
+                            "INSERT OR REPLACE INTO capacity_failures VALUES (?, ?)",
+                            (key, earliest),
                         )
                         db.commit()
                     raise requests.RequestException(
@@ -222,7 +313,18 @@ def cached(
                     (key, time.time() + ttl, body),
                 )
                 db.commit()
+                _record_activity(db, key, "download_succeeded")
+                if pause:
+                    db.execute(
+                        "DELETE FROM cooldown WHERE id=1 AND until<=?", (time.time(),)
+                    )
+                    db.commit()
+                    _LOG.warning(
+                        "CelesTrak service recovered at %s", _retry_time(time.time())
+                    )
                 return result
+    except requests.RequestException:
+        raise
     except (OSError, sqlite3.Error) as exc:
         raise requests.RequestException(
             f"CelesTrak cache storage unavailable: {exc}"

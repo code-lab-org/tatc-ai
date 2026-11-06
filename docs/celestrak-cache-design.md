@@ -37,14 +37,16 @@ The [CelesTrak usage policy](https://celestrak.org/usage-policy.php) states that
 - Distinguish local validation errors and successful no-match responses from actual upstream non-200 responses. Existing tools accept identifiers and search terms, not arbitrary CelesTrak URLs, so an LLM cannot repair a broken server endpoint through its inputs.
 - Use SQLite at `CELESTRAK_CACHE_PATH`, defaulting to `~/.cache/tatc-ai/celestrak.sqlite3` for native runs. Compose mounts a dedicated volume at `/data/celestrak`. Hash the endpoint and sorted upstream query parameters for cache keys. Keep ranking and output limits outside the cached raw responses, so changing a search result limit does not repeat a download.
 - Serialize upstream fetches with a file lock shared across threads and processes that use the same cache path. This protects one application's shared store; it does not coordinate independent caches on different machines sharing a public IP.
+- Read fresh cached responses without waiting for that network lock. Cache-hit activity updates are best effort if SQLite is busy, so diagnostics do not delay usable cached data.
 - Bound cached response bodies to 50 MiB in total and bound individual response downloads. SQLite has additional bounded page/index/journal overhead, so the response-data budget is not an exact total disk-space cap.
+- If a downloaded response cannot fit, suppress another download of that same query until existing data expires, while allowing smaller unrelated responses to fit. Keep at most 1,024 such capacity-failure records; when that metadata is full, new misses fail closed until records expire. Cached responses remain usable.
 - Distinguish unusable upstream responses from legitimate HTTP 200 no-data responses. An unavailable satellite is not by itself evidence of a provider outage.
 - Exercise the public client functions using the regression cases below.
 - Suppress repeated diagnostic log entries as described below.
 
 ## Established constraints
 
-The configured MCP service runs one Python process and handles synchronous tools in worker threads. Concurrent calls can reach the cache. The deployment currently mounts only the OAuth data directory; a durable cache needs an explicitly mounted location. The client owns the application's direct CelesTrak HTTP calls.
+The configured MCP service runs one Python process and handles synchronous tools in worker threads. Concurrent calls can reach the cache. The deployment mounts separate OAuth and CelesTrak cache volumes. The client owns the application's direct CelesTrak HTTP calls.
 
 HTTP request timeouts govern the network fetch, not subsequent TAT-C calculations. Requests supports separate connection and read timeouts; its read timeout measures inactivity between received bytes, not a deadline for the whole download. These values do not establish a strict total wall-clock deadline. See [Requests timeout documentation](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts).
 
@@ -59,6 +61,8 @@ For each non-200 response, return a structured tool error that lets the chat exp
 CelesTrak's requirement is to report the failure to a human for investigation, not to send each incident to CelesTrak. Its GP FAQ suggests contacting CelesTrak when a block remains unexplained and supplying a screenshot of the error, including the affected IP address. Such escalation is distinct from the app's routine error reporting. No automatic external reporting is needed for the agreed app-and-log behavior.
 
 For diagnosis, retain the failed URL and parameters, HTTP status, relevant response headers, a bounded response-body excerpt, UTC failure time, and recent request/cache history. These distinguish an incorrect URL, repeated downloads, a provider outage, and a possible IP block.
+
+Keep at most 64 recent activity records in SQLite, containing event times, event types, and shortened query hashes. Include the latest 12 records in a failure's diagnostic log rather than writing a log line for every cached lookup. Record successful recovery once. Omit invalid HTTP 200 bodies and raw validation values from app errors and logs.
 
 ## Agreed log retention
 
