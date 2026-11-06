@@ -7,6 +7,17 @@ services:
     ports:
       - "8000:8000"
 
+  chatgpt-bridge:
+    build:
+      context: .
+      dockerfile: apps/chatgpt-bridge/Dockerfile
+    container_name: tatc-ai-chatgpt-bridge-dev
+    # Loopback only: the sign-in callback and connection page stay on this computer.
+    ports:
+      - "127.0.0.1:8788:8788"
+    volumes:
+      - chatgpt-bridge-data:/data
+
   mongodb:
     image: mongo:7
     container_name: tatc-ai-mongodb-dev
@@ -24,11 +35,19 @@ services:
       - APP_TITLE=TATC AI
       - CUSTOM_FOOTER=TATC AI · Powered by LibreChat
       - TATC_VIEWER_ORIGIN=http://localhost:8000
+      # People add their own keys in the chat settings.
+      - OPENAI_API_KEY=user_provided
+      - OPENAI_MODELS=gpt-6-astra,gpt-6.1-sol,gpt-6-luna
+      - ANTHROPIC_API_KEY=user_provided
+      - ANTHROPIC_MODELS=claude-opus-5-5,claude-sonnet-5-5
+      - GOOGLE_KEY=user_provided
+      - GOOGLE_MODELS=gemini-3.6-flash,gemini-3.5-flash-lite
     volumes:
       - ./apps/librechat/librechat.yaml:/app/librechat.yaml:ro
       - ./apps/librechat/assets/tatc-workspace.js:/app/client/dist/assets/tatc-workspace.js:ro
       - ./apps/librechat/assets/tatc-workspace.css:/app/client/dist/assets/tatc-workspace.css:ro
       - ./apps/librechat/assets/install-workspace.cjs:/app/install-workspace.cjs:ro
+      - ./apps/librechat/assets/chatgpt-plan.js:/app/client/dist/assets/chatgpt-plan.js:ro
       - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-16x16.png:ro
       - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/favicon-32x32.png:ro
       - ./apps/librechat/assets/tatc-favicon.png:/app/client/dist/assets/apple-touch-icon-180x180.png:ro
@@ -42,6 +61,12 @@ services:
           -e 's#href="assets/apple-touch-icon-180x180.png"#href="assets/apple-touch-icon-180x180.png?v=tatc-1"#' \
           /app/client/dist/index.html
         node /app/install-workspace.cjs
+        # Development only, like the chatgpt-bridge service it talks to.
+        version=$$(md5sum /app/client/dist/assets/chatgpt-plan.js | cut -c1-12)
+        sed -i \
+          -e 's#<script defer src="/assets/chatgpt-plan.js[^>]*></script>##' \
+          -e "s#</body>#<script defer src=\"/assets/chatgpt-plan.js?v=$$version\"></script></body>#" \
+          /app/client/dist/index.html
         exec npm run backend
     depends_on:
       - mongodb
@@ -51,3 +76,4 @@ services:
 
 volumes:
   mongodb-data:
+  chatgpt-bridge-data:
