@@ -4,17 +4,23 @@ The eval package checks how well ASU Voyager models use the MCP tools. It gives 
 
 ## Run the eval
 
-Run these commands from the repository root. By default, the eval runs the models LibreChat offers. Pass `--models` to try other models.
+Run these commands from the repository root. The routine model is `deepseek-v4-1-flash` only. It is checked against the LibreChat ASU Voyager catalog before any request; a missing catalog entry fails loudly instead of falling back to another model. Pass `--models` to select other catalog models explicitly, or `--all-models` to run all five.
 
 ```bash
 cd apps/mcp-server
-.venv312/bin/python -m eval.run_eval --label issue51-s1c-pointed --workers 4 --repeats 1
+timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label routine
+.venv312/bin/python -m eval.run_eval --label affected --repeats 3 --cases conical_amsr2_complete pointed_s1c_iw_complete point_study_explicit
+.venv312/bin/python -m eval.run_eval --label second-model --models glm-5-3 --cases conical_amsr2_complete pointed_s1c_iw_complete
 .venv312/bin/python -m eval.run_eval --compare /path/to/baseline.jsonl /path/to/current-run.jsonl
 ```
 
-The run writes a timestamped JSONL file under `eval/results/` and prints its summary. Replace the two comparison paths with existing result files; `--compare` summarizes saved runs and does not start a new model evaluation.
+Repeats default to 1 for a whole suite. Use repeat 3 for the cases affected by a change when the budget allows. Occasional second-model checks and an occasional `--all-models` run are manual, not routine. The `timeout -k` wrapper gives the batch a hard external deadline; keep a local job log with the owner, PID, start time, deadline, and checkpoint file.
 
-The eval reads the proxy key from `apps/librechat/.env` and sends prompts and tool schemas to the ASU proxy. A full run normally takes about half an hour but can take longer when model requests are slow or time out. It saves each completed conversation to the timestamped JSONL file. Use the Python 3.12 environment that matches the server Dockerfile, for example `apps/mcp-server/.venv312` if you created one.
+The eval reads the proxy key from `apps/librechat/.env` and sends prompts and tool schemas to the ASU proxy. One request is limited to 180 seconds and one complete conversation to 600 seconds. Override these with `--request-timeout` and `--conversation-timeout`. The harness retries at most once for a connection failure, 429, 502, or 503. It does not retry a read timeout, context overflow, or another client error. It bounds trickle reads and tool calls, and the external `timeout -k` covers the whole batch. A provider failure is recorded as unmeasured infrastructure failure, not a score; do not tune prompts or checkers to force a pass.
+
+The run writes a timestamped JSONL file under `eval/results/` and prints its summary. The default file keeps scores, counts, and small partial failure progress, not prompts, replies, or full tool text. A companion `-requests.jsonl` file records model, case, turn, attempt, request and response bytes, duration, token usage, request ID, and error category. Pass `--save-traces` only when full traces are needed for diagnosis. `--rescore` needs saved traces, so use `--save-traces` on runs you expect to rescore. Results and request records are ignored local artifacts. Replace the two comparison paths with existing result files; `--compare` summarizes saved runs and does not start a new model evaluation.
+
+Use the Python 3.12 environment that matches the server Dockerfile, for example `apps/mcp-server/.venv312` if you created one. Token usage plus total duration is all the record keeps; it cannot separate queue time, prefill, and decode time.
 
 The coverage cases include the legacy single-geometry workflow, the conical-scanning cases below, and a complete pointed Sentinel-1 IW case. `short_given` accepts either the legacy regional result or an equivalent named-point result, because the explorer now handles a 24-hour single-city request. `point_study_explicit` requires `analyze_coverage` with two catalog satellites and three named points.
 

@@ -70,6 +70,7 @@ class ServerTests(unittest.TestCase):
                 "finish_conical_study",
                 "prepare_pointed_study",
                 "finish_pointed_study",
+                "get_study_setup",
                 "get_pointed_events",
                 "get_pointed_daily",
                 "get_pointed_cells",

@@ -527,6 +527,20 @@ def test_complete_pointed_mcp_study_matches_independent_tatc_reference(case_id):
     assert summary["configuration_id"] == CONFIGURATION_ID
     assert summary["configuration_revision"] == CONFIGURATION_REVISION
     assert summary["approximation_status"] == "limited"
+    assert summary["snapshot"]["retrieve_with"] == "get_study_setup"
+    assert "excerpt" not in proposal["configuration"]["evidence"][0]
+
+    error, text, setup = _call(
+        "get_study_setup",
+        {
+            "result_id": summary["result_id"],
+            "setup_revision": proposal["setup_revision"],
+        },
+    )
+    assert not error, text
+    assert setup["configuration_digest"] == summary["configuration_digest"]
+    assert setup["setup_snapshot"]["configuration"]["evidence"][0]["excerpt"]
+    assert setup["warnings"] == summary["warnings"]
 
     error, text, fetched = _call(
         "get_pointed_events", {"result_id": summary["result_id"], "offset": 0, "limit": 10}
@@ -590,6 +604,9 @@ def test_complete_pointed_mcp_study_matches_independent_tatc_reference(case_id):
         assert not error, text
         assert payload["warnings"] == summary["warnings"]
         assert payload["configuration_id"] == CONFIGURATION_ID
+        assert payload["setup_revision"] == summary["setup_revision"]
+        assert payload["configuration_digest"] == summary["configuration_digest"]
+        assert payload["snapshot"]["result_id"] == summary["result_id"]
         assert key in payload
 
 

@@ -52,7 +52,7 @@ The local reference fixture independently constructs TAT-C `PointedInstrument`, 
 
 The MCP integration checks require identical event counts and satellite, instrument, and configuration identities, with corresponding event epochs within 1 ms. Position residuals compare independently propagated WGS84 satellite subpoints at the serialized MCP event epoch and the direct TAT-C event epoch; they do not measure the target point echoed by the event row. Both measured position residuals are 0.005 m, below the 1 m software-integration limit. The separate 1 ms epoch and 1 m position limits bound timestamp conversion and propagated-position comparison rounding; neither is a mission-accuracy validation.
 
-Pointed results use `accounting_method: "pointed_events_v1"`. A day counts a cell only when a valid event epoch falls in that half-open UTC day. Envelope start/end values remain event metadata; they are not continuous viewing time or confirmed acquisition. `get_pointed_events`, `get_pointed_daily`, `get_pointed_cells`, `get_pointed_revisit`, and `get_pointed_event_spacing` page through the saved result and keep the same limitations attached.
+Pointed results use `accounting_method: "pointed_events_v1"`. A day counts a cell only when a valid event epoch falls in that half-open UTC day. Envelope start/end values remain event metadata; they are not continuous viewing time or confirmed acquisition. `get_pointed_events`, `get_pointed_daily`, `get_pointed_cells`, `get_pointed_revisit`, and `get_pointed_event_spacing` page through the saved result and keep the same limitations and acceptance identity attached. Preparation, finish, and every fetched page return a compact `snapshot` reference; use `get_study_setup` with the result ID and exact `setup_revision` for the full accepted configuration, source evidence, and rationales.
 
 ## Conical-scanning studies
 
@@ -62,8 +62,10 @@ A study takes four calls:
 
 1. `begin_access_run` with exactly one satellite and an explicit UTC window.
 2. `set_access_region` with four numeric bounds.
-3. `prepare_conical_study` with draft ID and grid rows and columns, plus either one complete conical configuration or an exact registry `configuration_id` and `configuration_revision`. It validates and resolves the configuration but runs no calculation. It returns the region, grid, window, chosen source options, approximations, warnings, limits, and a `setup_revision`.
-4. `finish_conical_study` with the draft ID, the exact `setup_revision`, and `accept_setup=true` only after the researcher accepts the proposal.
+3. `prepare_conical_study` with draft ID and grid rows and columns, plus either one complete conical configuration or an exact registry `configuration_id` and `configuration_revision`. It validates and resolves the configuration but runs no calculation. It returns the region, grid, window, chosen source options, approximations, warnings, limits, a `setup_revision`, a `configuration_digest`, and a compact `snapshot` reference. The full configuration, evidence excerpts, and rationales stay in the temporary store.
+4. `finish_conical_study` with the draft ID, the exact `setup_revision`, and `accept_setup=true` only after the researcher accepts the proposal. Its compact result carries the same acceptance identity and snapshot reference.
+
+Use `get_study_setup` with the draft or result ID and optional exact `setup_revision` to retrieve the full immutable setup on demand. It validates the ID's expiry, study kind, and revision and never re-resolves the latest registry revision. A result keeps the accepted configuration and evidence even after a later registry change.
 
 The preparation step is a separate request form from legacy geometry. Do not pass `field_of_regard_deg` or `swath_width_km` to a conical study; do not pass a conical configuration to the legacy finish tool. A stale revision, changed region, changed grid, changed orbit, changed configuration, changed source choice, changed approximation, or changed software version fails before calculation. Preparing the same draft again replaces its proposal, so an older acceptance no longer applies.
 
@@ -122,7 +124,7 @@ The result uses `accounting_method: "conical_events_v1"`:
 
 ### Result fetches
 
-All conical fetches return the same accepted setup snapshot, selected registry ID and revision when applicable, source-change records, provenance, warnings, limits, and accounting definitions, plus `accounting_method`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
+All conical fetches return the same acceptance identity: `setup_revision`, `configuration_digest`, a `snapshot` reference, selected registry ID and revision when applicable, source-change records, compact provenance, warnings, limits, and accounting definitions, plus `accounting_method`. They do not repeat the full configuration or evidence on every page. Retrieve those with `get_study_setup` using the `result_id` and exact `setup_revision`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
 
 Cell replies carry provenance, warnings, and definitions once at the response level. Their GeoJSON metadata keeps the configuration and setup identity without repeating those records.
 

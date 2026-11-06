@@ -45,10 +45,10 @@ uses Python 3.12; run tests and evals with a matching environment.
 
 ```bash
 cd apps/mcp-server
-.venv/bin/python -m eval.run_eval --label mychange
+timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label mychange
 ```
 
-See the [evaluation guide](docs/evaluation.md) for API key setup, comparison runs, and streaming checks.
+The routine suite uses `deepseek-v4-1-flash` only, with one repeat and small local request records. See the [evaluation guide](docs/evaluation.md) for model selection, timeouts, comparison runs, full traces, and streaming checks.
 
 ## Development stack
 

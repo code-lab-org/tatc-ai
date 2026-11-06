@@ -67,6 +67,8 @@ class Trace:
     final: str = ""
     turns: int = 0
     stop: str = ""
+    error_category: str = ""
+    error: str = ""
 
 
 @dataclass

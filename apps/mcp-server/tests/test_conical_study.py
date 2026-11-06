@@ -534,7 +534,7 @@ def test_concurrent_mcp_conversations_have_isolated_refresh_state():
 
     def conversation(source_revision_id):
         class Harness:
-            def converse(self, _model, _prompt):
+            def converse(self, _model, _prompt, **_kwargs):
                 error, text, _ = _record_failed_refresh(source_revision_id)
                 assert not error, text
                 barrier.wait(timeout=10)
@@ -646,6 +646,10 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
     )
     assert not error, text
     old_result_id = old_summary["result_id"]
+    error, text, old_setup_before = _call(
+        "get_study_setup", {"result_id": old_result_id}
+    )
+    assert not error, text
 
     refreshed = _refresh_fixture_configuration()
     error, text, _ = _record_refresh(
@@ -664,11 +668,18 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
         "get_access_events", {"result_id": old_result_id, "offset": 0, "limit": 1}
     )
     assert not error, text
-    old_selection = old_events["provenance"]["setup_snapshot"]["registry_selection"]
+    error, text, old_setup = _call(
+        "get_study_setup", {"result_id": old_result_id}
+    )
+    assert not error, text
+    assert old_setup == old_setup_before
+    old_selection = old_setup["setup_snapshot"]["registry_selection"]
     assert old_events["configuration_revision"] == base_revision
+    assert old_events["snapshot"]["result_id"] == old_result_id
+    assert old_events["configuration_digest"] == old_setup["configuration_digest"]
     assert old_selection["source_change_notices"] == []
     assert (
-        old_events["provenance"]["setup_snapshot"]["configuration"]["geometry"]
+        old_setup["setup_snapshot"]["configuration"]["geometry"]
         ["scan_half_width"]["value"]
         == 75.332
     )
@@ -714,9 +725,14 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
         "get_access_events", {"result_id": new_summary["result_id"], "limit": 1}
     )
     assert not error, text
+    error, text, new_setup = _call(
+        "get_study_setup", {"result_id": new_summary["result_id"]}
+    )
+    assert not error, text
     assert new_events["registry_selection"]["revision"] == new_revision
+    assert new_events["configuration_digest"] == new_setup["configuration_digest"]
     assert (
-        new_events["provenance"]["setup_snapshot"]["configuration"]["geometry"]
+        new_setup["setup_snapshot"]["configuration"]["geometry"]
         ["scan_half_width"]["value"]
         == 72.0
     )
@@ -732,10 +748,9 @@ def test_explicit_registry_revisions_run_with_tatc_and_keep_saved_snapshots():
         error, text, page = _call(tool_name, arguments)
         assert not error, text
         assert page["registry_selection"]["revision"] == new_revision
-        assert (
-            page["provenance"]["setup_snapshot"]["configuration"]["revision"]
-            == new_revision
-        )
+        assert page["setup_revision"] == new_summary["setup_revision"]
+        assert page["configuration_digest"] == new_setup["configuration_digest"]
+        assert page["snapshot"]["result_id"] == new_summary["result_id"]
 
 
 def test_geometry_refresh_can_remove_optional_beam_width():
@@ -1173,19 +1188,29 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
         for conflict in summary["source_conflicts"]
     )
     assert summary["geometry_checks"]
-    assert summary["provenance"]["setup_snapshot"]["configuration"]["evidence"]
     assert summary["metrics"]["continuous_viewing_duration_available"] is False
     assert summary["metrics"]["continuous_uncovered_duration_available"] is False
     assert "envelope" in summary["definitions"]
     assert "daily_cell" in summary["definitions"]
     assert summary["provenance"]["setup_revision"] == proposal["setup_revision"]
+    assert summary["accepted_choices"][0]["chosen_option_id"] == "product-75deg"
+    assert summary["storage"]["retention_hours"] == 24
+    assert summary["snapshot"]["retrieve_with"] == "get_study_setup"
+    result_id = summary["result_id"]
+
+    error, text, setup = _call(
+        "get_study_setup",
+        {"result_id": result_id, "setup_revision": proposal["setup_revision"]},
+    )
+    assert not error, text
+    assert setup["configuration_digest"] == summary["configuration_digest"]
+    assert setup["setup_snapshot"]["configuration"]["evidence"]
     assert (
-        summary["provenance"]["setup_snapshot"]["configuration"]["configuration_id"]
+        setup["setup_snapshot"]["configuration"]["configuration_id"]
         == _config()["configuration_id"]
     )
-    assert summary["provenance"]["accepted_choices"][0]["chosen_option_id"] == "product-75deg"
-    assert summary["storage"]["retention_hours"] == 24
-    result_id = summary["result_id"]
+    assert setup["setup_snapshot"]["region"] == summary["roi_bbox"]
+    assert setup["warnings"] == summary["warnings"]
 
     error, text, events = _call(
         "get_access_events", {"result_id": result_id, "offset": 0, "limit": 2}
@@ -1196,6 +1221,8 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     assert events["events"][0]["envelope_start_utc"]
     assert events["events"][0]["configuration_id"] == _config()["configuration_id"]
     assert events["provenance"]["setup_revision"] == proposal["setup_revision"]
+    assert events["snapshot"]["result_id"] == result_id
+    assert events["snapshot"]["setup_revision"] == proposal["setup_revision"]
     error, text, second = _call(
         "get_access_events", {"result_id": result_id, "offset": 2, "limit": 2}
     )
@@ -1210,8 +1237,8 @@ def test_full_mcp_workflow_preserves_provenance_and_pages_events():
     assert daily["total_days"] == 1
     assert daily["daily"][0]["event_count"] == 4
     assert daily["daily"][0]["observed_cell_ids"] == [0, 1, 2, 3]
-    assert daily["provenance"]["setup_snapshot"]["configuration"]["configuration_id"]
-    assert daily["provenance"]["setup_snapshot"]["configuration"]["evidence"]
+    assert daily["configuration_digest"] == summary["configuration_digest"]
+    assert daily["snapshot"]["result_id"] == result_id
 
     error, text, cells = _call("get_access_cells", {"result_id": result_id})
     assert not error, text
@@ -1307,7 +1334,11 @@ def test_finish_freezes_accepted_stage_before_concurrent_edit(monkeypatch):
     error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
     assert not error, text
     assert summary["roi_bbox"] == accepted_bbox
-    assert summary["provenance"]["setup_snapshot"]["region"] == accepted_bbox
+    error, text, setup = _call(
+        "get_study_setup", {"result_id": summary["result_id"]}
+    )
+    assert not error, text
+    assert setup["setup_snapshot"]["region"] == accepted_bbox
     assert summary["summary_counts"]["observed_cell_count"] == 4
     assert result_store.get_draft(draft["draft_id"])["roi_bbox"] == [
         20.0,
@@ -1499,6 +1530,87 @@ def test_empty_modeled_result_is_distinct_from_unknown_access():
     )
 
 
+def test_compact_setup_reference_and_full_setup_getter():
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    proposal = _prepare(draft["draft_id"])
+    assert proposal["snapshot"]["draft_id"] == draft["draft_id"]
+    assert proposal["snapshot"]["retrieve_with"] == "get_study_setup"
+    assert proposal["configuration_digest"] == proposal["snapshot"][
+        "configuration_digest"
+    ]
+    assert "excerpt" not in proposal["configuration"]["evidence"][0]
+
+    error, text, setup = _call(
+        "get_study_setup",
+        {
+            "draft_id": draft["draft_id"],
+            "setup_revision": proposal["setup_revision"],
+        },
+    )
+    assert not error, text
+    assert setup["status"] == "awaiting_acceptance"
+    assert setup["configuration_digest"] == proposal["configuration_digest"]
+    assert setup["setup_snapshot"]["configuration"]["evidence"][0]["excerpt"]
+    assert setup["warnings"] == proposal["warnings"]
+
+    error, text, _ = _call(
+        "get_study_setup",
+        {"draft_id": draft["draft_id"], "setup_revision": "sha256:stale"},
+    )
+    assert error
+    assert "does not match" in text
+    error, text, _ = _call("get_study_setup", {"draft_id": "missing"})
+    assert error
+    assert "Unknown draft_id" in text
+
+    legacy_id = result_store.save_result({"result_kind": "legacy_intervals_v1"})
+    error, text, _ = _call("get_study_setup", {"result_id": legacy_id})
+    assert error
+    assert "not a conical or pointed study" in text
+
+    error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
+    assert not error, text
+    error, text, _ = _call(
+        "get_study_setup",
+        {"result_id": summary["result_id"], "study_kind": "pointed"},
+    )
+    assert error
+    assert "not pointed" in text
+    error, text, _ = _call(
+        "get_study_setup",
+        {"result_id": summary["result_id"], "setup_revision": "sha256:stale"},
+    )
+    assert error
+    assert "does not match" in text
+
+    for tool_name, arguments in (
+        ("get_access_events", {"result_id": summary["result_id"]}),
+        ("get_access_daily", {"result_id": summary["result_id"]}),
+        ("get_access_cells", {"result_id": summary["result_id"]}),
+        ("get_access_revisit", {"result_id": summary["result_id"]}),
+        (
+            "get_access_event_spacing",
+            {"result_id": summary["result_id"], "limit": 1},
+        ),
+    ):
+        error, text, page = _call(tool_name, arguments)
+        assert not error, text
+        assert page["setup_revision"] == summary["setup_revision"]
+        assert page["configuration_digest"] == summary["configuration_digest"]
+        assert page["snapshot"]["result_id"] == summary["result_id"]
+        assert page["snapshot"]["setup_revision"] == summary["setup_revision"]
+
+    result_store._results[summary["result_id"]]["saved_at"] -= (
+        result_store.TTL_SECONDS + 1
+    )
+    error, text, _ = _call(
+        "get_study_setup", {"result_id": summary["result_id"]}
+    )
+    assert error
+    assert "expired" in text.lower()
+
+
 def test_saved_snapshot_is_immutable_after_a_new_preparation():
     draft = _begin()
     _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
@@ -1506,7 +1618,8 @@ def test_saved_snapshot_is_immutable_after_a_new_preparation():
     error, text, summary = _finish(draft["draft_id"], first["setup_revision"])
     assert not error, text
     result_id = summary["result_id"]
-    saved_before = _call("get_access_daily", {"result_id": result_id})[2]
+    saved_before = _call("get_study_setup", {"result_id": result_id})[2]
+    page_before = _call("get_access_daily", {"result_id": result_id})[2]
 
     changed = copy.deepcopy(_config())
     changed["revision"] = "2026-10-27.2"
@@ -1514,10 +1627,13 @@ def test_saved_snapshot_is_immutable_after_a_new_preparation():
     second = _prepare(draft["draft_id"], 1, 1, changed)
     assert second["setup_revision"] != first["setup_revision"]
 
-    saved_after = _call("get_access_daily", {"result_id": result_id})[2]
-    assert saved_after["provenance"] == saved_before["provenance"]
+    saved_after = _call("get_study_setup", {"result_id": result_id})[2]
+    page_after = _call("get_access_daily", {"result_id": result_id})[2]
+    assert saved_after == saved_before
+    assert page_after["setup_revision"] == page_before["setup_revision"]
+    assert page_after["configuration_digest"] == page_before["configuration_digest"]
     assert (
-        saved_after["provenance"]["setup_snapshot"]["configuration"]["configuration_id"]
+        saved_after["setup_snapshot"]["configuration"]["configuration_id"]
         == _config()["configuration_id"]
     )
     assert saved_after["setup_revision"] == first["setup_revision"]
