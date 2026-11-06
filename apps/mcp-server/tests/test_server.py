@@ -77,6 +77,7 @@ class ServerTests(unittest.TestCase):
                 "get_mixed_event_spacing",
                 "prepare_pointed_study",
                 "finish_pointed_study",
+                "get_study_setup",
                 "get_pointed_events",
                 "get_pointed_daily",
                 "get_pointed_cells",

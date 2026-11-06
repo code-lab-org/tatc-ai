@@ -33,6 +33,7 @@ from .conical_study import get_mixed_revisit as _mixed_revisit
 from .conical_study import prepare_conical_study as _prepare_conical
 from .conical_study import prepare_mixed_study as _prepare_mixed
 from .conical_study import finish_pointed_study as _finish_pointed
+from .conical_study import get_study_setup as _get_study_setup
 from .conical_study import get_pointed_cells as _pointed_cells
 from .conical_study import get_pointed_daily as _pointed_daily
 from .conical_study import get_pointed_event_spacing as _pointed_event_spacing
@@ -188,10 +189,12 @@ SERVER_INSTRUCTIONS = (
     "spacing is null with fewer than two distinct events at a cell. Use the "
     "viewing-event fetch tool for paged epochs, the event-spacing fetch tool "
     "for paged per-cell spacing, and the usual daily, cell, and revisit fetches "
-    "for the other views. Every conical fetch returns the accepted setup "
-    "snapshot, provenance, warnings, and accounting definitions. Results and "
-    "drafts expire after 24 hours and can be lost earlier on restart or "
-    "capacity eviction. Study-specific settings are not promoted to a shared "
+    "for the other views. Preparation, finish, and paged fetches carry the "
+    "accepted setup revision, configuration digest, and a snapshot reference; "
+    "use the study setup getter with the draft or result ID to retrieve the full "
+    "configuration, evidence excerpts, rationales, warnings, and definitions. "
+    "Results and drafts expire after 24 hours and can be lost earlier on restart "
+    "or capacity eviction. Study-specific settings are not promoted to a shared "
     "registry. "
     "For a side-looking radar, use the pointed preparation and finish workflow. "
     "Inspect the spacecraft-specific registry record, choose an exact revision, "
@@ -1655,6 +1658,36 @@ def finish_pointed_study(
 ) -> Dict[str, Any]:
     """Run only the current accepted pointed study proposal."""
     return _finish_pointed(draft_id, accepted_setup_revision, accept_setup)
+
+
+@mcp.tool
+def get_study_setup(
+    draft_id: Optional[str] = None,
+    result_id: Optional[str] = None,
+    setup_revision: Optional[str] = None,
+    study_kind: Optional[Literal["conical", "pointed"]] = None,
+) -> Dict[str, Any]:
+    """Retrieve the full immutable setup for one draft or saved result.
+
+    Preparation, finish, and paged fetch responses are compact: they carry the
+    accepted setup revision, configuration digest, and a snapshot reference.
+    Use this tool with exactly one of draft_id or result_id to retrieve the
+    complete configuration, evidence excerpts, rationales, warnings, and
+    limits. Pass setup_revision to verify the acceptance identity. The getter
+    reads only the temporary store and never re-resolves the latest registry
+    revision. Results and drafts expire after 24 hours.
+
+    Args:
+        draft_id: Draft ID whose prepared setup should be returned.
+        result_id: Saved conical or pointed result ID to return.
+        setup_revision: Optional exact setup revision to verify.
+        study_kind: Optional conical or pointed kind to verify.
+
+    Returns:
+        The full setup snapshot or an honest unknown, expired, kind, or
+        revision error.
+    """
+    return _get_study_setup(draft_id, result_id, setup_revision, study_kind)
 
 
 @mcp.tool

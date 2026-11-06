@@ -114,6 +114,85 @@ def _omm_hash(omm_records: Sequence[Dict[str, Any]]) -> str:
     return _sha256(list(omm_records))
 
 
+def _snapshot_reference(
+    *,
+    setup_revision: str,
+    configuration_digest: str,
+    study_kind: str,
+    draft_id: Optional[str] = None,
+    result_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Point at the full immutable setup without repeating it."""
+    reference = {
+        "retrieve_with": "get_study_setup",
+        "study_kind": study_kind,
+        "setup_revision": setup_revision,
+        "configuration_digest": configuration_digest,
+    }
+    if draft_id:
+        reference["draft_id"] = draft_id
+    if result_id:
+        reference["result_id"] = result_id
+    return reference
+
+
+def _compact_configuration(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep consequential configuration fields and reference full evidence.
+
+    The complete snapshot, including every evidence excerpt and rationale,
+    remains in the temporary draft or result store and is returned by the
+    study setup getter.
+    """
+    keys = (
+        "schema_version",
+        "configuration_id",
+        "revision",
+        "instrument",
+        "spacecraft",
+        "operating_mode",
+        "channel",
+        "geometry",
+        "applicability",
+        "source_revision",
+        "tatc_mapping",
+        "software",
+    )
+    compact = {key: snapshot[key] for key in keys if key in snapshot}
+    compact["evidence"] = [
+        {
+            "evidence_id": evidence["evidence_id"],
+            "authority": evidence["authority"],
+            "title": evidence["title"],
+            "url": evidence["url"],
+            "document_revision": evidence["document_revision"],
+            "locator": evidence["locator"],
+            "supports": evidence["supports"],
+        }
+        for evidence in snapshot.get("evidence", [])
+    ]
+    compact["evidence_note"] = (
+        "Full evidence excerpts and interpretations are retained in the "
+        "temporary store. Retrieve them with get_study_setup."
+    )
+    return compact
+
+
+def _summary_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the small accepted-provenance record without the full snapshot."""
+    provenance = payload["provenance"]
+    return {
+        key: provenance[key]
+        for key in (
+            "setup_revision",
+            "accepted_setup_revision",
+            "accepted_at_utc",
+            "orbit",
+            "software",
+        )
+        if key in provenance
+    }
+
+
 def _parse_window(stage: Dict[str, Any]) -> Tuple[datetime, datetime]:
     return (
         _parse_utc(stage["window_start_utc"], "window_start_utc"),
@@ -463,13 +542,20 @@ def _proposal_payload(
         "draft_id": stage.get("draft_id"),
         "status": "awaiting_acceptance",
         "setup_revision": setup_revision,
+        "configuration_digest": consequential["configuration_digest"],
+        "snapshot": _snapshot_reference(
+            setup_revision=setup_revision,
+            configuration_digest=consequential["configuration_digest"],
+            study_kind=study_kind,
+            draft_id=str(stage.get("draft_id") or ""),
+        ),
         "satellite": stage["satellite"],
         "satellites": _public_satellites(stage),
         "instrument": configuration.instrument,
         "configuration_id": configuration.configuration_id,
         "configuration_revision": configuration.revision,
         "registry_selection": registry_selection,
-        "configuration": snapshot,
+        "configuration": _compact_configuration(snapshot),
         "window_start_utc": iso_utc(start),
         "window_end_utc_exclusive": iso_utc(end),
         "window_duration_hours": round((end - start).total_seconds() / 3600, 3),
@@ -518,7 +604,9 @@ def _proposal_payload(
             "Ask the researcher to accept this proposal. If accepted, call the "
             f"{study_kind} finish tool with draft_id, accepted_setup_revision set to "
             f"{setup_revision!r}, and accept_setup=true. Do not add legacy "
-            f"geometry arguments to the {study_kind} finish call."
+            f"geometry arguments to the {study_kind} finish call. Full evidence "
+            "excerpts and rationales remain available through the study setup "
+            "getter with this draft ID and setup revision."
         ),
     }
 
@@ -610,17 +698,23 @@ def _prepare_study(
         study_kind,
     )
     proposal["draft_id"] = str(draft_id).strip()
+    proposal["snapshot"]["draft_id"] = proposal["draft_id"]
     _set_proposal(
         draft_id,
         study_kind,
         {
+            "study_kind": study_kind,
             "setup_revision": setup_revision,
+            "configuration_digest": consequential["configuration_digest"],
             "grid_rows": int(grid_rows),
             "grid_columns": int(grid_columns),
             "configuration": snapshot,
             "registry_selection": registry_selection,
             "consequential": consequential,
             "consequential_settings": proposal["consequential_settings"],
+            "warnings": proposal["warnings"],
+            "limits": proposal["limits"],
+            "evidence_note": proposal["evidence_note"],
             "prepared_at_utc": iso_utc(_utcnow()),
         },
     )
@@ -1580,6 +1674,7 @@ def _result_payload(
         "accounting_method": accounting_method,
         "setup_revision": accepted_setup_revision,
         "accepted_setup_revision": accepted_setup_revision,
+        "configuration_digest": _sha256(snapshot),
         "satellite": stage["satellite"],
         "satellites": _public_satellites(stage),
         "instrument": configuration.instrument,
@@ -1672,6 +1767,13 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "result_kind": full["result_kind"],
         "accounting_method": full["accounting_method"],
         "setup_revision": full["setup_revision"],
+        "configuration_digest": full["configuration_digest"],
+        "snapshot": _snapshot_reference(
+            setup_revision=full["setup_revision"],
+            configuration_digest=full["configuration_digest"],
+            study_kind=full["result_kind"].removesuffix("_study"),
+            result_id=result_id,
+        ),
         "satellite": full["satellite"],
         "instrument": full["instrument"],
         "configuration_id": full["configuration_id"],
@@ -1700,7 +1802,8 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "interpretation": full["interpretation"],
         "warnings": full["warnings"],
         "limits": full["limits"],
-        "provenance": full["provenance"],
+        "provenance": _summary_provenance(full),
+        "accepted_choices": full["provenance"]["accepted_choices"],
         "storage": full["storage"],
         "evidence_note": full["evidence_note"],
         "fetch": (
@@ -1718,6 +1821,8 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
             )
         )
         + (
+            "Use the study setup getter with this result ID and setup revision for "
+            "the full accepted configuration, evidence excerpts, and rationales. "
             "Do not describe field-of-regard periods as continuous viewing. Results "
             "expire after 24 hours."
         ),
@@ -1935,6 +2040,13 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "result_kind": payload["result_kind"],
         "accounting_method": payload["accounting_method"],
         "setup_revision": payload["setup_revision"],
+        "configuration_digest": payload["configuration_digest"],
+        "snapshot": _snapshot_reference(
+            setup_revision=payload["setup_revision"],
+            configuration_digest=payload["configuration_digest"],
+            study_kind=payload["result_kind"].removesuffix("_study"),
+            result_id=result_id,
+        ),
         "satellite": payload["satellite"],
         "instrument": payload["instrument"],
         "configuration_id": payload["configuration_id"],
@@ -1942,7 +2054,8 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "registry_selection": payload["registry_selection"],
         "window_start_utc": payload["window_start_utc"],
         "window_end_utc_exclusive": payload["window_end_utc_exclusive"],
-        "provenance": payload["provenance"],
+        "provenance": _summary_provenance(payload),
+        "accepted_choices": payload["provenance"]["accepted_choices"],
         "warnings": payload["warnings"],
         "limits": payload["limits"],
         "completeness_status": payload["completeness_status"],
@@ -2150,6 +2263,132 @@ def get_pointed_event_spacing(
     return get_conical_event_spacing(
         result_id, offset, limit, _expected_result_kind="pointed_study"
     )
+
+
+def get_study_setup(
+    draft_id: Any = None,
+    result_id: Any = None,
+    setup_revision: Any = None,
+    study_kind: Any = None,
+) -> Dict[str, Any]:
+    """Return the full immutable setup snapshot for one draft or saved result.
+
+    The setup getter reads only the temporary store. It never resolves the
+    latest registry revision, so a saved result keeps the configuration,
+    evidence, rationales, warnings, and limits that were accepted for it.
+    Pass setup_revision to reject a stale or mismatched acceptance identity.
+    """
+    if (draft_id is None) == (result_id is None):
+        raise ValueError("Supply exactly one of draft_id or result_id")
+    if study_kind is not None and study_kind not in ("conical", "pointed"):
+        raise ValueError("study_kind must be conical or pointed")
+    revision_filter = None
+    if setup_revision is not None:
+        if not isinstance(setup_revision, str) or not setup_revision.strip():
+            raise ValueError("setup_revision must be a non-empty revision string")
+        revision_filter = setup_revision.strip()
+
+    if draft_id is not None:
+        stage = copy.deepcopy(_get_draft(draft_id))
+        proposals = {
+            kind: stage[f"{kind}_proposal"]
+            for kind in ("conical", "pointed")
+            if stage.get(f"{kind}_proposal")
+        }
+        if not proposals:
+            raise ValueError(
+                "This draft has no prepared conical or pointed proposal. "
+                "Prepare a study first"
+            )
+        if study_kind is not None:
+            if study_kind not in proposals:
+                raise ValueError(
+                    f"This draft has no prepared {study_kind} proposal. "
+                    "Prepare that study kind first"
+                )
+            kind = study_kind
+        elif len(proposals) == 1:
+            kind = next(iter(proposals))
+        else:
+            raise ValueError(
+                "This draft has both conical and pointed proposals. Pass "
+                "study_kind to select the exact setup"
+            )
+        proposal = proposals[kind]
+        revision = proposal["setup_revision"]
+        if revision_filter is not None and revision_filter != revision:
+            raise ValueError(
+                f"Setup revision {revision_filter!r} does not match the current "
+                f"{kind} proposal {revision!r}. Prepare the study again if a "
+                "consequential setting changed"
+            )
+        consequential = proposal["consequential"]
+        snapshot = proposal["configuration"]
+        digest = proposal["configuration_digest"]
+        setup_snapshot = {
+            "configuration": snapshot,
+            "window": {
+                "start_utc": consequential["window_start_utc"],
+                "end_utc_exclusive": consequential["window_end_utc_exclusive"],
+            },
+            "region": consequential["roi_bbox"],
+            "grid": consequential["grid"],
+            "satellite": consequential["satellite"],
+            "source_choices": consequential["source_choices"],
+            "registry_selection": proposal.get("registry_selection"),
+            "approximation_ids": consequential["approximation_ids"],
+            "applicability": consequential["applicability"],
+            "consequential_settings": proposal["consequential_settings"],
+        }
+        return {
+            "draft_id": str(draft_id).strip(),
+            "study_kind": kind,
+            "result_kind": f"{kind}_study",
+            "status": "awaiting_acceptance",
+            "setup_revision": revision,
+            "configuration_digest": digest,
+            "setup_snapshot": setup_snapshot,
+            "warnings": proposal.get("warnings", []),
+            "limits": proposal.get("limits", []),
+            "evidence_note": proposal.get("evidence_note", EVIDENCE_NOTE),
+            "storage": _storage_note(),
+        }
+
+    payload = _get_saved(result_id)
+    result_kind = payload.get("result_kind")
+    if result_kind not in ("conical_study", "pointed_study"):
+        raise ValueError(
+            "This result is not a conical or pointed study. The setup getter "
+            "only returns instrument-study setups"
+        )
+    kind = result_kind.removesuffix("_study")
+    if study_kind is not None and study_kind != kind:
+        raise ValueError(
+            f"Result {str(result_id).strip()!r} is a {kind} study, not "
+            f"{study_kind}"
+        )
+    revision = payload["setup_revision"]
+    if revision_filter is not None and revision_filter != revision:
+        raise ValueError(
+            f"Setup revision {revision_filter!r} does not match result "
+            f"{str(result_id).strip()!r} at {revision!r}. The saved setup is "
+            "immutable; use its recorded revision"
+        )
+    setup_snapshot = copy.deepcopy(payload["provenance"]["setup_snapshot"])
+    digest = payload["configuration_digest"]
+    return {
+        "result_id": str(result_id).strip(),
+        "study_kind": kind,
+        "result_kind": result_kind,
+        "status": "accepted",
+        "setup_revision": revision,
+        "configuration_digest": digest,
+        "setup_snapshot": setup_snapshot,
+        "warnings": payload["warnings"],
+        "limits": payload["limits"],
+        "evidence_note": payload["evidence_note"],
+        "storage": payload["storage"],
+    }
 
 
 def _mixed_scope(
