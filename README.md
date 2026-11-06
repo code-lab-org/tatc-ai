@@ -9,6 +9,7 @@ Stub monorepo for an application stack with:
 
 - `apps/mcp-server` - FastMCP server stub and Dockerfile
 - `apps/librechat` - LibreChat environment stub
+- `apps/chatgpt-bridge` - local sign-in and request translation for ChatGPT plans
 - `docker-compose.dev.yml` - local development stack with direct ports
 - `docker-compose.deploy.yml` - deployment stack using image-based services, Traefik, and Dex
 - `config/dex/start-dex.sh` - Dex startup script that renders config from environment variables
@@ -68,16 +69,19 @@ The routine suite uses `deepseek-v4-1-flash` only, with one repeat and small loc
 Runs with localhost/direct port access:
 - MCP server: `http://localhost:8000`
 - LibreChat: `http://localhost:3080`
+- ChatGPT plan sign-in: `http://127.0.0.1:8788`
 - MongoDB: `localhost:27017`
 
-Before starting the development stack, create the private LibreChat env file
-and set `VOYAGER_API_KEY` to your ASU Research Computing key and
-`CREATEAI_API_KEY` to your ASU CreateAI key. Keep the base URLs as given:
+Before starting the development stack, create the private LibreChat env file.
+To use the ASU models, set `VOYAGER_API_KEY` to your ASU Research Computing key
+and `CREATEAI_API_KEY` to your ASU CreateAI key, and keep the base URLs as given.
+Without ASU credentials, leave the placeholders and use your own API key or
+ChatGPT plan instead; see the [provider guide](docs/providers.md):
 
 ```bash
 cp apps/librechat/.env.example apps/librechat/.env
 chmod 600 apps/librechat/.env
-# edit apps/librechat/.env and set VOYAGER_API_KEY and CREATEAI_API_KEY
+# for ASU models, edit apps/librechat/.env and set VOYAGER_API_KEY and CREATEAI_API_KEY
 ```
 
 ```bash
@@ -95,6 +99,9 @@ LibreChat is configured with these model labels:
   - Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, Gemini 3 Flash, Gemini 3.1 Flash-Lite, Gemini 3.1 Pro, Gemini 3.5 Flash, Gemini 3.7 Flash.
   - Gemma 4 31B IT, Llama 4 Maverick 17B, Llama 4 Scout 17B, Muse Glimmer 30B.
   - GPT-OSS 20B, GPT-OSS 120B, GPT-4o mini, GPT-4.1, GPT-4.1 mini, o3, GPT-5, GPT-5 mini, GPT-5 nano, GPT-5.1, GPT-5.1 Instant, GPT-5.1 Thinking, GPT-5.2, GPT-5.2 Pro, GPT-5.4 mini, GPT-5.4 nano, GPT-5.4 Thinking, GPT-5.4 Pro, GPT-5.5, GPT-5.5 Thinking, GPT-5.5 Pro, GPT-5.6 Luna, GPT-5.6 Sol, GPT-5.6 Terra, GPT-6 Astra.
+
+- **Your own API key:** OpenAI, Anthropic, Google, and OpenRouter models.
+- **ChatGPT plan (local only):** GPT-6.1 Sol, GPT-6 Astra, GPT-6 Luna.
 
 ## Deployment stack
 
