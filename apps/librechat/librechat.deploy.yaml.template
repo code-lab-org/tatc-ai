@@ -849,6 +849,7 @@ modelSpecs:
         endpoint: openAI
         model: gpt-6-astra
         modelLabel: OpenAI key
+        useResponsesApi: true
         maxContextTokens: 1050000
     - name: openai-gpt-6-1-sol
       label: GPT-6.1 Sol · OpenAI key
@@ -863,6 +864,7 @@ modelSpecs:
         endpoint: openAI
         model: gpt-6.1-sol
         modelLabel: OpenAI key
+        useResponsesApi: true
         maxContextTokens: 1050000
     - name: openai-gpt-6-luna
       label: GPT-6 Luna · OpenAI key
@@ -877,6 +879,7 @@ modelSpecs:
         endpoint: openAI
         model: gpt-6-luna
         modelLabel: OpenAI key
+        useResponsesApi: true
         maxContextTokens: 1050000
     - name: anthropic-opus-5-5
       label: Claude Opus 5.5 · Anthropic key
