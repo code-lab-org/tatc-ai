@@ -1,0 +1,7 @@
+{
+  "name": "tatc-viewer-assets",
+  "private": true,
+  "dependencies": {
+    "cesium": "1.146.0"
+  }
+}

@@ -34,6 +34,10 @@ docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp
 
 See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical and pointed-instrument studies.
 
+The **Study** button in LibreChat opens a research pane filled by the `visualize`
+tool: coverage results, charts, timelines, tables with CSV export, and 2D/3D
+Cesium maps with editable inputs. See the [coverage explorer guide](docs/coverage-explorer.md).
+
 ### Tool-calling eval
 
 The eval checks how well Voyager models use the MCP tools. The server image

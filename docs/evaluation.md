@@ -16,7 +16,7 @@ The run writes a timestamped JSONL file under `eval/results/` and prints its sum
 
 The eval reads the proxy key from `apps/librechat/.env` and sends prompts and tool schemas to the ASU proxy. A full run normally takes about half an hour but can take longer when model requests are slow or time out. It saves each completed conversation to the timestamped JSONL file. Use the Python 3.12 environment that matches the server Dockerfile, for example `apps/mcp-server/.venv312` if you created one.
 
-The coverage cases include the legacy single-geometry workflow, conical and pointed studies, and two mixed-study cases:
+The coverage cases include the legacy single-geometry workflow, the conical-scanning cases below, a complete pointed Sentinel-1 IW case, and two mixed-study cases. `short_given` accepts either the legacy regional result or an equivalent named-point result, because the explorer now handles a 24-hour single-city request. `point_study_explicit` requires `analyze_coverage` with two catalog satellites and three named points.
 
 - `conical_amsr2_complete`: a study-specific sourced AMSR2 configuration with conflicting nominal/product sector choices and declared approximations. The model must prepare, accept the current revision, run, fetch viewing events, and preserve cell-center and envelope limits. It uses the study-specific fixture with its own ID and revision; the reviewed shared entry is the independent TAT-C reference target.
 - `conical_amsr2_registry_selection`: the model must look up the reviewed shared configuration, leave lookup unselected, prepare with the exact configuration ID and revision the researcher chose, and retain that revision in the result.

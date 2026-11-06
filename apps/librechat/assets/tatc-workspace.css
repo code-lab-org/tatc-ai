@@ -1,0 +1,137 @@
+.tatc-pane-open #root {
+  width: calc(100% - var(--tatc-pane-width, 650px)) !important;
+}
+#tatc-study-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 7px;
+  height: 36px;
+  margin-left: 8px;
+  padding: 0 11px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--presentation);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+#tatc-study-toggle:hover,
+#tatc-study-toggle[aria-expanded="true"] {
+  background: var(--surface-hover);
+}
+#tatc-study-toggle:focus-visible,
+.tatc-pane-header button:focus-visible {
+  outline: 2px solid #8bbcc2;
+  outline-offset: 2px;
+}
+#tatc-study-pane[hidden] {
+  display: none;
+}
+.tatc-study-empty {
+  margin: auto;
+  max-width: 320px;
+  padding: 32px;
+  text-align: center;
+  color: #a3a7ae;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.tatc-study-empty h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #e8e9eb;
+}
+.tatc-study-empty p {
+  margin: 0;
+}
+#tatc-study-pane {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: var(--tatc-pane-width, 650px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: #25272a;
+  color: #e8e9eb;
+  border-left: 1px solid #ffffff1a;
+  font:
+    12px Inter,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+.tatc-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 6px 10px 6px 16px;
+  gap: 16px;
+  color: #a3a7ae;
+}
+.tatc-pane-title {
+  color: #e8e9eb;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tatc-pane-header button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 20px;
+  line-height: 28px;
+  cursor: pointer;
+  border-radius: 4px;
+  width: 32px;
+}
+.tatc-pane-header button:hover {
+  background: #ffffff0c;
+  color: white;
+}
+#tatc-study-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  display: block;
+}
+.tatc-pane-resize {
+  position: absolute;
+  inset: 0 auto 0 -4px;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.tatc-pane-resize:focus-visible {
+  outline: 2px solid #8bbcc2;
+  outline-offset: -2px;
+}
+#tatc-study-pane.resizing iframe {
+  pointer-events: none;
+}
+@media (max-width: 800px) {
+  .tatc-pane-open #root {
+    width: 100% !important;
+  }
+  #tatc-study-pane {
+    width: 100%;
+  }
+  .tatc-pane-resize {
+    display: none;
+  }
+  .tatc-pane-header {
+    padding-left: 16px;
+  }
+}
