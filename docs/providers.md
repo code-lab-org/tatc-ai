@@ -31,7 +31,9 @@ LibreChat encrypts each key and keeps it with your account, so other accounts ca
 
 The model lists are short and chosen by hand. To offer another model, add it to `modelSpecs` in both LibreChat files. For OpenAI, Anthropic, and Google, also add it to the `*_MODELS` settings in both compose files. For OpenRouter, add it to that endpoint's `models` list. Set `maxContextTokens` if LibreChat does not know the model, because the TATC tool definitions alone are too large for its small default.
 
-Claude Haiku 5.5 is not offered because LibreChat 0.8.7 sends it a thinking setting that Anthropic's newer models do not accept.
+OpenAI model specs set `useResponsesApi: true` because `/v1/chat/completions` rejects function tools on models that reason by default, such as GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna.
+
+Claude Haiku 5.5 is not offered as a chat model because LibreChat 0.8.7 sends it a thinking setting that Anthropic's newer models do not accept. It does write conversation titles for Anthropic chats, because LibreChat's title requests send `thinking: disabled`, which Claude Opus 5.5 and Sonnet 5.5 reject and Haiku 5.5 accepts. Your Anthropic key pays for those title requests.
 
 ## Use a ChatGPT plan
 
