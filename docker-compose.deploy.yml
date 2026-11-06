@@ -74,8 +74,15 @@ services:
       # a volume here it lives on the container's writable layer and is
       # wiped on every redeploy, forcing every client to re-register.
       FASTMCP_HOME: /data/fastmcp
+      CELESTRAK_CACHE_PATH: /data/celestrak/cache.sqlite3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - mcp-server-oauth:/data/fastmcp
+      - mcp-server-celestrak:/data/celestrak
     depends_on:
       - dex
     labels:
@@ -172,4 +179,5 @@ volumes:
   dex-data:
   mongodb-data:
   mcp-server-oauth:
+  mcp-server-celestrak:
   letsencrypt-data:

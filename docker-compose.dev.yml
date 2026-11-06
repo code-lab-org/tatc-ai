@@ -4,8 +4,17 @@ services:
       context: .
       dockerfile: apps/mcp-server/Dockerfile
     container_name: tatc-ai-mcp-server-dev
+    environment:
+      CELESTRAK_CACHE_PATH: /data/celestrak/cache.sqlite3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "8000:8000"
+    volumes:
+      - mcp-server-celestrak:/data/celestrak
 
   mongodb:
     image: mongo:7
@@ -50,4 +59,5 @@ services:
       - "3080:3080"
 
 volumes:
+  mcp-server-celestrak:
   mongodb-data:

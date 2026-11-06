@@ -1,5 +1,6 @@
 """Offline unit tests for pure logic: no network, no TAT-C propagation."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -308,23 +309,20 @@ def test_aliases_resolve_without_network():
 
 
 def test_decayed_hint_names_the_dead_objects(monkeypatch):
-    class FakeResponse:
-        text = "non-empty"
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return [
-                {
-                    "OBJECT_NAME": "TIANGONG-1",
-                    "NORAD_CAT_ID": 37820,
-                    "DECAY_DATE": "2018-04-02",
-                },
-            ]
-
-    monkeypatch.setattr(cc.requests, "get", lambda *a, **k: FakeResponse())
-    hint = cc._decayed_match_hint("TIANGONG-1")
+    response = cc.requests.Response()
+    response.status_code = 200
+    response._content = json.dumps([
+        {
+            "OBJECT_NAME": "TIANGONG-1",
+            "NORAD_CAT_ID": 37820,
+            "DECAY_DATE": "2018-04-02",
+        },
+    ]).encode()
+    response._content_consumed = True
+    monkeypatch.setattr(cc.requests, "get", lambda *a, **k: response)
+    with pytest.raises(ValueError) as error:
+        cc.get_satellite_info("TIANGONG-1")
+    hint = str(error.value)
     assert "TIANGONG-1" in hint and "37820" in hint and "2018-04-02" in hint
 
 
