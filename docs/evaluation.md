@@ -57,7 +57,7 @@ The changed-window review run, `eval/results/20261031T015307Z-issue52-review-mix
 
 This conversation run started before the final fetch-provenance compaction. The final tool header keeps the selected source-choice IDs and the accepted finish snapshot keeps each full rationale. Public MCP regression tests cover that final response shape; no provider rerun was made for this payload-only change. No new full 85-conversation issue #52 run is planned. The raw JSONL traces and `/tmp` logs are local-only artifacts excluded from the PR.
 
-The complete conical and mixed cases require cell-center and envelope limits, reject claims of confirmed acquisitions, continuous viewing, and whole-cell coverage, and accept clear negated disclaimers. The checks recognize `modeled`/`modelled` and `center`/`centre`. They are text heuristics. The rejection cases fail if either the legacy or conical workflow completes a calculation.
+The complete conical, pointed, and mixed cases require cell-center and envelope limits, reject claims of confirmed acquisitions, continuous viewing, and whole-cell coverage, and accept clear negated disclaimers. The checks recognize `modeled`/`modelled` and `center`/`centre`. They are text heuristics. The rejection cases fail if either the legacy or conical workflow completes a calculation.
 
 ## Streaming check
 

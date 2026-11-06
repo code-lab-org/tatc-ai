@@ -85,7 +85,7 @@ BASE_LIMITS = [
     "A daily observed area counts each visited cell once per day; it is not continuous observation time.",
     "Field-of-regard envelopes are retained as event metadata only. Their durations are not viewing duration or uncovered duration.",
     "Continuous viewing duration and continuous uncovered duration are unavailable for this event-based result.",
-    "The established configuration applicability interval must contain the full requested window; this increment does not model partial or additional configurations.",
+    "The established configuration applicability interval must contain the full requested window; only the accepted configuration set is modeled, without partial-window rows.",
     "Configuration applicability is not orbit availability or a confirmed acquisition schedule; orbit freshness is checked separately.",
     "The server validates configuration structure, units, ranges, and evidence references; it does not authenticate source text or independently verify the researcher's conversation.",
     "This is a geometric-access and software-integration exercise, not mission validation or an acquisition schedule.",
