@@ -105,6 +105,7 @@ def resolved_snapshot(
             "instrument inherits the body frame and does not set its own."
         ),
         "nadir_reference_source": "tatc.schemas.ConicalInstrument.nadir_reference",
+        "req_target_sunlit": mapped.instrument.req_target_sunlit,
         "field_of_regard_deg": round(mapped.field_of_regard_deg, 6),
         "field_of_regard_source": (
             "TAT-C ConicalInstrument derives field_of_regard from cone_angle and "

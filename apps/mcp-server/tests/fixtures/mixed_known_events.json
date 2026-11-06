@@ -1,0 +1,92 @@
+{
+  "fixture_version": "mixed-known-events-v1",
+  "purpose": "Accounting regression input, not TAT-C geometry or mission evidence.",
+  "window_start_utc": "2026-10-04T23:00:00Z",
+  "window_end_utc_exclusive": "2026-10-05T01:00:00Z",
+  "configurations": [
+    {
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1"
+    },
+    {
+      "configuration_id": "amsr2-gcom-w1-conical-accounting-copy",
+      "configuration_revision": "fixture-1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1"
+    },
+    {
+      "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+      "configuration_revision": "2026-10-30.1",
+      "instrument": "C-SAR",
+      "satellite": "SENTINEL-1C"
+    }
+  ],
+  "events": [
+    {
+      "cell_id": 0,
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-04T23:10:00Z"
+    },
+    {
+      "cell_id": 0,
+      "configuration_id": "amsr2-gcom-w1-conical-accounting-copy",
+      "configuration_revision": "fixture-1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-04T23:10:00Z"
+    },
+    {
+      "cell_id": 0,
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-04T23:10:00.500000Z"
+    },
+    {
+      "cell_id": 1,
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-04T23:59:59Z"
+    },
+    {
+      "cell_id": 1,
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-05T00:00:00Z"
+    },
+    {
+      "cell_id": 1,
+      "configuration_id": "amsr2-gcom-w1-conical-accounting-copy",
+      "configuration_revision": "fixture-1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-05T00:00:00Z"
+    },
+    {
+      "cell_id": 2,
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-05T00:30:00Z"
+    },
+    {
+      "cell_id": 3,
+      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+      "configuration_revision": "2026-10-27.1",
+      "instrument": "AMSR2",
+      "satellite": "GCOM-W1",
+      "epoch": "2026-10-05T01:00:00Z"
+    }
+  ]
+}

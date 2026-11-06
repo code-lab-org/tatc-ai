@@ -17,6 +17,7 @@ from .conical_config import (
     SourceEvidence,
     SourceRevision,
     SpacecraftIdentity,
+    _illumination_warning,
     iso_utc,
 )
 
@@ -101,6 +102,11 @@ class PointedGeometry(_StrictModel):
     """Side-looking frame geometry and its source-specific IW context."""
 
     model_family: Literal["pointed"] = "pointed"
+    illumination_requirement: Literal["none", "target_sunlit"] = "none"
+    illumination_requirement_basis: Optional[
+        Literal["source_evidence", "study_assumption"]
+    ] = None
+    illumination_requirement_note: Optional[str] = None
     look_direction: Literal["left", "right"]
     reference_frame: Literal["earth_fixed_velocity_frame"]
     off_nadir_reference: Literal["geodetic_nadir"]
@@ -414,6 +420,15 @@ class PointedConfiguration(_StrictModel):
         if missing_support:
             raise ValueError("missing source evidence for: " + ", ".join(missing_support))
 
+        _illumination_warning(
+            self.geometry.illumination_requirement,
+            self.geometry.illumination_requirement_basis,
+            self.geometry.illumination_requirement_note,
+            source_supported=(
+                "geometry.illumination_requirement" in supported
+            ),
+        )
+
         referenced = [
             *self.applicability.evidence_ids,
             *self.source_revision.evidence_ids,
@@ -465,6 +480,17 @@ class PointedConfiguration(_StrictModel):
             f"{iso_utc(self.applicability.end_utc_exclusive)}; later dates are "
             "not established for this configuration.",
         ]
+        illumination_warning = _illumination_warning(
+            self.geometry.illumination_requirement,
+            self.geometry.illumination_requirement_basis,
+            self.geometry.illumination_requirement_note,
+            source_supported=any(
+                "geometry.illumination_requirement" in item.supports
+                for item in self.evidence
+            ),
+        )
+        if illumination_warning:
+            warnings.append(illumination_warning)
         for check in self.mission_reference_checks:
             warnings.append(
                 f"Reference-only check {check.check_id}: {check.limitation}"
