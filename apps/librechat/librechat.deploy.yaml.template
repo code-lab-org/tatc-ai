@@ -126,7 +126,8 @@ endpoints:
     titleModel: current_model
   anthropic:
     titleConvo: true
-    titleModel: current_model
+    # LibreChat's title requests send thinking disabled, which Opus 5.5 and Sonnet 5.5 reject.
+    titleModel: claude-haiku-5-5
   google:
     titleConvo: true
     titleModel: current_model
