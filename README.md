@@ -32,7 +32,7 @@ To build the image locally instead (e.g. to test before pushing):
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
 
-See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical and pointed-instrument studies.
+See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical, pointed-instrument, and mixed-instrument studies.
 
 The **Study** button in LibreChat opens a research pane filled by the `visualize`
 tool: coverage results, charts, timelines, tables with CSV export, and 2D/3D

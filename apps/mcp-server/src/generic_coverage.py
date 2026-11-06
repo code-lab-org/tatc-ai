@@ -552,8 +552,14 @@ def finish_access_run(
         raise ValueError(
             f"_max_workers must be an integer between 1 and {MAX_YEAR_WORKERS}"
         )
+    stage = _get_draft(draft_id)
+    if stage.get("mixed_proposal"):
+        raise ValueError(
+            "This draft has a prepared mixed-study workflow proposal. Use the mixed "
+            "finish tool with its setup revision, and do not pass legacy geometry arguments."
+        )
     full = _run_stage(
-        _get_draft(draft_id),
+        stage,
         grid_rows,
         grid_columns,
         field_of_regard_deg,

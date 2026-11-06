@@ -2,8 +2,8 @@
 
 Each model gets the server's real tool list and instructions, the way
 LibreChat presents them (tools named <tool>_mcp_tatc, server instructions
-in the system message), and works through the legacy coverage, conical, and
-pointed study cases in cases.py.
+in the system message), and works through the legacy coverage, conical,
+pointed, and mixed study cases in cases.py.
 Tool calls run in-process against the real server through a FastMCP
 client; CelesTrak and OSCAR responses replay from a recorded cache.
 Checks score what the server actually computed.
@@ -57,7 +57,7 @@ HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("EVAL_ENV_FILE", HERE.parents[1] / "librechat" / ".env"))
 RESULTS = HERE / "results"
 SUFFIX = "_mcp_tatc"
-MAX_TURNS = 14
+MAX_TURNS = 20
 REQUEST_TIMEOUT = 180
 CONVERSATION_TIMEOUT = 600
 MAX_REQUEST_ATTEMPTS = 2

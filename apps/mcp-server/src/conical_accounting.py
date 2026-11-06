@@ -17,6 +17,8 @@ from .coverage_core import _utc_days
 
 ACCOUNTING_METHOD = "conical_events_v1"
 POINTED_ACCOUNTING_METHOD = "pointed_events_v1"
+MIXED_ACCOUNTING_METHOD = "mixed_events_union_v1"
+MIXED_CONFIGURATION_ACCOUNTING_METHOD = "mixed_configuration_events_v1"
 
 EVENT_DEFINITION = (
     "A valid TAT-C conical viewing epoch at a grid-cell center: the time the "
@@ -87,19 +89,35 @@ def _stats(values: Sequence[float]) -> Dict[str, Optional[float]]:
     }
 
 
-def normalize_events(
+def _envelope_periods(events: Sequence[Dict[str, Any]]) -> set[Tuple[Any, ...]]:
+    return {
+        (event["cell_id"], *period)
+        for event in events
+        for period in (
+            (
+                (
+                    contributor["configuration_id"],
+                    contributor["envelope_start_utc"],
+                    contributor["envelope_end_utc"],
+                )
+                for contributor in event["contributor_configurations"]
+            )
+            if event.get("envelope_semantics") == "contributor_hull"
+            else ((event["envelope_start_utc"], event["envelope_end_utc"]),)
+        )
+    }
+
+
+def _merge_event_epochs(
     raw_events: Iterable[Dict[str, Any]],
     start: datetime,
     end: datetime,
     *,
     applicability_start: Optional[datetime] = None,
     applicability_end: Optional[datetime] = None,
+    mixed: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Filter, deduplicate, and order TAT-C event rows.
-
-    Exact duplicate epochs at the same cell are one event.  Distinct epochs
-    are never merged, even if they are close in time.
-    """
+    """Share UTC filtering and exact cell/epoch grouping between result shapes."""
     start, end = _as_utc(start), _as_utc(end)
     app_start = _as_utc(applicability_start) if applicability_start else start
     app_end = _as_utc(applicability_end) if applicability_end else end
@@ -111,12 +129,15 @@ def normalize_events(
             continue
         if not (app_start <= epoch < app_end):
             continue
+        configuration_id = str(
+            raw["configuration_id"] if mixed else raw.get("configuration_id", "")
+        )
         envelope_start = _as_utc(raw.get("envelope_start", epoch))
         envelope_end = _as_utc(raw.get("envelope_end", epoch))
         key = (cell_id, epoch)
         existing = merged.get(key)
         if existing is None:
-            merged[key] = {
+            existing = {
                 "cell_id": cell_id,
                 "target_longitude_deg": raw.get("target_longitude_deg"),
                 "target_latitude_deg": raw.get("target_latitude_deg"),
@@ -125,48 +146,129 @@ def normalize_events(
                 "envelope_end": envelope_end,
                 "satellite": str(raw.get("satellite", "")),
                 "instrument": str(raw.get("instrument", "")),
-                "configuration_id": str(raw.get("configuration_id", "")),
+                "configuration_id": configuration_id,
                 "configuration_revision": str(raw.get("configuration_revision", "")),
-                "contributors": {str(raw.get("configuration_id", ""))},
+                "contributors": {} if mixed else {configuration_id},
             }
+            merged[key] = existing
         else:
             existing["envelope_start"] = min(existing["envelope_start"], envelope_start)
             existing["envelope_end"] = max(existing["envelope_end"], envelope_end)
-            existing["contributors"].add(str(raw.get("configuration_id", "")))
-    events = sorted(
-        merged.values(),
-        key=lambda event: (
-            event["epoch"],
-            event["cell_id"],
-            event["configuration_id"],
+            if not mixed:
+                existing["contributors"].add(configuration_id)
+        if mixed:
+            contributor = existing["contributors"].get(configuration_id)
+            if contributor is None:
+                contributor = {
+                    "configuration_id": configuration_id,
+                    "configuration_revision": str(raw["configuration_revision"]),
+                    "instrument": str(raw["instrument"]),
+                    "satellite": str(raw["satellite"]),
+                    "envelope_start": envelope_start,
+                    "envelope_end": envelope_end,
+                }
+                existing["contributors"][configuration_id] = contributor
+            else:
+                contributor["envelope_start"] = min(
+                    contributor["envelope_start"], envelope_start
+                )
+                contributor["envelope_end"] = max(
+                    contributor["envelope_end"], envelope_end
+                )
+    return sorted(merged.values(), key=lambda event: (event["epoch"], event["cell_id"]))
+
+
+def _envelope_fields(start: datetime, end: datetime) -> Dict[str, Any]:
+    return {
+        "envelope_start_utc": _iso(start),
+        "envelope_end_utc": _iso(end),
+        "envelope_duration_hours": round((end - start).total_seconds() / 3600, 6),
+    }
+
+
+def _normalized_event_rows(
+    groups: Sequence[Dict[str, Any]], *, mixed: bool
+) -> List[Dict[str, Any]]:
+    events = []
+    for index, event in enumerate(groups):
+        row = {
+            "event_id": f"E{index:06d}",
+            "cell_id": event["cell_id"],
+            "target_longitude_deg": event["target_longitude_deg"],
+            "target_latitude_deg": event["target_latitude_deg"],
+            "epoch_utc": _iso(event["epoch"]),
+            "utc_date": event["epoch"].date().isoformat(),
+            **_envelope_fields(event["envelope_start"], event["envelope_end"]),
+        }
+        if mixed:
+            row.update(
+                configuration_id=None,
+                configuration_revision=None,
+                envelope_semantics="contributor_hull",
+                contributors=sorted(event["contributors"]),
+                contributor_configurations=[
+                    {
+                        **{
+                            field: contributor[field]
+                            for field in (
+                                "configuration_id",
+                                "configuration_revision",
+                                "instrument",
+                                "satellite",
+                            )
+                        },
+                        **_envelope_fields(
+                            contributor["envelope_start"],
+                            contributor["envelope_end"],
+                        ),
+                    }
+                    for contributor in (
+                        event["contributors"][key]
+                        for key in sorted(event["contributors"])
+                    )
+                ],
+            )
+        else:
+            row.update(
+                satellite=event["satellite"],
+                instrument=event["instrument"],
+                configuration_id=event["configuration_id"],
+                configuration_revision=event["configuration_revision"],
+                contributors=sorted(event["contributors"]),
+            )
+        row["_epoch"] = event["epoch"]
+        events.append(row)
+    return events
+
+
+def normalize_events(
+    raw_events: Iterable[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    *,
+    applicability_start: Optional[datetime] = None,
+    applicability_end: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Filter and group by exact cell/epoch; nearby epochs remain distinct."""
+    return _normalized_event_rows(
+        _merge_event_epochs(
+            raw_events,
+            start,
+            end,
+            applicability_start=applicability_start,
+            applicability_end=applicability_end,
         ),
+        mixed=False,
     )
-    normalized: List[Dict[str, Any]] = []
-    for index, event in enumerate(events):
-        normalized.append(
-            {
-                "event_id": f"E{index:06d}",
-                "cell_id": event["cell_id"],
-                "target_longitude_deg": event.get("target_longitude_deg"),
-                "target_latitude_deg": event.get("target_latitude_deg"),
-                "epoch_utc": _iso(event["epoch"]),
-                "utc_date": event["epoch"].date().isoformat(),
-                "envelope_start_utc": _iso(event["envelope_start"]),
-                "envelope_end_utc": _iso(event["envelope_end"]),
-                "envelope_duration_hours": round(
-                    (event["envelope_end"] - event["envelope_start"]).total_seconds()
-                    / 3600,
-                    6,
-                ),
-                "satellite": event["satellite"],
-                "instrument": event["instrument"],
-                "configuration_id": event["configuration_id"],
-                "configuration_revision": event["configuration_revision"],
-                "contributors": sorted(event["contributors"]),
-                "_epoch": event["epoch"],
-            }
-        )
-    return normalized
+
+
+def normalize_mixed_events(
+    raw_events: Iterable[Dict[str, Any]], start: datetime, end: datetime
+) -> List[Dict[str, Any]]:
+    """Group only exact simultaneous mixed-configuration events by cell."""
+    return _normalized_event_rows(
+        _merge_event_epochs(raw_events, start, end, mixed=True), mixed=True
+    )
 
 
 def summarize_events(
@@ -196,14 +298,7 @@ def summarize_events(
         observed_ids = sorted({event["cell_id"] for event in day_events})
         observed_area = sum(cells_by_id[cell]["area_km2"] for cell in observed_ids)
         gap_ids = sorted(set(cells_by_id) - set(observed_ids))
-        envelope_periods = {
-            (
-                event["cell_id"],
-                event["envelope_start_utc"],
-                event["envelope_end_utc"],
-            )
-            for event in day_events
-        }
+        envelope_periods = _envelope_periods(day_events)
         daily.append(
             {
                 "utc_date": day.isoformat(),
@@ -297,10 +392,7 @@ def summarize_events(
             }
         )
 
-    envelope_periods_all = {
-        (event["cell_id"], event["envelope_start_utc"], event["envelope_end_utc"])
-        for event in events
-    }
+    envelope_periods_all = _envelope_periods(events)
     spacing_stats = _stats(all_spacings)
     metrics = {
         "grid_cell_count": len(cells),
@@ -329,6 +421,11 @@ def summarize_events(
             "the result; null when no cell has at least two distinct events."
         ),
         "envelope": ENVELOPE_DEFINITION,
+        "envelope_period_count": (
+            "Counts distinct per-cell envelope intervals. For a combined mixed "
+            "result, contributor intervals are counted by configuration, cell, "
+            "start, and end; a combined hull is not counted as a TAT-C period."
+        ),
         "unavailable_metrics": UNAVAILABLE_DEFINITION,
         "cell_center_sampling": CELL_CENTER_DEFINITION,
         "time_semantics": "Half-open UTC intervals [start, end); an epoch exactly at a boundary belongs only to the interval starting there.",
