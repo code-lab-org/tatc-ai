@@ -306,8 +306,6 @@ def request_completion(
         raise RequestTimeout(f"request budget expired: {error!r}")
     if isinstance(error, ModelCallError):
         raise error
-    if isinstance(error, ContextOverflow):
-        raise error
     raise ModelCallError(category or "harness_error", f"model call failed: {error!r}")
 
 
