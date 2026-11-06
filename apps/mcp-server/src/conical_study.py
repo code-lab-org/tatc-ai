@@ -1513,9 +1513,7 @@ def get_study_setup(
             )
         consequential = proposal["consequential"]
         snapshot = proposal["configuration"]
-        digest = proposal.get("configuration_digest") or consequential[
-            "configuration_digest"
-        ]
+        digest = proposal["configuration_digest"]
         setup_snapshot = {
             "configuration": snapshot,
             "window": {
@@ -1538,7 +1536,6 @@ def get_study_setup(
             "status": "awaiting_acceptance",
             "setup_revision": revision,
             "configuration_digest": digest,
-            "configuration": snapshot,
             "setup_snapshot": setup_snapshot,
             "warnings": proposal.get("warnings", []),
             "limits": proposal.get("limits", []),
@@ -1567,9 +1564,7 @@ def get_study_setup(
             "immutable; use its recorded revision"
         )
     setup_snapshot = copy.deepcopy(payload["provenance"]["setup_snapshot"])
-    digest = payload.get("configuration_digest") or _sha256(
-        setup_snapshot["configuration"]
-    )
+    digest = payload["configuration_digest"]
     return {
         "result_id": str(result_id).strip(),
         "study_kind": kind,
@@ -1577,15 +1572,9 @@ def get_study_setup(
         "status": "accepted",
         "setup_revision": revision,
         "configuration_digest": digest,
-        "configuration": setup_snapshot["configuration"],
         "setup_snapshot": setup_snapshot,
         "warnings": payload["warnings"],
         "limits": payload["limits"],
-        "source_conflicts": payload["source_conflicts"],
-        "approximations": payload["approximations"],
-        "approximation_status": payload["approximation_status"],
-        "geometry_checks": payload["geometry_checks"],
-        "interpretation": payload["interpretation"],
         "evidence_note": payload["evidence_note"],
         "storage": payload["storage"],
     }

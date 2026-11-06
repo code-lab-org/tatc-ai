@@ -61,7 +61,6 @@ MAX_TURNS = 14
 REQUEST_TIMEOUT = 180
 CONVERSATION_TIMEOUT = 600
 MAX_REQUEST_ATTEMPTS = 2
-RETRYABLE_STATUS = {429, 502, 503}
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 MAX_ERROR_BYTES = 1024 * 1024
 CONTEXT_MARKERS = (
@@ -236,21 +235,10 @@ def request_completion(
             ) as response:
                 raw = _read_bounded(response, request_deadline)
                 response_bytes = len(raw)
-                payload = json.loads(raw)
-                usage = payload.get("usage")
-                request_id = payload.get("id")
-                message = payload["choices"][0]["message"]
-                if record is not None:
-                    record(
-                        attempt=attempt,
-                        request_bytes=len(body),
-                        response_bytes=response_bytes,
-                        duration=time.monotonic() - started,
-                        usage=usage,
-                        request_id=request_id,
-                        error_category=None,
-                    )
-                return message
+            payload = json.loads(raw)
+            usage = payload.get("usage")
+            request_id = payload.get("id")
+            message = payload["choices"][0]["message"]
         except RequestTimeout as exc:
             error, category = exc, "timeout"
         except ModelCallError as exc:
@@ -284,6 +272,20 @@ def request_completion(
             error, category = exc, "connection"
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             error, category = exc, "protocol"
+        else:
+            # Record a completed request outside the network exception path so
+            # a local log write failure cannot retry a request that succeeded.
+            if record is not None:
+                record(
+                    attempt=attempt,
+                    request_bytes=len(body),
+                    response_bytes=response_bytes,
+                    duration=time.monotonic() - started,
+                    usage=usage,
+                    request_id=request_id,
+                    error_category=None,
+                )
+            return message
         if record is not None:
             record(
                 attempt=attempt,
@@ -426,13 +428,12 @@ class Harness:
         request = urllib.request.Request(
             self.base_url + "/chat/completions", data=body,
             headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"})
+        deadline = time.monotonic() + self.request_timeout
         try:
             with urllib.request.urlopen(
-                request, timeout=self.request_timeout
+                request, timeout=max(0.001, _remaining(deadline))
             ) as response:
-                raw = _read_bounded(
-                    response, time.monotonic() + self.request_timeout
-                )
+                raw = _read_bounded(response, deadline)
         except (OSError, RequestTimeout) as exc:  # includes URLError and HTTPError
             return f"error {exc!r}"[:80]
         lines = [line.decode().strip() for line in raw.splitlines()]
@@ -519,6 +520,16 @@ class Harness:
                                 Call(name, args, True, f"Error: {exc}", None)
                             )
                             return trace
+                        except Exception as exc:
+                            # Keep the small partial record instead of losing
+                            # the calls made before a tool client failure.
+                            trace.stop = "infra_error"
+                            trace.error_category = _error_category(exc)
+                            trace.error = str(exc)[:300]
+                            trace.calls.append(
+                                Call(name, args, True, f"Error: {exc}", None)
+                            )
+                            return trace
                 parsed = None
                 if not error:
                     try:
@@ -556,24 +567,33 @@ def _converse_with_case_state(
 
 
 def _selected_models(args: argparse.Namespace) -> List[str]:
-    """Resolve a single primary model by default and fail on catalog drift."""
+    """Resolve the routine model by default and fail on catalog drift.
+
+    Explicit --models IDs are sent as given, matching the old manual
+    selection path. Only the routine default is checked against the
+    LibreChat catalog, so a typo cannot silently fall back to another model.
+    """
+    explicit = bool(args.models)
     if args.all_models:
         models = list(MODELS)
-    elif args.models:
-        models = list(args.models)
+    elif explicit:
+        models = [model.strip() for model in args.models]
     else:
         models = list(DEFAULT_MODELS)
     if not models:
         raise ValueError(
             "No Voyager models are configured in apps/librechat/librechat.yaml"
         )
-    unknown = [model for model in models if model not in MODELS]
-    if unknown:
-        raise ValueError(
-            f"Model(s) {unknown!r} are not in the LibreChat ASU Voyager catalog "
-            f"{MODELS!r}. Update apps/librechat/librechat.yaml or pass an exact "
-            "catalog model. No fallback model is selected."
-        )
+    if any(not model for model in models):
+        raise ValueError("Model IDs must be non-empty strings")
+    if not explicit and not args.all_models:
+        unknown = [model for model in models if model not in MODELS]
+        if unknown:
+            raise ValueError(
+                f"Default model(s) {unknown!r} are not in the LibreChat ASU Voyager "
+                f"catalog {MODELS!r}. Update apps/librechat/librechat.yaml. No "
+                "fallback model is selected."
+            )
     return models
 
 
@@ -596,7 +616,7 @@ def run(args: argparse.Namespace) -> None:
     if args.stream_only:
         print("\n".join(streams))
         return
-    # Round-robin models and cases so a slow model cannot monopolize workers.
+    # Run each case and repeat with the selected models together.
     jobs = [
         (model, case, repeat)
         for case in cases
@@ -642,7 +662,6 @@ def run(args: argparse.Namespace) -> None:
                 record.update(
                     status="infra_error",
                     error_category=trace.error_category,
-                    error=trace.error[:300],
                     stop=trace.stop,
                     turns=trace.turns,
                     tool_calls=len(trace.calls),
@@ -676,7 +695,6 @@ def run(args: argparse.Namespace) -> None:
         except Exception as exc:  # infra failures are reported, not scored
             record.update(
                 status="infra_error",
-                error=repr(exc)[:300],
                 error_category=_error_category(exc),
             )
         record["seconds"] = round(time.time() - started, 1)

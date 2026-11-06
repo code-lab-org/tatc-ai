@@ -81,13 +81,18 @@ def _complete(
     )
 
 
-def test_default_primary_model_is_validated_against_the_catalog():
+def test_default_primary_model_is_validated_against_the_catalog(monkeypatch):
     assert run_eval.DEFAULT_MODELS == ["deepseek-v4-1-flash"]
     args = SimpleNamespace(all_models=False, models=None)
     assert run_eval._selected_models(args) == ["deepseek-v4-1-flash"]
-    args.models = ["not-a-voyager-model"]
+    monkeypatch.setattr(run_eval, "DEFAULT_MODELS", ["not-a-voyager-model"])
     with pytest.raises(ValueError, match="not in the LibreChat ASU Voyager catalog"):
         run_eval._selected_models(args)
+
+
+def test_explicit_model_selection_is_sent_as_given():
+    args = SimpleNamespace(all_models=False, models=["not-a-voyager-model"])
+    assert run_eval._selected_models(args) == ["not-a-voyager-model"]
 
 
 def test_delayed_response_uses_request_budget_without_retry():
@@ -233,6 +238,85 @@ def test_connection_failure_retries_once():
         )
     assert caught.value.category == "connection"
     assert time.monotonic() - started < 1.0
+
+
+def test_default_result_record_redacts_prompts_and_tool_text(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from eval.cases import Call, Trace
+
+    class FakeHarness:
+        tool_names = ["secret_tool"]
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def converse(self, _model, _prompt, **_kwargs):
+            trace = Trace(prompt="SECRET PROMPT")
+            trace.turns = 1
+            trace.stop = "timeout"
+            trace.error_category = "timeout"
+            trace.error = "SECRET ERROR"
+            trace.calls = [
+                Call("secret_tool", {"hidden": "SECRET ARG"}, True, "SECRET TOOL TEXT", None)
+            ]
+            return trace
+
+    class FakeReplay:
+        def __init__(self, *_args, **_kwargs):
+            self.recorded_at = datetime(2026, 10, 10, tzinfo=timezone.utc)
+
+        def install(self):
+            pass
+
+        def save(self):
+            pass
+
+    class FakeCase:
+        id = "fake_case"
+        tags = ("short",)
+        prompt = "SECRET PROMPT"
+
+    monkeypatch.setattr(run_eval, "Harness", FakeHarness)
+    monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
+    monkeypatch.setattr(run_eval, "load_env", lambda _path: {
+        "VOYAGER_BASE_URL": "http://example.invalid",
+        "VOYAGER_API_KEY": "test-key",
+    })
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+    monkeypatch.setattr(run_eval, "probe_streams", lambda _harness, _models: [])
+    monkeypatch.setattr(run_eval, "RESULTS", tmp_path)
+
+    args = SimpleNamespace(
+        label="redaction",
+        models=["fake-model"],
+        all_models=False,
+        cases=None,
+        repeats=1,
+        workers=1,
+        hide=[],
+        stream_only=False,
+        offline=True,
+        request_timeout=1.0,
+        conversation_timeout=1.0,
+        save_traces=False,
+    )
+    run_eval.run(args)
+
+    rows = [
+        json.loads(line)
+        for path in tmp_path.glob("*.jsonl")
+        if not path.name.endswith("-requests.jsonl")
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["status"] == "infra_error"
+    assert row["error_category"] == "timeout"
+    assert row["partial"]["tool_calls"] == [{"name": "secret_tool", "error": True}]
+    assert "trace" not in row
+    assert "SECRET" not in json.dumps(row)
 
 
 def test_hanging_tool_call_cannot_outlive_the_conversation_budget(monkeypatch):
