@@ -38,16 +38,17 @@ def _http_failure(status: int, body: bytes = b"") -> tuple[str, int]:
     text = " ".join(text.lower().split())
     if status == 429:
         return "HTTP 429: temporary rate limit", 7200
+    if status >= 500:
+        return f"HTTP {status}: service failure", 600
     if status == 403:
         temporary = (
             "excessive downloads" in text
             and "temporar" in text
             and ("2 hours" in text or "two hours" in text)
         ) or "gp data has not updated since your last successful download" in text
-        cause = "temporary rate limit" if temporary else "access denied"
-        return f"HTTP {status}: {cause}", 7200
-    if status >= 500:
-        return f"HTTP {status}: service failure", 600
+        if temporary:
+            return f"HTTP {status}: temporary rate limit", 7200
+        return f"HTTP {status}: access denied", 0
     if 300 <= status < 400:
         cause = "unexpected redirect"
     else:
@@ -56,7 +57,7 @@ def _http_failure(status: int, body: bytes = b"") -> tuple[str, int]:
             401: "access denied",
             404: "requested resource not found",
         }.get(status, "request failed")
-    return f"HTTP {status}: {cause}", 600
+    return f"HTTP {status}: {cause}", 0
 
 
 def _record_activity(db: sqlite3.Connection, key: str, event: str) -> None:
@@ -234,11 +235,12 @@ def cached(
                 if reason is not None:
                     now = time.time()
                     until = now + duration
-                    db.execute(
-                        "INSERT INTO cooldown VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET until=max(until, excluded.until), reason=CASE WHEN excluded.until > until THEN excluded.reason ELSE reason END",
-                        (until, reason),
-                    )
-                    db.commit()
+                    if duration:
+                        db.execute(
+                            "INSERT INTO cooldown VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET until=max(until, excluded.until), reason=CASE WHEN excluded.until > until THEN excluded.reason ELSE reason END",
+                            (until, reason),
+                        )
+                        db.commit()
                     _record_activity(db, key, "download_failed")
                     history = db.execute(
                         "SELECT at, event, query_key FROM activity ORDER BY id DESC LIMIT 12"
@@ -262,9 +264,16 @@ def cached(
                         excerpt,
                         history,
                     )
-                    raise requests.RequestException(
-                        f"CelesTrak unavailable: {reason}; downloads paused; retry after {_retry_time(until)}"
-                    )
+                    message = f"CelesTrak unavailable: {reason}"
+                    if duration:
+                        message += (
+                            f"; downloads paused; retry after {_retry_time(until)}"
+                        )
+                    else:
+                        message += (
+                            "; this lookup stopped; no service-wide pause was applied"
+                        )
+                    raise requests.RequestException(message)
                 used = db.execute(
                     "SELECT coalesce(sum(length(body)), 0) FROM responses"
                 ).fetchone()[0]
