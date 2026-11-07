@@ -35,6 +35,19 @@ docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp
 
 See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical, pointed-instrument, and mixed-instrument studies.
 
+The CelesTrak client caches GP results for 2 hours and SATCAT results for 12
+hours, including searches with no matches. The cache has a 50 MiB data budget.
+It saves cooldowns to SQLite for 2 hours after rate limiting and 10 minutes
+after a service error. Requests use a 10-second connect timeout and a 30-second
+read-inactivity timeout. The server does not poll CelesTrak in the background.
+Failed requests return an application error with diagnostics. Compose stores
+the cache in a named volume at `/data/celestrak/cache.sqlite3`; each MCP
+container keeps up to three 10 MiB JSON log files (about 30 MiB), and removing
+or replacing the container removes those logs. Native Python runs default to
+`~/.cache/tatc-ai/celestrak.sqlite3`; override this with `CELESTRAK_CACHE_PATH`
+in the process environment. The root `.env` file does not set variables for
+native Python. See the [CelesTrak cache design](docs/celestrak-cache-design.md).
+
 The **Study** button in LibreChat opens a research pane filled by the `visualize`
 tool: coverage results, charts, timelines, tables with CSV export, and 2D/3D
 Cesium maps with editable inputs. See the [coverage explorer guide](docs/coverage-explorer.md).

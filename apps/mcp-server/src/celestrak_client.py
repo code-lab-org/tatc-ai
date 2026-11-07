@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .celestrak_cache import cached
 from .search_utils import normalize_name as _normalize_name
 from .search_utils import score_match as _score_search_result
 from .validation import validate_norad_id, validate_omm_records
@@ -84,64 +85,41 @@ def _satcat_query_variants(query: str) -> List[str]:
 
 def _fetch_raw_variant(variant: str) -> List[Dict[str, Any]]:
     """Fetch one query, distinguishing a valid no-match response from a failure."""
+
+    def validate(text):
+        if text.strip().rstrip(".").lower() == "no satcat records found":
+            return []
+        data = json.loads(text)
+        if not isinstance(data, list) or any(
+            not isinstance(item, dict) for item in data
+        ):
+            raise ValueError("invalid SATCAT records")
+        return data
+
     try:
-        response = requests.get(
-            SATCAT_URL,
-            params={"NAME": variant, "FORMAT": "json"},
-            timeout=15,
-        )
-        response.raise_for_status()
+        return cached(SATCAT_URL, {"NAME": variant, "FORMAT": "json"}, 43200, validate)
     except requests.RequestException as exc:
         raise requests.RequestException(
-            "CelesTrak satellite search is unavailable; please retry later."
+            f"CelesTrak satellite search is unavailable: {exc}"
         ) from exc
-
-    # SATCAT's no-match text is not JSON. Do not treat arbitrary
-    # HTML, empty bodies, or malformed JSON (e.g. a proxy failure) as no matches.
-    if response.text.strip().rstrip(".").lower() == "no satcat records found":
-        return []
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise requests.RequestException(
-            "CelesTrak satellite search returned an invalid response; please retry later."
-        ) from exc
-    if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
-        raise requests.RequestException(
-            "CelesTrak satellite search returned an invalid response; please retry later."
-        )
-    return data
 
 
 def _iter_satcat_variants(query: str):
-    """Try alternate spellings before reporting an upstream failure."""
-    last_error = None
+    """Try alternate spellings until an upstream failure occurs."""
     for variant in _satcat_query_variants(query):
-        try:
-            data = _fetch_raw_variant(variant)
-        except requests.RequestException as exc:
-            last_error = exc
-            continue
+        data = _fetch_raw_variant(variant)
         if data:
             yield data
-    if last_error is not None:
-        raise last_error
 
 
 def _fetch_satcat_records(query: str) -> List[Dict[str, Any]]:
     """Collect all active candidates before ranking and applying an output limit."""
     records: Dict[int, Dict[str, Any]] = {}
-    try:
-        for data in _iter_satcat_variants(query):
-            for sat in data:
-                formatted = _format_satcat_record(sat)
-                if formatted is not None:
-                    records.setdefault(formatted["norad_id"], formatted)
-    except requests.RequestException:
-        # Useful results from a successful spelling can recover a failed one.
-        # An empty result cannot: it would conceal an incomplete search.
-        if not records:
-            raise
+    for data in _iter_satcat_variants(query):
+        for sat in data:
+            formatted = _format_satcat_record(sat)
+            if formatted is not None:
+                records.setdefault(formatted["norad_id"], formatted)
     return list(records.values())
 
 
@@ -248,61 +226,18 @@ def fetch_omm(norad_id: int) -> List[Dict[str, Any]]:
     """
     norad_id = validate_norad_id(norad_id)
 
-    try:
-        response = requests.get(
-            GP_URL,
-            params={"CATNR": norad_id, "FORMAT": "json"},
-            allow_redirects=True,
-            timeout=10,
+    def validate(text):
+        stripped = text.strip()
+        if stripped.lower().startswith("no gp data found"):
+            return None
+        return validate_omm_records(json.loads(stripped))
+
+    result = cached(GP_URL, {"CATNR": norad_id, "FORMAT": "json"}, 7200, validate)
+    if result is None:
+        raise ValueError(
+            f"GP data not available for NORAD ID {norad_id}. The object may have decayed or have no Earth-orbit GP data."
         )
-        response.raise_for_status()
-
-        response_text = response.text.strip()
-        if not response_text:
-            raise ValueError(
-                f"No GP data returned from CelesTrak for NORAD ID {norad_id}"
-            )
-
-        if "No GP data found" in response_text or "not found" in response_text.lower():
-            raise ValueError(
-                f"GP data not available for NORAD ID {norad_id}. "
-                f"The satellite may have decayed, been decommissioned, or the ID may be incorrect. "
-                f"Deep-space objects without Earth-orbit GP data (e.g. JWST at Sun-Earth L2) "
-                f"also have no OMM records. "
-                f"Response: {response_text[:200]}"
-            )
-
-        try:
-            data = json.loads(response_text)
-        except ValueError as exc:
-            raise ValueError(
-                f"Invalid OMM JSON from CelesTrak for NORAD ID {norad_id}: {exc}. "
-                f"Response: {response_text[:200]}"
-            ) from exc
-
-        return validate_omm_records(data)
-
-    except requests.Timeout:
-        raise requests.RequestException(
-            f"Timeout while fetching GP data from CelesTrak for NORAD ID {norad_id}"
-        )
-    except requests.HTTPError as e:
-        status = e.response.status_code if e.response is not None else "unknown"
-        hint = (
-            " The ID may be incorrect, or the object may have no Earth-orbit GP data "
-            "(e.g. deep-space missions like JWST at Sun-Earth L2 have no OMM records)."
-            if status == 404
-            else ""
-        )
-        raise requests.RequestException(
-            f"HTTP error {status} while fetching GP data from CelesTrak: {e}.{hint}"
-        ) from e
-    except requests.RequestException as e:
-        raise requests.RequestException(
-            f"Failed to fetch GP data from CelesTrak: {e}"
-        ) from e
-    except ValueError:
-        raise
+    return result
 
 
 def get_satellite_info(satellite_identifier: str) -> Dict:
@@ -324,7 +259,7 @@ def get_satellite_info(satellite_identifier: str) -> Dict:
         if not str(satellite_identifier).strip().isdigit():
             try:
                 resolved = _resolve_search_result(satellite_identifier)
-            except (requests.RequestException, ValueError):
+            except ValueError:
                 resolved = None
         name = resolved["name"] if resolved else f"NORAD {norad_id}"
 
