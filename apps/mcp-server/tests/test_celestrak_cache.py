@@ -76,22 +76,23 @@ def test_invalid_response_values_are_not_reported_or_logged(monkeypatch, caplog)
 
 
 @pytest.mark.parametrize(
-    "status, body, cause",
+    "status, body, cause, paused",
     [
-        (429, b"limited", "rate limit"),
+        (429, b"limited", "rate limit", True),
         (
             403,
             b"Excessive downloads temporarily blocked for 2 hours",
             "rate limit",
+            True,
         ),
-        (403, b"firewall blocked", "access denied"),
-        (503, b"maintenance", "service failure"),
-        (301, b"", "redirect"),
-        (404, b"missing", "not found"),
+        (403, b"firewall blocked", "access denied", False),
+        (503, b"maintenance", "service failure", True),
+        (301, b"", "redirect", False),
+        (404, b"missing", "not found", False),
     ],
 )
 def test_http_failures_explain_the_cause_and_pause_state(
-    monkeypatch, status, body, cause
+    monkeypatch, status, body, cause, paused
 ):
     response = requests.Response()
     response.status_code = status
@@ -103,7 +104,10 @@ def test_http_failures_explain_the_cause_and_pause_state(
     message = str(error.value)
     assert f"HTTP {status}" in message
     assert cause in message.lower()
-    assert "downloads paused" in message and "retry after" in message
+    if paused:
+        assert "downloads paused" in message and "retry after" in message
+    else:
+        assert "no service-wide pause" in message
 
 
 def test_failure_history_and_successful_recovery_are_reported(monkeypatch, caplog):
@@ -382,12 +386,10 @@ def test_cache_and_pause_survive_another_process(monkeypatch):
     assert len(calls) == 2
 
 
-def test_generic_403_pauses_all_queries(monkeypatch):
+def test_generic_403_stops_alternate_search_without_global_pause(monkeypatch):
     import pytest
 
-    now = [100000.0]
     calls = []
-    monkeypatch.setattr("src.celestrak_cache.time.time", lambda: now[0])
 
     def get(url, **kwargs):
         calls.append(url)
@@ -400,12 +402,8 @@ def test_generic_403_pauses_all_queries(monkeypatch):
         return response
 
     monkeypatch.setattr(requests, "get", get)
-    with pytest.raises(requests.RequestException, match="403.*retry"):
+    with pytest.raises(requests.RequestException, match="403"):
         celestrak_client.search_satellites_by_name("TARGET-1")
-    with pytest.raises(requests.RequestException, match="403.*retry"):
-        celestrak_client.fetch_omm(25544)
-    assert len(calls) == 1
-    now[0] += 7200
     assert celestrak_client.fetch_omm(25544) == [ISS_OMM]
     assert len(calls) == 2
 
