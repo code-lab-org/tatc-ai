@@ -19,7 +19,7 @@ The client implements these decisions with a persistent SQLite cache. Automated 
 - Cache valid SATCAT satellite-name search responses, including valid no-match results, for 12 hours. Cache GP responses for two hours.
 - If the persistent cache is unavailable, stop downloads and explain the storage failure in the app instead of bypassing the cache.
 - Limit cached response data to approximately 50 MB, separately from the log limit. Remove expired entries first. If the cache remains full, report the capacity issue instead of evicting unexpired responses and downloading them again later.
-- Other request failures are reported to the researcher through the app and stop the current lookup. Do not add a blanket two-hour suppression of each failed query or automatic retries after these HTTP failures. Local argument corrections and successful no-match follow-up searches remain distinct from retries after an upstream HTTP failure.
+- Every other non-200 response starts a service-wide lock (ten minutes, or two hours for HTTP 403) and is reported to the researcher through the app. Do not add per-query suppression or automatic retries after these HTTP failures. Local argument corrections and successful no-match follow-up searches remain distinct from retries after an upstream HTTP failure.
 - Automated regression tests are part of the implementation deliverable and should be added to the repository alongside the existing MCP server tests. The detailed cases below describe the proposed scope.
 
 ## Recovery behavior
@@ -33,7 +33,7 @@ The [CelesTrak usage policy](https://celestrak.org/usage-policy.php) states that
 ## Implementation details
 
 - Persist the lock separately from response entries, and check it across all application CelesTrak requests. Coordinate concurrent requests so recovery and identical cache misses do not produce duplicate fetches.
-- Recognize HTTP 429 and CelesTrak's explicit temporary-rate-limit HTTP 403 messages; do not classify every 403 as a temporary rate limit.
+- Recognize HTTP 429 and CelesTrak's explicit temporary-rate-limit HTTP 403 messages; do not classify every 403 as a temporary rate limit. Every 403 still pauses downloads for two hours; the message text distinguishes a recognized temporary rate limit from other access denials.
 - Distinguish local validation errors and successful no-match responses from actual upstream non-200 responses. Existing tools accept identifiers and search terms, not arbitrary CelesTrak URLs, so an LLM cannot repair a broken server endpoint through its inputs.
 - Use SQLite at `CELESTRAK_CACHE_PATH`, defaulting to `~/.cache/tatc-ai/celestrak.sqlite3` for native runs. Compose mounts a dedicated volume at `/data/celestrak`. Hash the endpoint and sorted upstream query parameters for cache keys. Keep ranking and output limits outside the cached raw responses, so changing a search result limit does not repeat a download.
 - Serialize upstream fetches with a file lock shared across threads and processes that use the same cache path. This protects one application's shared store; it does not coordinate independent caches on different machines sharing a public IP.
