@@ -624,3 +624,83 @@ def test_invalid_conical_input_names_the_real_problem(change, reason):
     with pytest.raises(ValueError, match=reason) as error:
         build_satellites(sensor_request(instrument))
     assert "Unknown" not in str(error.value)
+
+
+@pytest.mark.parametrize("half_width", [60, 180])
+def test_conical_display_preserves_tatc_scan_geometry(half_width):
+    from shapely.geometry import Polygon
+    from src.coverage_analysis import _display_track, sample_times
+
+    raw = scenario()
+    raw["end_time"] = (START + timedelta(minutes=6)).isoformat()
+    raw["satellites"][0]["instruments"] = [{
+        **BARE_CONICAL, "scan_half_width": half_width, "scan_center_azimuth": 40,
+    }]
+    request = CoverageRequest.model_validate(raw)
+    satellite = build_satellites(request)[0]
+    track = _display_track(satellite, request)
+    footprint = track["footprints"][0]
+    times = sample_times(request.start_time, request.end_time, request.display_step_seconds)
+    orbit = satellite.orbit.to_gp_orbit().get_orbit_track(times)
+    expected = satellite.instruments[0].compute_footprint(orbit)
+    assert footprint["kind"] == "conical"
+    assert len(footprint["parts"]) == len(track["samples"]) == len(times)
+    assert any(footprint["parts"])
+    for index, shape in enumerate(expected):
+        parts = list(getattr(shape, "geoms", [shape]))
+        assert len(footprint["parts"][index]) == len(parts)
+        for n, part in enumerate(parts):
+            actual = Polygon(footprint["parts"][index][n], footprint["holes"][index][n])
+            assert actual.is_valid
+            assert actual.hausdorff_distance(part) < 0.002
+            assert len(actual.interiors) == len(part.interiors)
+    if half_width == 180:
+        assert any(holes for sample in footprint["holes"] for holes in sample)
+
+
+def test_conical_footprints_share_the_display_sample_budget():
+    request = sensor_request(BARE_CONICAL)
+    with mock.patch("src.coverage_analysis.MAX_FOOTPRINT_SAMPLES", 1):
+        with pytest.raises(ValueError, match="increase display_step_seconds"):
+            analyze(request, include_tracks=True)
+
+
+@pytest.mark.parametrize("instrument", [
+    {"name": "Basic", "field_of_regard": 60}, POINTED, BARE_CONICAL,
+])
+def test_display_uses_collected_instrument_polygons_and_validity(instrument):
+    from tatc.analysis import collect_ground_track
+    from src.coverage_analysis import _display_track, sample_times
+    raw = scenario()
+    raw["end_time"] = (START + timedelta(minutes=4)).isoformat()
+    raw["satellites"][0]["instruments"] = [instrument]
+    request = CoverageRequest.model_validate(raw)
+    satellite = build_satellites(request)[0]
+    times = sample_times(request.start_time, request.end_time, request.display_step_seconds)
+    expected = collect_ground_track(satellite, times, instrument_index=None)
+    footprint = _display_track(satellite, request)["footprints"][0]
+    assert footprint["source"] == "tatc.analysis.collect_ground_track"
+    assert footprint["valid_obs"] == expected.valid_obs.tolist()
+    assert len(footprint["parts"]) == len(expected)
+    for parts, geometry in zip(footprint["parts"], expected.geometry):
+        assert len(parts) == len(getattr(geometry, "geoms", [geometry]))
+
+
+def test_sampled_footprints_preserve_antimeridian_parts():
+    from src.coverage_analysis import _display_track
+
+    raw = scenario()
+    raw["end_time"] = (START + timedelta(minutes=2)).isoformat()
+    request = CoverageRequest.model_validate(raw)
+    satellite = build_satellites(request)[0]
+    track = _display_track(satellite, request)
+    # Rotate this orbit so its first footprint crosses longitude 180.
+    raw["satellites"][0]["orbit"]["right_ascension_ascending_node"] = (
+        180 - track["samples"][0][1]
+    ) % 360
+    request = CoverageRequest.model_validate(raw)
+    footprint = _display_track(build_satellites(request)[0], request)["footprints"][0]
+    assert len(footprint["parts"][0]) >= 2
+    for part in footprint["parts"][0]:
+        assert all(-180 <= lon <= 180 and -90 <= lat <= 90 for lon, lat in part)
+        assert all(abs(b[0] - a[0]) <= 180 for a, b in zip(part, part[1:]))

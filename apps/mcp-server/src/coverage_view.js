@@ -236,6 +236,7 @@
   $("visual").hidden = false;
   $("links-label").hidden = points.length === 0;
   $("footprints-label").hidden = !DATA.tracks.some((t) => t.footprints);
+  $("swath-label").hidden = $("footprints-label").hidden;
   if (points.length) selectPoint(0);
   else setTime(0);
   const assetRoot = new URL("../cesium/1.146/", location.href).href;
@@ -415,8 +416,7 @@
         },
       });
       satellites.set(track.name, entity);
-      // TATC footprints and boresights of pointed instruments, interpolated
-      // between display samples so they move with the satellite.
+      // Pointed footprints interpolate; conical scans keep TATC polygon topology at each sample.
       const sampleAt = (time) => {
         const current = C.JulianDate.toDate(time).getTime();
         const step = DATA.scenario.display_step_seconds * 1000;
@@ -429,7 +429,14 @@
         return [k, Math.max(0, Math.min(1, f))];
       };
       for (const footprint of track.footprints || []) {
+        const sampleIndex = (time) => {
+          const [k, f] = sampleAt(time);
+          return f < 0.5 ? k : k + 1;
+        };
         const ring = (time, part) => {
+          // Unioned scan arcs can change vertex order and hole topology between samples.
+          if (footprint.kind !== "pointed")
+            return footprint.parts[sampleIndex(time)][part];
           const [k, f] = sampleAt(time);
           const [a, b] = [footprint.parts[k], footprint.parts[k + 1]];
           // A footprint split at the antimeridian keeps its sampled shape.
@@ -438,7 +445,9 @@
           return a[part]?.map((p, n) => lerp(p, b[part][n], f));
         };
         const show = (time, part) =>
-          $("show-footprints").checked && !!ring(time, part);
+          $("show-footprints").checked &&
+          (footprint.valid_obs?.[sampleIndex(time)] ?? true) &&
+          (ring(time, part)?.length || 0) >= 4;
         const parts = Math.max(...footprint.parts.map((p) => p.length));
         for (let part = 0; part < parts; part++)
           viewer.entities.add({
@@ -446,10 +455,18 @@
             polygon: {
               show: new C.CallbackProperty((t) => show(t, part), false),
               hierarchy: new C.CallbackProperty(
-                (t) =>
-                  new C.PolygonHierarchy(
-                    C.Cartesian3.fromDegreesArray((ring(t, part) || []).flat()),
-                  ),
+                (t) => {
+                  const boundary = ring(t, part);
+                  if (!boundary || boundary.length < 4) return undefined;
+                  return new C.PolygonHierarchy(
+                    C.Cartesian3.fromDegreesArray(boundary.flat()),
+                    (footprint.holes?.[sampleIndex(t)]?.[part] || []).map(
+                      (hole) => new C.PolygonHierarchy(
+                        C.Cartesian3.fromDegreesArray(hole.flat()),
+                      ),
+                    ),
+                  );
+                },
                 false,
               ),
               height: 0,
@@ -458,6 +475,31 @@
               outlineColor: color,
             },
           });
+        footprint.parts.forEach((parts, index) => {
+          if (footprint.valid_obs?.[index] === false) return;
+          const sampleTime = samples[index].time;
+          for (let part = 0; part < parts.length; part++) {
+            if (parts[part].length < 4) continue;
+            viewer.entities.add({
+              name: track.name + " / " + footprint.instrument + " / sampled trail",
+              polygon: {
+                show: new C.CallbackProperty((time) => {
+                  const age = C.JulianDate.toDate(time).getTime() - sampleTime;
+                  return $("show-swath").checked && age >= 0 &&
+                    age <= Number($("trail-minutes").value) * 60000;
+                }, false),
+                hierarchy: new C.PolygonHierarchy(
+                  C.Cartesian3.fromDegreesArray(parts[part].flat()),
+                  (footprint.holes?.[index]?.[part] || []).map(
+                    (hole) => new C.PolygonHierarchy(C.Cartesian3.fromDegreesArray(hole.flat())),
+                  ),
+                ),
+                height: 0,
+                material: color.withAlpha(0.15),
+              },
+            });
+          }
+        });
         viewer.entities.add({
           polyline: {
             show: new C.CallbackProperty((t) => show(t, 0), false),
@@ -466,11 +508,9 @@
             material: color.withAlpha(0.9),
             positions: new C.CallbackProperty((t) => {
               const [k, f] = sampleAt(t);
-              const center = lerp(
-                footprint.centers[k],
-                footprint.centers[k + 1],
-                f,
-              );
+              const center = footprint.kind !== "pointed"
+                ? footprint.centers[sampleIndex(t)]
+                : lerp(footprint.centers[k], footprint.centers[k + 1], f);
               const location = entity.position.getValue(t);
               return location
                 ? [location, C.Cartesian3.fromDegrees(...center)]
@@ -589,7 +629,7 @@
         satellite.path.show = $("show-orbits").checked;
       viewer.scene.requestRender();
     };
-    for (const id of ["show-ground", "show-links", "show-footprints"])
+    for (const id of ["show-ground", "show-links", "show-footprints", "show-swath", "trail-minutes"])
       $(id).onchange = () => viewer.scene.requestRender();
     $("globe").hidden = false;
     viewer.resize();

@@ -27,7 +27,7 @@ from .tatc_integration import create_orbit_from_omm
 # window is not meaningful. 30 days still allows planning from a current TLE;
 # it also rejects element sets a model wrote from memory with a stale epoch.
 MAX_TLE_EPOCH_DAYS = 30
-# Footprints of 4 satellites with 2 pointed instruments each over 24 hours at
+# Footprints of 4 satellites with 2 instruments each over 24 hours at
 # the default 120 s display step; each sample adds a polygon to the scene.
 MAX_FOOTPRINT_SAMPLES = 5768
 INTERVAL_ACCOUNTING_METHOD = "interval_union"
@@ -559,7 +559,7 @@ def _max_access_pad(satellite, instrument, elevation: float) -> timedelta:
 def analyze(request: CoverageRequest, include_tracks=False) -> dict:
     """Compute event-based observations; orbit samples are solely a display artifact."""
     from tatc.analysis import collect_observations
-    from tatc.schemas import Point, PointedInstrument
+    from tatc.schemas import Point
 
     satellites = build_satellites(request)
     scenario = request.model_dump(mode="json")
@@ -708,58 +708,86 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
             }
         )
     if include_tracks:
-        pointed = sum(
-            isinstance(i, PointedInstrument) for s in satellites for i in s.instruments
-        )
+        footprint_count = sum(len(s.instruments) for s in satellites)
         samples = len(
             sample_times(
                 request.start_time, request.end_time, request.display_step_seconds
             )
         )
-        if pointed * samples > MAX_FOOTPRINT_SAMPLES:
+        if footprint_count * samples > MAX_FOOTPRINT_SAMPLES:
             raise ValueError(
-                f"Footprints of {pointed} pointed instruments at {samples} display samples "
+                f"Footprints of {footprint_count} instruments at {samples} display samples "
                 "exceed the scene limit; increase display_step_seconds or shorten the window"
             )
         result["tracks"] = [
             _display_track(satellite, request) for satellite in satellites
         ]
+        result["assumptions"].append(
+            "Map footprints use TATC collect_ground_track at the display step. "
+            "Conical and basic footprints use the nearest sample; pointed footprints interpolate. "
+            "The optional trail draws valid sampled footprints, not a dissolved swath or "
+            "continuous observed area. valid_obs checks constraints at the footprint center, "
+            "not every location inside the polygon."
+        )
     # Fail explicitly if an upstream numerical result was not JSON-finite.
     json.dumps(result, allow_nan=False)
     return result
 
 
 def _display_track(satellite, request):
-    from tatc.schemas import PointedInstrument
+    from tatc.analysis import collect_ground_track
 
     args = (request.start_time, request.end_time, request.display_step_seconds)
+    times = sample_times(*args)
     track = sample_orbit(satellite.name, satellite.orbit, *args)
-    pointed = [i for i in satellite.instruments if isinstance(i, PointedInstrument)]
-    if pointed:
-        orbit_track = satellite.orbit.to_gp_orbit().get_orbit_track(sample_times(*args))
-        track["footprints"] = [_footprints(i, orbit_track) for i in pointed]
+    footprints = collect_ground_track(satellite, times, instrument_index=None)
+    orbit_track = satellite.orbit.to_gp_orbit().get_orbit_track(times)
+    track["footprints"] = [
+        _footprints(
+            instrument, footprints[footprints.instrument == instrument.name], orbit_track
+        )
+        for instrument in satellite.instruments
+    ]
     return track
 
 
-def _footprints(instrument, orbit_track):
-    """TATC footprint and boresight ground point at each display sample."""
-    # number_points counts points per side of a rectangle, or around an ellipse.
-    shapes = instrument.compute_footprint(
-        orbit_track, number_points=2 if instrument.is_rectangular else 16
-    )
+def _footprints(instrument, rows, orbit_track):
+    """Reshape native TATC sampled polygons, retaining holes and validity flags."""
+    from tatc.schemas import ConicalInstrument, PointedInstrument
+
+    shapes = rows.geometry
     centers = instrument.compute_footprint_center(orbit_track)
     return {
         "instrument": instrument.name,
+        "kind": (
+            "conical"
+            if isinstance(instrument, ConicalInstrument)
+            else "pointed"
+            if isinstance(instrument, PointedInstrument)
+            else "basic"
+        ),
+        "source": "tatc.analysis.collect_ground_track",
+        "valid_obs": [bool(valid) for valid in rows.valid_obs],
         # A footprint crossing the antimeridian is split into several parts.
         "parts": [
             [
-                [[round(x, 3), round(y, 3)] for x, y, *_ in part.exterior.coords]
+                [[round(x, 5), round(y, 5)] for x, y, *_ in part.exterior.coords]
+                for part in getattr(shape, "geoms", [shape])
+            ]
+            for shape in shapes
+        ],
+        "holes": [
+            [
+                [
+                    [[round(x, 5), round(y, 5)] for x, y, *_ in ring.coords]
+                    for ring in part.interiors
+                ]
                 for part in getattr(shape, "geoms", [shape])
             ]
             for shape in shapes
         ],
         "centers": [
-            [round(float(lon), 3), round(float(lat), 3)]
+            [round(float(lon), 5), round(float(lat), 5)]
             for lon, lat in zip(centers.longitude.degrees, centers.latitude.degrees)
         ],
     }

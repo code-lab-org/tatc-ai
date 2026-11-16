@@ -26,6 +26,7 @@ const fixture = JSON.parse(
       cwd: root,
       env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
       encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     },
   ),
 );
@@ -46,6 +47,7 @@ const pointedFixture = JSON.parse(
       cwd: root,
       env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
       encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     },
   ),
 );
@@ -66,6 +68,7 @@ const conicalFixture = JSON.parse(
       cwd: root,
       env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
       encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     },
   ),
 );
@@ -209,13 +212,8 @@ async function setup({
       fs.readFileSync(path.join(root, "apps/mcp-server/src", name), "utf8"),
     );
   w.eval(code);
-  for (
-    let i = 0;
-    i < 100 &&
-    ![...w.document.scripts].some((s) => s.src.endsWith("/Cesium.js"));
-    i++
-  )
-    await new Promise(setImmediate);
+  await w.tatcStudy;
+  await new Promise(setImmediate);
   const script = [...w.document.scripts].find((s) =>
     s.src.endsWith("/Cesium.js"),
   );
@@ -373,6 +371,7 @@ test("timeline drives the clock and links follow computed observation intervals"
         Cesium.JulianDate.toDate(viewer.clock.currentTime).getTime() - expected,
       ) < 2,
     );
+    get("show-footprints").checked = false;
     const link = viewer.entities.values.find(
       (e) =>
         e.polyline?.show?.getValue(viewer.clock.currentTime) &&
@@ -1131,6 +1130,94 @@ test("a mixed study counts only real viewing events", async () => {
       get("result-table").querySelector("tbody td:nth-child(2)").textContent,
       "1",
     );
+  } finally {
+    dom.window.close();
+  }
+});
+
+
+test("conical scan footprints preserve holes, sample topology and the layer toggle", async () => {
+  const { dom, get, data, viewer } = await setup({
+    editFixture: (data) => Object.assign(data, conicalFixture),
+  });
+  try {
+    assert.ok(viewer, get("status").textContent);
+    assert.equal(get("footprints-label").hidden, false);
+    const track = data.tracks[0];
+    const footprint = track.footprints[0];
+    assert.equal(footprint.kind, "conical");
+    const polygons = viewer.entities.values.filter((e) => e.polygon);
+    const entities = polygons.filter((e) => e.name === track.name + " / " + footprint.instrument);
+    assert.ok(entities.length > 0);
+    const index = footprint.holes.findIndex((sample) => sample.some((holes) => holes.length));
+    assert.ok(index >= 0, "full scan retains its unobserved interior");
+    const time = Cesium.JulianDate.fromIso8601(track.samples[index][0]);
+    entities.forEach((entity, part) => {
+      const hierarchy = entity.polygon.hierarchy.getValue(time);
+      if (!footprint.parts[index][part]) {
+        assert.equal(hierarchy, undefined);
+        assert.equal(entity.polygon.show.getValue(time), false);
+        return;
+      }
+      assert.equal(hierarchy.positions.length, footprint.parts[index][part]?.length || 0);
+      assert.equal(hierarchy.holes.length, footprint.holes[index][part]?.length || 0);
+      hierarchy.holes.forEach((hole, n) => {
+        assert.equal(hole.positions.length, footprint.holes[index][part][n].length);
+      });
+      assert.equal(entity.polygon.show.getValue(time), !!footprint.parts[index][part]);
+      get("show-footprints").checked = false;
+      assert.equal(entity.polygon.show.getValue(time), false);
+      get("show-footprints").checked = true;
+    });
+    // Between samples, keep one complete TATC scan rather than morphing a thin ring.
+    const between = Cesium.JulianDate.addSeconds(time, 10, new Cesium.JulianDate());
+    assert.deepEqual(
+      entities[0].polygon.hierarchy.getValue(between),
+      entities[0].polygon.hierarchy.getValue(time),
+    );
+    assert.equal(data.points[0].metrics.covered_seconds, null);
+  } finally {
+    dom.window.close();
+  }
+});
+
+
+test("sampled footprint trails follow the shared clock, validity, and trail length", async () => {
+  const { dom, get, data, viewer } = await setup();
+  try {
+    assert.equal(get("swath-label").hidden, false);
+    const trails = viewer.entities.values.filter((e) => e.name?.endsWith(" / sampled trail"));
+    assert.ok(trails.length > 0);
+    const time = Cesium.JulianDate.fromIso8601(data.tracks[0].samples[0][0]);
+    assert.ok(trails.every((e) => !e.polygon.show.getValue(time)));
+    get("show-swath").checked = true;
+    assert.ok(trails.some((e) => e.polygon.show.getValue(time)));
+    get("trail-minutes").value = "1";
+    const later = Cesium.JulianDate.addSeconds(time, 61, new Cesium.JulianDate());
+    assert.equal(trails[0].polygon.show.getValue(later), false);
+    const before = Cesium.JulianDate.addSeconds(time, -1, new Cesium.JulianDate());
+    assert.ok(trails.every((e) => !e.polygon.show.getValue(before)));
+  } finally {
+    dom.window.close();
+  }
+});
+
+
+test("invalid sampled footprints are hidden and excluded from the trail", async () => {
+  const { dom, get, data, viewer } = await setup({
+    editFixture: (data) => {
+      Object.assign(data, conicalFixture);
+      data.tracks[0].footprints[0].valid_obs.fill(false);
+    },
+  });
+  try {
+    get("show-footprints").checked = true;
+    get("show-swath").checked = true;
+    const time = Cesium.JulianDate.fromIso8601(data.tracks[0].samples[0][0]);
+    const polygons = viewer.entities.values.filter((entity) => entity.polygon);
+    assert.ok(polygons.length > 0);
+    assert.ok(polygons.every((entity) => !entity.polygon.show.getValue(time)));
+    assert.ok(!polygons.some((entity) => entity.name?.endsWith(" / sampled trail")));
   } finally {
     dom.window.close();
   }

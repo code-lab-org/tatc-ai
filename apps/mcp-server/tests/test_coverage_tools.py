@@ -433,7 +433,7 @@ def test_example_text_carries_exact_results_and_reshow_call():
     assert "mean complete revisit none (no complete revisit)" in summary
     assert "Scope: access opportunities at the listed study points only" in summary
     assert "area heatmap, swath, illumination mask" in summary
-    assert "footprint and boresight of pointed instruments only" in summary
+    assert "TATC collect_ground_track" in summary
     assert "Satellites (2; name each in your reply):" in summary
     assert "only if the user later asks for another view" in summary
     assert "call visualize(view='example', presentation=<one>)" in summary
@@ -469,12 +469,12 @@ def test_pointed_instruments_are_described_and_drawn_from_tatc_footprints():
         next(c.resource.text for c in response.content if c.type == "resource")
     )
     track = data["tracks"][0]
-    # Only the pointed instrument has a footprint, one per display sample.
-    [footprint] = track["footprints"]
+    assert len(track["footprints"]) == 2
+    footprint = next(f for f in track["footprints"] if f["instrument"] == "Imager")
     assert footprint["instrument"] == "Imager"
     assert len(footprint["parts"]) == len(footprint["centers"]) == len(track["samples"])
     ring = footprint["parts"][0][0]
-    assert len(ring) == 9 and ring[0] == ring[-1]
+    assert len(ring) >= 5 and ring[0] == ring[-1]
     # A 15° roll moves the footprint off the equatorial ground track.
     assert all(abs(lat) > 0.5 for _, lat in footprint["centers"])
 
@@ -823,7 +823,7 @@ def test_conical_study_without_field_of_regard_is_described_and_reshown():
     result = scene(response.content[1].resource.text)
     sent = result["request"]["scenario"]["satellites"][0]["instruments"][0]
     assert "field_of_regard" not in sent
-    assert "footprints" not in result["tracks"][0]
+    assert result["tracks"][0]["footprints"][0]["kind"] == "conical"
     # A rerun of the viewer's own draft and a re-show both reach the same study.
     rerun = call(
         "visualize", {"view": "coverage", "scenario": result["request"]["scenario"]}
