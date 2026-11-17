@@ -32,9 +32,9 @@ The pane contains:
 - **Map:** CesiumJS 2D/3D views, satellite legend, orbit/ground-track/observation
   layers, and adjustable trail duration. The Footprints layer uses native TATC
   `collect_ground_track` for supplied basic, pointed and conical instruments.
-  It preserves polygon holes, scan sectors and antimeridian splits. Pointed
-  footprints interpolate between display samples; basic and conical footprints
-  use the nearest display sample. Lines show the footprint center (the conical
+  It preserves polygon holes, scan sectors and antimeridian splits. All footprints
+  use the nearest native display sample; longitude lists are not interpolated
+  across polar topology changes. Lines show the footprint center (the conical
   scan-sector center, not a rotating beam). An optional **Sampled footprint trail**
   shows past valid sampled polygons within the trail duration; it does not fill
   gaps between samples or compute a dissolved swath. `valid_obs` checks constraints
@@ -360,3 +360,9 @@ The map's loading deadline counts 30 seconds while the Map tab, study pane, and 
 document are visible. Closing the pane, switching views, or backgrounding the document pauses the
 deadline; returning resumes the remaining budget. It does not restart the map or
 substitute a different renderer.
+
+
+Wide polar polygons are partitioned for Cesium triangulation without changing
+TAT-C's footprint union. Native coordinate precision and interior exclusions
+are retained. True outlines use TAT-C boundary arcs, omitting artificial display
+seams. This display handling does not change point-event calculations.

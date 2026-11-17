@@ -364,12 +364,9 @@
     viewer.clock.stopTime = C.JulianDate.fromDate(new Date(end));
     viewer.clock.clockRange = C.ClockRange.CLAMPED;
     const satellites = new Map();
-    // Longitudes move the short way round, so a footprint crossing the
-    // antimeridian between samples does not sweep across the globe.
-    const lerp = ([lon, lat], [lon2, lat2], f) => {
-      const d = lon2 - lon - 360 * Math.round((lon2 - lon) / 360);
-      return [lon + d * f, lat + (lat2 - lat) * f];
-    };
+    const boundaryPositions = (line) => line.map((direction) =>
+      C.Ellipsoid.WGS84.scaleToGeocentricSurface(new C.Cartesian3(...direction)),
+    );
     DATA.tracks.forEach((track, i) => {
       const color = C.Color.fromCssColorString(colors[i % colors.length]);
       const legendItem = document.createElement("div");
@@ -416,7 +413,7 @@
         },
       });
       satellites.set(track.name, entity);
-      // Pointed footprints interpolate; conical scans keep TATC polygon topology at each sample.
+      // Keep native sampled topology at poles and antimeridian crossings.
       const sampleAt = (time) => {
         const current = C.JulianDate.toDate(time).getTime();
         const step = DATA.scenario.display_step_seconds * 1000;
@@ -433,17 +430,7 @@
           const [k, f] = sampleAt(time);
           return f < 0.5 ? k : k + 1;
         };
-        const ring = (time, part) => {
-          // Unioned scan arcs can change vertex order and hole topology between samples.
-          if (footprint.kind !== "pointed")
-            return footprint.parts[sampleIndex(time)][part];
-          const [k, f] = sampleAt(time);
-          const [a, b] = [footprint.parts[k], footprint.parts[k + 1]];
-          // A footprint split at the antimeridian keeps its sampled shape.
-          if (a.length !== b.length || a[part]?.length !== b[part]?.length)
-            return (f < 0.5 ? a : b)[part];
-          return a[part]?.map((p, n) => lerp(p, b[part][n], f));
-        };
+        const ring = (time, part) => footprint.parts[sampleIndex(time)][part];
         const show = (time, part) =>
           $("show-footprints").checked &&
           (footprint.valid_obs?.[sampleIndex(time)] ?? true) &&
@@ -471,7 +458,7 @@
               ),
               height: 0,
               material: color.withAlpha(0.45),
-              outline: true,
+              outline: new C.CallbackProperty((t) => !footprint.partitioned?.[sampleIndex(t)], false),
               outlineColor: color,
             },
           });
@@ -500,6 +487,17 @@
             });
           }
         });
+        const lineCount = Math.max(0, ...(footprint.boundaries || []).map((lines) => lines.length));
+        for (let line = 0; line < lineCount; line++)
+          viewer.entities.add({polyline: {
+            show: new C.CallbackProperty((t) => $("show-footprints").checked &&
+              (footprint.valid_obs?.[sampleIndex(t)] ?? true) &&
+              !!footprint.boundaries[sampleIndex(t)][line], false),
+            positions: new C.CallbackProperty((t) => boundaryPositions(
+              footprint.boundaries[sampleIndex(t)][line] || [],
+            ), false),
+            clampToGround: true, width: 1.5, material: color,
+          }});
         viewer.entities.add({
           polyline: {
             show: new C.CallbackProperty((t) => show(t, 0), false),
@@ -507,10 +505,7 @@
             arcType: C.ArcType.NONE,
             material: color.withAlpha(0.9),
             positions: new C.CallbackProperty((t) => {
-              const [k, f] = sampleAt(t);
-              const center = footprint.kind !== "pointed"
-                ? footprint.centers[sampleIndex(t)]
-                : lerp(footprint.centers[k], footprint.centers[k + 1], f);
+              const center = footprint.centers[sampleIndex(t)];
               const location = entity.position.getValue(t);
               return location
                 ? [location, C.Cartesian3.fromDegrees(...center)]

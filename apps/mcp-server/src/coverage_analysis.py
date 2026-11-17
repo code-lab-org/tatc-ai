@@ -724,7 +724,7 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
         ]
         result["assumptions"].append(
             "Map footprints use TATC collect_ground_track at the display step. "
-            "Conical and basic footprints use the nearest sample; pointed footprints interpolate. "
+            "Footprints use the nearest native sample without longitude-list interpolation. "
             "The optional trail draws valid sampled footprints, not a dissolved swath or "
             "continuous observed area. valid_obs checks constraints at the footprint center, "
             "not every location inside the polygon."
@@ -755,7 +755,10 @@ def _footprints(instrument, rows, orbit_track):
     """Reshape native TATC sampled polygons, retaining holes and validity flags."""
     from tatc.schemas import ConicalInstrument, PointedInstrument
 
+    from .cesium_geometry import boundary_lines, cesium_parts, needs_partition, part_rings
+
     shapes = rows.geometry
+    display = [part_rings(cesium_parts(shape)) for shape in shapes]
     centers = instrument.compute_footprint_center(orbit_track)
     return {
         "instrument": instrument.name,
@@ -769,25 +772,12 @@ def _footprints(instrument, rows, orbit_track):
         "source": "tatc.analysis.collect_ground_track",
         "valid_obs": [bool(valid) for valid in rows.valid_obs],
         # A footprint crossing the antimeridian is split into several parts.
-        "parts": [
-            [
-                [[round(x, 5), round(y, 5)] for x, y, *_ in part.exterior.coords]
-                for part in getattr(shape, "geoms", [shape])
-            ]
-            for shape in shapes
-        ],
-        "holes": [
-            [
-                [
-                    [[round(x, 5), round(y, 5)] for x, y, *_ in ring.coords]
-                    for ring in part.interiors
-                ]
-                for part in getattr(shape, "geoms", [shape])
-            ]
-            for shape in shapes
-        ],
+        "parts": [[rings[0] for rings in polygons] for polygons in display],
+        "holes": [[rings[1:] for rings in polygons] for polygons in display],
+        "partitioned": [needs_partition(shape) for shape in shapes],
+        "boundaries": [boundary_lines(shape) if needs_partition(shape) else [] for shape in shapes],
         "centers": [
-            [round(float(lon), 5), round(float(lat), 5)]
+            [float(lon), float(lat)]
             for lon, lat in zip(centers.longitude.degrees, centers.latitude.degrees)
         ],
     }

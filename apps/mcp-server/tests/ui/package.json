@@ -2,7 +2,7 @@
   "name": "tatc-coverage-ui-tests",
   "private": true,
   "scripts": {
-    "test": "node --test coverage_view.test.cjs workspace.test.cjs"
+    "test": "node --test coverage_view.test.cjs workspace.test.cjs polar_geometry.test.cjs"
   },
   "devDependencies": {
     "cesium": "1.146.0",
