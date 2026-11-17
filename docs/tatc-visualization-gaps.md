@@ -17,7 +17,7 @@ reviewed.
 | TATC API | Where TATC-AI uses it | Visualization |
 | --- | --- | --- |
 | `analysis.coverage.collect_observations` | `analyze_coverage` and `visualize(view="coverage")` | Study pane: results, observation/gap timeline, tables, CSV and study JSON downloads, Cesium 2D/3D orbits and observation links |
-| `analysis.track.compute_ground_track` | `ground_track_map` | Inline MapLibre map with a circular footprint from an assumed 60° field of view; not in the Cesium pane |
+| `analysis.compute_ground_track` | `ground_track_map` with explicit instrument; `visualize(view="ground_track")` reruns | Cesium Study pane: dissolved sampled footprint area, per-window or per-orbit groups; GeoJSON export |
 | `schemas.Satellite` with any TATC orbit type | Coverage scenarios | Orbit tracks in Cesium |
 | `schemas.Instrument`, `schemas.PointedInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |
 | `PointedInstrument.compute_footprint`, `compute_footprint_center` | Coverage scenes with pointed instruments | Footprints layer: instantaneous footprint and boresight line |
@@ -37,7 +37,7 @@ the result does not show them.
 | Instrument constraints (`req_self_sunlit`, `req_target_sunlit`, `min_access_time`, `access_time_fixed`) | Yes | Yes | Yes, except `access_time_fixed` | No day/night context |
 | Non-circular orbits (`sso`, `keplerian`, `molniya`, `tundra`, `geosynchronous`) | Yes; orbit JSON is listed | Yes | No; "Orbital elements are preserved" | Yes, as tracks |
 | Circular RAAN and true anomaly | Yes | Yes | No; only altitude and inclination | Yes |
-| `compute_ground_track` swaths | Only in `ground_track_map` | One-line summary | n/a | No; MapLibre only, assumed field of view |
+| `compute_ground_track` dissolved geometry | Yes, with supplied instrument | Instrument name, sample step and limits | Window and sampling; geometry settings preserved | Yes, in the Study pane |
 
 Tool descriptions mention only circular, OMM and TLE orbits.
 An invalid orbit returns TATC's full multi-model validation error (16 entries
@@ -55,7 +55,6 @@ for chat follow-ups.
 | --- | --- | --- | --- |
 | `utils.projection.compute_projected_ray_position` | Ground intersection of any ray | Satellite-to-corner frustum lines | Part of the Footprints layer |
 | `analysis.track.collect_ground_track` | One footprint polygon per time step | Swath accumulating behind the satellite | Swath layer, trail length |
-| `analysis.track.compute_ground_track` | Footprints dissolved per orbit or over the window | Total observed area per satellite or instrument | Observed-area layer (replaces the assumed 60° circle) |
 | `analysis.track.collect_ground_pixels` | Ground position of each detector pixel (rectangular `PointedInstrument`) | Pixel grid showing sampling and overlap | Pixel counts, oversampling |
 | `utils.projection.compute_limb` | Outline of the Earth disk visible from the satellite | Horizon circle following the satellite | Visible-Earth layer |
 
@@ -111,11 +110,12 @@ TATC does not produce a solar-illumination mask as a separate product.
 
 ## Unsupported list in the MCP instructions
 
-The server currently tells the model that the study pane does not draw swaths,
-footprints of basic field-of-regard instruments or illumination masks, and that
-scheduling, downlink/latency, cost models and design-space optimization are
-unsupported. Regional coverage goes to the begin, region and finish workflow,
-whose cells are not yet drawn in the pane. Swaths, area heatmaps and downlink
+The point-coverage explorer does not draw dissolved swaths; the separate ground-track
+view now does with an explicit instrument. It still does not draw
+footprints of basic field-of-regard instruments in point studies or illumination
+masks. Scheduling, downlink/latency, cost models and design-space optimization
+remain unsupported. Regional coverage goes to the begin, region and finish workflow,
+whose cells are not yet drawn in the pane. Area heatmaps and downlink
 latency are TATC capabilities missing from the study pane, not TATC limitations; that
 list should change as each is exposed. Observation scheduling, cost models and
 design-space optimization are not TATC functions.

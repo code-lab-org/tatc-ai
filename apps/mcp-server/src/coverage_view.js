@@ -236,6 +236,7 @@
   $("visual").hidden = false;
   $("links-label").hidden = points.length === 0;
   $("footprints-label").hidden = !DATA.tracks.some((t) => t.footprints);
+  $("ground-area-label").hidden = !DATA.instrument;
   if (points.length) selectPoint(0);
   else setTime(0);
   const assetRoot = new URL("../cesium/1.146/", location.href).href;
@@ -369,6 +370,31 @@
       const d = lon2 - lon - 360 * Math.round((lon2 - lon) / 360);
       return [lon + d * f, lat + (lat2 - lat) * f];
     };
+    for (const feature of DATA.ground_area?.features || []) {
+      const geometry = feature.geometry;
+      const polygons = geometry.type === "Polygon"
+        ? [geometry.coordinates] : geometry.coordinates;
+      for (const rings of polygons) {
+        if (!rings[0]?.length) continue;
+        const positions = (ring) => C.Cartesian3.fromDegreesArray(
+          ring.flatMap(([lon, lat]) => [lon, lat]),
+        );
+        viewer.entities.add({
+          name: feature.properties.instrument + " / dissolved sampled footprint area",
+          polygon: {
+            show: new C.CallbackProperty(() => $("show-ground-area").checked, false),
+            hierarchy: new C.PolygonHierarchy(
+              positions(rings[0]),
+              rings.slice(1).map((ring) => new C.PolygonHierarchy(positions(ring))),
+            ),
+            height: 0,
+            material: C.Color.fromCssColorString(colors[0]).withAlpha(0.3),
+            outline: true,
+            outlineColor: C.Color.fromCssColorString(colors[0]),
+          },
+        });
+      }
+    }
     DATA.tracks.forEach((track, i) => {
       const color = C.Color.fromCssColorString(colors[i % colors.length]);
       const legendItem = document.createElement("div");
@@ -589,7 +615,7 @@
         satellite.path.show = $("show-orbits").checked;
       viewer.scene.requestRender();
     };
-    for (const id of ["show-ground", "show-links", "show-footprints"])
+    for (const id of ["show-ground", "show-links", "show-footprints", "show-ground-area"])
       $(id).onchange = () => viewer.scene.requestRender();
     $("globe").hidden = false;
     viewer.resize();

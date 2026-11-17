@@ -206,8 +206,8 @@ The one added compatibility path is an explicit link to open the same workspace
 in a separate tab when the client lacks the pane adapter. It uses the same data
 and renderer; parameter reruns require the connected LibreChat pane. A map failure
 shows an error while independent numerical results remain usable. No alternate
-renderer, synthetic orbit, partial trajectory or demo is substituted. Existing
-catalog metadata and static ground-track behavior is unchanged.
+renderer, synthetic orbit, partial trajectory or demo is substituted. Catalog metadata is unchanged. Ground-track maps now use this same pane; see
+[the ground-track guide](tools.md#ground-track-maps).
 
 ## Run and try it
 
@@ -283,7 +283,7 @@ which satellite is meant instead of an empty list, which LibreChat shows as
 
 The first increment evaluates discrete points. It does not interpolate area
 coverage, construct regional grids, automatically run design sweeps, or calculate downlink latency.
-Tool descriptions list these, plus swath rendering, footprints of basic
+For point studies, tool descriptions list these, plus dissolved swath rendering and footprints of basic
 field-of-regard instruments,
 solar-illumination masks, observation scheduling and cost models, as unsupported
 studies the model should explain rather than approximate with invented inputs.
@@ -355,3 +355,15 @@ The map's loading deadline counts 30 seconds while the Map tab, study pane, and 
 document are visible. Closing the pane, switching views, or backgrounding the document pauses the
 deadline; returning resumes the remaining budget. It does not restart the map or
 substitute a different renderer.
+
+
+## Ground-track map migration
+
+`ground_track_map` now returns a Study-pane launcher instead of inline MapLibre HTML.
+Satellite-only results contain no assumed instrument footprint. Explicit instruments
+can add a **Dissolved footprint area** layer computed by native TATC
+`compute_ground_track`, with GeoJSON export and holes/multipart boundaries preserved.
+The existing ground-track limits remain 30 days, 2,000 samples and 1–3,600-second
+sampling. These differ from the orbit and coverage views' limits. Reruns use
+`visualize(view="ground_track")`, preserving `step_interval`, `instrument` and
+`dissolve_orbits`. The numerical `generate_ground_track` tool is unchanged.

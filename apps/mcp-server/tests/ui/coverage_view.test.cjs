@@ -1135,3 +1135,49 @@ test("a mixed study counts only real viewing events", async () => {
     dom.window.close();
   }
 });
+
+test("ground-track dissolved polygons preserve holes and export GeoJSON", async () => {
+  const area = {type: "FeatureCollection", features: [{type: "Feature",
+    properties: {instrument: "Scanner"}, geometry: {type: "Polygon", coordinates: [
+      [[0,0],[4,0],[4,4],[0,4],[0,0]],
+      [[1,1],[1,2],[2,2],[2,1],[1,1]],
+    ]}}]};
+  const {dom, get, viewer, data} = await setup({
+    orbitOnly: true,
+    editFixture: (data) => {
+      data.instrument = {name: "Scanner"};
+      data.ground_area = area;
+      data.ui.view = "ground_track";
+      data.request = {view: "ground_track", satellite_identifiers: ["25544"],
+        start_time: data.scenario.start_time, duration: "1 hour", step_interval: "10 seconds",
+        instrument: {name: "Scanner", field_of_regard: 60}, dissolve_orbits: false};
+    },
+  });
+  try {
+    assert.equal(get("view-title").textContent, "Ground-track study");
+    assert.equal(get("ground-area-label").hidden, false);
+    assert.equal(get("export-area").hidden, false);
+    let exported, filename;
+    dom.window.Blob = class { constructor(parts) { exported = parts.join(""); } };
+    dom.window.URL.createObjectURL = () => "blob:area";
+    dom.window.URL.revokeObjectURL = () => {};
+    dom.window.HTMLAnchorElement.prototype.click = function () { filename = this.download; };
+    get("export-area").click();
+    assert.deepEqual(JSON.parse(exported), area);
+    assert.equal(filename, "tatc-ground-track-area.geojson");
+    const entity = viewer.entities.values.find((e) => e.name?.includes("dissolved sampled"));
+    assert.ok(entity);
+    const hierarchy = entity.polygon.hierarchy.getValue(viewer.clock.currentTime);
+    assert.equal(hierarchy.holes.length, 1);
+    assert.equal(hierarchy.holes[0].positions.length, 5);
+    get("show-ground-area").checked = false;
+    assert.equal(entity.polygon.show.getValue(viewer.clock.currentTime), false);
+    const labels = [...dom.window.document.querySelectorAll("label")];
+    const step = labels.find((e) => e.textContent.startsWith("Ground-track step interval")).querySelector("input");
+    assert.equal(step.value, "10 seconds");
+    step.value = "5 seconds";
+    step.dispatchEvent(new dom.window.Event("input", {bubbles: true}));
+    // The calculated request remains immutable until a server calculation returns.
+    assert.equal(data.request.step_interval, "10 seconds");
+  } finally { dom.window.close(); }
+});

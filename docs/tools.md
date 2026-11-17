@@ -6,7 +6,13 @@ The MCP server provides satellite ground-track maps, legacy interval-based cover
 
 `generate_ground_track` returns telemetry with UTC time, latitude, longitude, and altitude in meters. With `include_footprint`, it also returns a TAT-C footprint for each point. Each footprint covers the ground area inside a 60-degree cone below the satellite and is a GeoJSON Polygon or a MultiPolygon split at the antimeridian.
 
-`ground_track_map` takes a satellite, start time, duration, and step interval. It always includes footprints and returns a short text summary plus an interactive MapLibre globe with a static Cartopy picture. LibreChat renders the page inline from a `ui://` resource, using its dark theme. The Footprint box is checked by default. Follow keeps the satellite centered while playing or scrubbing until you move the map by hand. The drawn track follows great circles between samples and splits at the antimeridian. The current orbit, one period calculated from mean altitude with Kepler's law, is bright and has hoverable points; the rest of the track is faded. Footprints stop at 85 degrees latitude, the limit of the globe's map tiles.
+`ground_track_map` opens a Cesium map in LibreChat's resizable Study pane, using the same launcher as the research visualizer. It starts in 2D and supports 3D playback, layer controls, sampled-position tables and CSV export. It no longer returns inline MapLibre HTML or a static map image.
+
+A satellite name alone produces an orbit/ground-track line, with no assumed sensor cone. To draw instrument geometry, pass a researcher-supplied or sourced native TATC `instrument`: basic instruments require `name` and `field_of_regard`; pointed instruments add cross/along-track field of view; conical instruments require `name`, `cone_angle` and `along_track_field_of_view`. Unknown fields and stale orbital elements are rejected for instrument studies.
+
+With an instrument, native `tatc.analysis.compute_ground_track` dissolves valid sampled footprints into a window geometry (`dissolve_orbits=true`) or separate orbit groups (`false`). Cesium preserves polygon holes and multipart boundaries. The **Dissolved footprint area** layer can be toggled and downloaded as GeoJSON. These sampled polygons are modeled viewable geometry, not continuous coverage or executed observations. TATC checks validity at the footprint center, not every location in the polygon. Coarse samples can leave unsampled gaps.
+
+The Inputs tab can rerun the same ground track through `visualize(view="ground_track")` with its exact instrument and dissolve settings preserved. No instrument is invented during reruns.
 
 Ground-track requests are capped at 2,000 output points. A one-day request at one-minute intervals returns 1,441 points.
 
