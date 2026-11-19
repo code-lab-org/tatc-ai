@@ -9,8 +9,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from eval import run_eval
+from eval.http_replay import HttpReplay
+from src.celestrak_client import get_satellite_info
+
+
+def test_offline_replay_supports_celestrak_cold_cache(monkeypatch):
+    replay = HttpReplay(offline=True)
+    monkeypatch.setattr(requests, "get", replay.get)
+
+    result = get_satellite_info("27424")
+
+    assert result["norad_id"] == 27424
+    assert result["name"] == "AQUA"
+    assert result["omm"][0]["NORAD_CAT_ID"] == 27424
+    assert replay.misses == 0
 
 
 class _Handler(BaseHTTPRequestHandler):
