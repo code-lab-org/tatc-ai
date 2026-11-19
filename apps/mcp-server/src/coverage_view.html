@@ -15,6 +15,7 @@
         </div>
         <div class="study-actions">
           <button id="export-csv" class="quiet">Export CSV</button>
+          <button id="export-area" class="quiet" hidden>Download footprint GeoJSON</button>
           <button id="export-json" class="quiet" hidden>
             Download study JSON
           </button>
@@ -90,6 +91,8 @@
                     type="checkbox"
                     checked
                   />Footprints</label
+                ><label id="ground-area-label" hidden
+                  ><input id="show-ground-area" type="checkbox" checked />Dissolved footprint area</label
                 ><label id="swath-label" hidden
                   ><input id="show-swath" type="checkbox" />Sampled footprint trail</label
                 ><label

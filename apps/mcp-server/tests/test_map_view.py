@@ -1,7 +1,7 @@
-"""Ground-track map: static picture, HTML page, and the ground_track_map tool.
+"""Legacy renderer checks and the active Cesium ground_track_map tool contract.
 
-LibreChat renders a tool-result resource with a ui:// URI and text/html MIME
-type as an inline iframe; the HTML itself is never sent to the model.
+The legacy renderer remains testable, but the MCP tool now returns a Study-pane
+launcher instead of inline MapLibre HTML.
 """
 
 import asyncio
@@ -9,7 +9,7 @@ import io
 import json
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import cartopy.crs as ccrs
@@ -389,6 +389,7 @@ def _run_map_tool(**kwargs):
             return_value={"norad_id": 25544, "name": "ISS (ZARYA)",
                           "omm": [{"OBJECT_NAME": "ISS (ZARYA)", "NORAD_CAT_ID": 25544}]}), \
         mock.patch.object(srv, "create_orbit_from_omm", return_value=object()), \
+        mock.patch("src.ground_track_view.create_orbit_from_omm", return_value=mock.Mock(get_epoch=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))), \
         mock.patch.object(srv, "compute_ground_track", return_value=list(TRACK)) as compute:
         return asyncio.run(run()), compute
 
@@ -409,13 +410,15 @@ def test_map_tool_returns_summary_and_ui_resource():
 
     resource = result.content[1].resource
     assert str(resource.uri).startswith("ui://tatc/ground-track/25544/")
-    assert resource.mimeType == "text/html"
-    assert "data:image/png;base64," in resource.text
-    points = _data(resource.text)["points"]
-    assert [p["lon"] for p in points] == [179.5, -179.5]
-    # Footprints are always computed: they only go into the HTML, never to the model.
-    assert compute.call_args.kwargs["include_footprint"] is True
-    assert all(p["footprint"] is not None for p in points)
+    assert resource.mimeType == "text/uri-list"
+    import base64, gzip
+    payload = resource.text.split("#v1.")[1]
+    data = json.loads(gzip.decompress(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))))
+    assert [p[1] for p in data["tracks"][0]["samples"]] == [179.5, -179.5]
+    assert data["points"] == []
+    assert data["instrument"] is None
+    assert data["ground_area"]["features"] == []
+    assert compute.call_args.kwargs["include_footprint"] is False
 
 
 def test_map_tool_has_no_include_footprint_parameter():
@@ -427,7 +430,7 @@ def test_map_tool_has_no_include_footprint_parameter():
     properties = asyncio.run(schema())["properties"]
     assert "include_footprint" not in properties
     assert set(properties) == {
-        "satellite_identifier", "start_time", "duration", "step_interval"}
+        "satellite_identifier", "start_time", "duration", "step_interval", "instrument", "dissolve_orbits"}
 
 
 def test_map_tool_summary_omits_point_list():

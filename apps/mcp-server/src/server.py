@@ -62,9 +62,8 @@ from .coverage_analysis import (
 )
 from .coverage_view import build_viewer_url, register_viewer_routes
 from .research_data import ResearchData
-from .map_view import build_ground_track_map_html
+from .ground_track_view import build_ground_track_scene
 from .schema_formatter import format_ground_track_response
-from .static_map import render_static_map_png
 from .tatc_integration import (
     create_orbit_from_omm,
     generate_ground_track as compute_ground_track,
@@ -233,7 +232,9 @@ SERVER_INSTRUCTIONS = (
     "like a place and dates. "
     "When the user asks to visualize, map, plot, or show a ground track, use "
     "the ground track map tool with the satellite, start time, duration, and "
-    "step interval you would give the ground-track tool. "
+    "step interval you would give the ground-track tool. It opens the Cesium Study pane. "
+    "A satellite-only ground track has no sensor coverage. Supply an instrument only "
+    "when the researcher supplied or agreed to its geometry; never assume a cone. "
     "All tools are read-only. "
     "Never write tool-call syntax such as <function=...> in a reply; call the tool or answer in prose. "
     "Ground-track requests and regional studies keep the workflows above. Everything after this sentence "
@@ -539,58 +540,114 @@ def ground_track_map(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     step_interval: Optional[str] = None,
+    instrument: Optional[dict[str, Any]] = None,
+    dissolve_orbits: bool = True,
 ) -> ToolResult:
-    """Visualize, map, or plot a satellite ground track on an interactive map.
-    Use this whenever the user asks to see, show, draw, or visualize where a
-    satellite goes. The map always includes TAT-C footprints, which the user
-    can toggle.
-    For a 3D orbit replay use the visualize tool with the orbit view.
+    """Visualize, map, or plot a satellite ground track in the Cesium Study pane.
+
+    Opens a 2D map with 3D playback, sampled-position table and CSV export.
+    Without instrument, shows only the orbit and ground-track line: no sensor
+    coverage is inferred. Supply a researcher-agreed native TATC instrument to
+    draw dissolved sampled footprints using compute_ground_track. Basic sensors
+    require name and field_of_regard; pointed sensors add cross/along-track FOV;
+    conical sensors require name, cone_angle and along_track_field_of_view.
+    Never invent sensor geometry. Dissolved samples are not continuous coverage.
 
     Args:
-        satellite_identifier: Satellite name (e.g., "ISS", "Hubble") or NORAD ID.
-        start_time: Start time as ISO-8601, "now", or relative like "in one hour".
-            Defaults to "now".
-        duration: How long to generate, e.g. "1 hour" or "60 minutes".
-            Defaults to 1 hour. Maximum 30 days and 2000 output points.
-        step_interval: Time step between points, e.g. "30 sec" or "1 minute".
-            Defaults to 1 minute. Between 1 second and 1 hour.
-
-    Returns:
-        A short text summary and the map (interactive and static views),
-        which is shown to the user.
+        satellite_identifier: Resolved satellite name or NORAD ID.
+        start_time: ISO-8601, now, or relative time; defaults to now.
+        duration: Defaults to 1 hour; positive and at most 30 days/2000 samples.
+        step_interval: Defaults to 1 minute; from 1 second to 1 hour.
+        instrument: Optional explicit native TATC instrument JSON; no default cone.
+        dissolve_orbits: True combines the window; False keeps separate orbit groups.
     """
-    # Footprints stay in the map page; they never reach the model.
-    sat_info, messages = _compute_ground_track(
-        satellite_identifier, start_time, duration, step_interval,
-        include_footprint=True,
+    return _ground_track_view(
+        satellite_identifier,
+        start_time or "now",
+        duration or "1 hour",
+        step_interval or "1 minute",
+        instrument,
+        dissolve_orbits,
     )
-    norad_id = str(sat_info["norad_id"])
-    name = sat_info.get("name", norad_id)
+
+
+def _ground_track_view(
+    identifier,
+    start_time,
+    duration,
+    step_interval,
+    instrument=None,
+    dissolve_orbits=True,
+    ui=None,
+):
+    start = parse_time_input(start_time).replace(tzinfo=timezone.utc)
+    end = start + parse_duration(duration)
+    step = parse_duration(step_interval).total_seconds()
+    # Preserve the existing ground-track limits rather than route through the
+    # more restrictive orbit-view defaults (24 hours, 30–300-second samples).
+    info, messages = _compute_ground_track(
+        identifier, timestamp(start), duration, step_interval
+    )
+    result = build_ground_track_scene(
+        info,
+        messages,
+        start,
+        end,
+        step,
+        instrument,
+        dissolve_orbits,
+        ui
+        or {
+            "presentation": "map2d",
+            "view": "ground_track",
+            "workspace_id": str(uuid4()),
+        },
+    )
+    result["request"] = {
+        "view": "ground_track",
+        "satellite_identifiers": [identifier],
+        "start_time": timestamp(start),
+        "duration": duration,
+        "step_interval": step_interval,
+        "instrument": instrument,
+        "dissolve_orbits": dissolve_orbits,
+    }
     summary = (
-        f"Showing an interactive ground track map of {name} (NORAD {norad_id}), "
-        f"{messages[0]['time']} to {messages[-1]['time']}, {len(messages)} points. "
-        "Place the map's UI marker in your reply; do not draw an ASCII map."
+        f"Ground track of {info['name']} (NORAD {info['norad_id']}) in the Cesium Study pane, "
+        f"{timestamp(start)} to {timestamp(end)}, {len(messages)} points, sampled every {step:g} s. "
+        f"Element epoch {result['scenario']['satellites'][0]['orbit_epoch']}. "
+        + (
+            f"TATC dissolved sampled footprint area for {instrument['name']}: "
+            f"{len(result['ground_area']['features'])} polygon groups; not continuous coverage. "
+            if instrument
+            else "No instrument supplied; no sensor coverage or assumed footprint. "
+        )
+        + "Place the UI marker in your reply."
     )
-    png = render_static_map_png(f"{name} (NORAD {norad_id})", messages)
-    html = build_ground_track_map_html(name, norad_id, messages, png)
     return ToolResult(
         content=[
             TextContent(type="text", text=summary),
             EmbeddedResource(
                 type="resource",
                 resource=TextResourceContents(
-                    uri=f"ui://tatc/ground-track/{norad_id}/{messages[0]['time']}",
-                    mimeType="text/html",
-                    text=html,
+                    uri=f"ui://tatc/ground-track/{info['norad_id']}/{uuid4()}",
+                    mimeType="text/uri-list",
+                    text=build_viewer_url(result),
                 ),
             ),
-        ]
+        ],
+        structured_content={
+            "start_time": timestamp(start),
+            "end_time": timestamp(end),
+            "sample_count": len(messages),
+            "has_instrument": instrument is not None,
+        },
     )
 
 
 @mcp.tool
 def visualize(
-    view: Literal["orbit", "coverage", "example", "data"],
+    view: Literal["orbit", "coverage", "example", "data", "ground_track"],
     satellite_identifiers: Optional[list[str]] = None,
     scenario: Optional[json_string_or(CoverageRequest)] = None,
     dataset: Optional[json_string_or(ResearchData)] = None,
@@ -604,6 +661,9 @@ def visualize(
     start_time: Optional[str] = None,
     duration: Optional[str] = None,
     display_step_seconds: Optional[int] = None,
+    step_interval: Optional[str] = None,
+    instrument: Optional[dict[str, Any]] = None,
+    dissolve_orbits: bool = True,
 ) -> ToolResult:
     """Create an interactive research workspace; choose the output for the question.
 
@@ -612,8 +672,8 @@ def visualize(
     for text and numbers. Use conversation context; clarify only missing facts
     that affect the result. A place and date alone are not a coverage study: ask
     which satellites and sensors to use. Never invent measurements or sensor assumptions.
-    Not supported, so explain instead of calling: dissolved swath rendering,
-    solar-illumination masks, observation
+    Not supported for point-coverage views: dissolved swath rendering, footprints of
+    basic field-of-regard instruments, solar-illumination masks, observation
     scheduling/tasking, ground-station downlink/latency, cost models or
     design-space optimization. Regional coverage uses the begin, region and finish
     coverage workflow instead. Never invent TLEs, orbits or field of regard to approximate them.
@@ -641,6 +701,11 @@ def visualize(
     is not regional coverage. Use analyze_coverage for numerical results alone.
     To re-show an earlier study, pass its analysis_id instead of scenario.
 
+    view='ground_track': re-show or rerun a ground-track map with exactly one
+    satellite_identifiers entry, optional step_interval (1 second–1 hour),
+    start_time/duration (up to 30 days and 2000 samples), explicit instrument and
+    dissolve_orbits. No sensor geometry is assumed. Supports overview/table/map2d/simulation3d.
+
     view='orbit': supply 1–4 resolved satellite identifiers. Optional start_time
     defaults to now, duration to '1 hour', sampling to 60 seconds; report defaults.
     Uses current CelesTrak GP elements. Supports altitude overview, sampled-position table,
@@ -648,7 +713,7 @@ def visualize(
 
     view='example': explicitly requested hypothetical coverage example, with no
     custom mission inputs; presentation may be selected. Never substitute it for
-    a user scenario. All study windows are at most 24 hours/6000 display samples.
+    a user scenario. Coverage/example/orbit views are at most 24 hours/6000 display samples.
     Explain limits and ask before changing the requested scope.
     workspace_id is only for UI rerun intents, copied from their params; omit it otherwise.
     """
@@ -672,6 +737,37 @@ def visualize(
         "workspace_id": workspace_id or str(uuid4()),
         "view": view,
     }
+    if view == "ground_track":
+        if not satellite_identifiers or len(satellite_identifiers) != 1:
+            raise ValueError(
+                "Ground-track view requires exactly one resolved satellite_identifier"
+            )
+        if any(
+            x is not None
+            for x in (scenario, dataset, analysis_id, display_step_seconds)
+        ):
+            raise ValueError(
+                "Ground-track view uses step_interval and optional instrument, not coverage/data inputs"
+            )
+        if ui["presentation"] == "timeline":
+            raise ValueError(
+                "Ground-track geometry has no point observation/gap timeline"
+            )
+        if presentation is None:
+            ui["presentation"] = "map2d"
+        return _ground_track_view(
+            satellite_identifiers[0],
+            start_time or "now",
+            duration or "1 hour",
+            step_interval or "1 minute",
+            instrument,
+            dissolve_orbits,
+            ui,
+        )
+    if step_interval is not None or instrument is not None or not dissolve_orbits:
+        raise ValueError(
+            "step_interval, instrument and dissolve_orbits belong to view='ground_track'"
+        )
     if view == "data":
         if (
             dataset is None
@@ -889,8 +985,8 @@ def analyze_coverage(scenario: json_string_or(CoverageRequest)) -> Dict[str, Any
 
     If the user has not supplied or agreed to satellites and sensor assumptions,
     ask for them before calling. Never invent TLEs or instrument field of regard.
-    Not supported, so explain instead of calling: dissolved swath rendering,
-    solar-illumination masks, observation
+    Not supported for point-coverage views: dissolved swath rendering, footprints of
+    basic field-of-regard instruments, solar-illumination masks, observation
     scheduling/tasking, ground-station downlink/latency, cost models or
     design-space optimization. Regional coverage uses the begin, region and finish
     coverage workflow instead. Never invent TLEs, orbits or field of regard to approximate them.

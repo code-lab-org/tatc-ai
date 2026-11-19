@@ -17,7 +17,8 @@
       : null,
     title:
       data.dataset?.title ||
-      (data.points?.length ? "Coverage study" : "Orbit study"),
+      (data.ui?.view === "ground_track" ? "Ground-track study" :
+        data.points?.length ? "Coverage study" : "Orbit study"),
   };
   document.getElementById("launch-detail").textContent = payload.title;
   let rejected = false,

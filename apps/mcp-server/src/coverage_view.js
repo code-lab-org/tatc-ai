@@ -236,6 +236,7 @@
   $("visual").hidden = false;
   $("links-label").hidden = points.length === 0;
   $("footprints-label").hidden = !DATA.tracks.some((t) => t.footprints);
+  $("ground-area-label").hidden = !DATA.instrument;
   $("swath-label").hidden = $("footprints-label").hidden;
   if (points.length) selectPoint(0);
   else setTime(0);
@@ -293,6 +294,7 @@
       timeline: false,
       homeButton: false,
       sceneModePicker: false,
+      sceneMode: DATA.ui?.presentation === "map2d" ? C.SceneMode.SCENE2D : C.SceneMode.SCENE3D,
       navigationHelpButton: false,
       fullscreenButton: false,
       infoBox: false,
@@ -317,14 +319,19 @@
         ),
       );
     function frameEarth() {
-      if (
-        !mapVisible() ||
-        viewer.isDestroyed() ||
-        viewer.scene.mode !== C.SceneMode.SCENE3D
-      )
-        return;
+      if (!mapVisible() || viewer.isDestroyed()) return;
       viewer.resize();
       const frustum = viewer.camera.frustum;
+      if (viewer.scene.mode === C.SceneMode.SCENE2D) {
+        viewer.camera.setView({
+          destination: C.Cartesian3.fromDegrees(
+            focus[0], focus[1], frustum.right - frustum.left,
+          ),
+        });
+        viewer.scene.requestRender();
+        return;
+      }
+      if (viewer.scene.mode !== C.SceneMode.SCENE3D) return;
       const horizontal =
         2 * Math.atan(Math.tan(frustum.fovy / 2) * frustum.aspectRatio);
       const distance =
@@ -367,6 +374,38 @@
     const boundaryPositions = (line) => line.map((direction) =>
       C.Ellipsoid.WGS84.scaleToGeocentricSurface(new C.Cartesian3(...direction)),
     );
+    for (const feature of DATA.ground_area?.features || []) {
+      for (const line of feature.cesium_boundary || [])
+        viewer.entities.add({name: feature.properties.instrument + " / dissolved footprint boundary", polyline: {
+          show: new C.CallbackProperty(() => $("show-ground-area").checked, false),
+          positions: boundaryPositions(line), clampToGround: true, width: 1.5,
+          material: C.Color.fromCssColorString(colors[0]),
+        }});
+      const geometry = feature.geometry;
+      const polygons = feature.cesium_parts || (geometry.type === "Polygon"
+        ? [geometry.coordinates] : geometry.coordinates);
+      for (const rings of polygons) {
+        if (!rings[0]?.length) continue;
+        const positions = (ring) => C.Cartesian3.fromDegreesArray(
+          ring.flatMap(([lon, lat]) => [lon, lat]),
+        );
+        viewer.entities.add({
+          name: feature.properties.instrument + " / dissolved sampled footprint area",
+          polygon: {
+            show: new C.CallbackProperty(() => $("show-ground-area").checked, false),
+            hierarchy: new C.PolygonHierarchy(
+              positions(rings[0]),
+              rings.slice(1).map((ring) => new C.PolygonHierarchy(positions(ring))),
+            ),
+            height: 0,
+            material: C.Color.fromCssColorString(colors[0]).withAlpha(0.3),
+            // Display patches share internal meridians; those are not footprint boundaries.
+            outline: !feature.cesium_parts,
+            outlineColor: C.Color.fromCssColorString(colors[0]),
+          },
+        });
+      }
+    }
     DATA.tracks.forEach((track, i) => {
       const color = C.Color.fromCssColorString(colors[i % colors.length]);
       const legendItem = document.createElement("div");
@@ -617,6 +656,8 @@
       $("view-3d").setAttribute("aria-pressed", String(mode === "3d"));
       viewer.scene.requestRender();
     }
+    $("view-2d").setAttribute("aria-pressed", String(DATA.ui?.presentation === "map2d"));
+    $("view-3d").setAttribute("aria-pressed", String(DATA.ui?.presentation !== "map2d"));
     $("view-2d").onclick = () => setMode("2d");
     $("view-3d").onclick = () => setMode("3d");
     $("show-orbits").onchange = () => {
@@ -624,7 +665,7 @@
         satellite.path.show = $("show-orbits").checked;
       viewer.scene.requestRender();
     };
-    for (const id of ["show-ground", "show-links", "show-footprints", "show-swath", "trail-minutes"])
+    for (const id of ["show-ground", "show-links", "show-footprints", "show-ground-area", "show-swath", "trail-minutes"])
       $(id).onchange = () => viewer.scene.requestRender();
     $("globe").hidden = false;
     viewer.resize();
@@ -694,9 +735,6 @@
     }
     started = true;
     initializeGlobe()
-      .then(() => {
-        if (DATA.ui?.presentation === "map2d" && !failed) $("view-2d").click();
-      })
       .catch((error) => fail("Unable to show visualization: " + error.message));
   }
   window.addEventListener("tatc-map-show", showMap);

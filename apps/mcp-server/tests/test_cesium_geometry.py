@@ -33,3 +33,26 @@ def test_polar_boundary_arcs_exclude_pole_closures_and_stay_finite():
                 assert (
                     abs(point[2]) < 0.999999
                 ), "Artificial pole-closing edges must not be outlined"
+
+
+def test_dissolved_polar_parts_preserve_native_geometry():
+    from src.cesium_geometry import needs_partition
+    from tests.polar_fixtures import polar_dissolve_case
+
+    case = polar_dissolve_case()
+    native = shape(case["native"])
+    parts = [Polygon(rings[0], rings[1:]) for rings in case["parts"]]
+    assert needs_partition(native, max_width=90, max_height=90)
+    assert case["boundaries"]
+    assert all(part.is_valid for part in parts)
+    assert union_all(parts).symmetric_difference(native).area < 1e-8
+
+
+def test_narrow_pole_to_pole_polygon_is_partitioned():
+    from src.cesium_geometry import cesium_parts, needs_partition
+
+    polygon = Polygon([(10, -90), (20, -90), (20, 90), (10, 90), (10, -90)])
+    assert needs_partition(polygon, max_width=90, max_height=90)
+    parts = cesium_parts(polygon, max_width=90, max_height=90)
+    assert all(part.bounds[3] - part.bounds[1] <= 90 for part in parts)
+    assert union_all(parts).equals(polygon)

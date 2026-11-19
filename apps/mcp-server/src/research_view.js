@@ -32,7 +32,7 @@
       .replace("T", " ")
       .replace(/\.\d+Z$/, " UTC");
   $("view-title").textContent =
-    dataset?.title || (coverage ? "Coverage study" : "Orbit study");
+    dataset?.title || (data.ui?.view === "ground_track" ? "Ground-track study" : coverage ? "Coverage study" : "Orbit study");
   $("study-subtitle").textContent = dataset
     ? dataset.source
     : `${utc(data.scenario.start_time)} — ${utc(data.scenario.end_time)}`;
@@ -786,6 +786,10 @@
       results: { points: data.points, tracks: data.tracks },
     };
   }
+  $("export-area").hidden = !data.instrument;
+  $("export-area").onclick = () => download(
+    JSON.stringify(data.ground_area, (key, value) => key.startsWith("cesium_") ? undefined : value), "application/geo+json", "tatc-ground-track-area.geojson",
+  );
   $("export-json").onclick = () =>
     download(
       JSON.stringify(studyDocument(), null, 2),
@@ -892,13 +896,15 @@
       );
     field(
       times,
-      "Orbit display step (seconds)",
-      scenario?.display_step_seconds || draft.display_step_seconds || 120,
+      draft.view === "ground_track" ? "Ground-track step interval" : "Orbit display step (seconds)",
+      draft.view === "ground_track" ? draft.step_interval :
+        scenario?.display_step_seconds || draft.display_step_seconds || 120,
       (v) => {
-        if (scenario) scenario.display_step_seconds = v;
+        if (draft.view === "ground_track") draft.step_interval = v;
+        else if (scenario) scenario.display_step_seconds = v;
         else draft.display_step_seconds = v;
       },
-      { min: "30", max: "300", step: "1" },
+      draft.view === "ground_track" ? { type: "text" } : { min: "30", max: "300", step: "1" },
     );
     if (scenario) {
       scenario.satellites.forEach((sat) => {
@@ -1063,6 +1069,12 @@
           "muted",
         ),
       );
+    if (draft.view === "ground_track" && draft.instrument) {
+      choice(fields, "Dissolve sampled footprints", draft.dissolve_orbits ?? true,
+        (value) => { draft.dissolve_orbits = value; },
+        [["Whole window", true], ["Separate orbit groups", false]]);
+      fields.append(text("p", "Instrument geometry is preserved. Ask in chat to change the sensor assumptions.", "muted"));
+    }
     const facts = data.assumptions || [
       data.scenario.source || "TATC propagated orbit samples.",
       // Orbit studies: the provenance of each propagated element set.

@@ -87,6 +87,7 @@ def test_example_view_needs_no_scenario_and_preserves_documented_inputs():
         "coverage",
         "example",
         "data",
+        "ground_track",
     ]
     response = call("visualize", {"view": "example"})
     assert not response.is_error
@@ -595,7 +596,7 @@ def test_descriptions_name_unsupported_studies_and_exact_orbit_fields():
 
     descriptions = asyncio.run(inspect())
     for name in ("visualize", "analyze_coverage"):
-        assert "Not supported, so explain instead of calling" in descriptions[name]
+        assert "Not supported for point-coverage views" in descriptions[name]
         assert "right_ascension_ascending_node" in descriptions[name]
 
 

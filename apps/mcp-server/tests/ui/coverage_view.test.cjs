@@ -173,13 +173,15 @@ async function setup({
       this.scene = {
         renderError: new Cesium.Event(),
         requestRender: () => {},
-        mode: Cesium.SceneMode.SCENE3D,
+        mode: options.sceneMode,
+        morphTo2D: () => { this.scene.mode = Cesium.SceneMode.SCENE2D; },
+        morphTo3D: () => { this.scene.mode = Cesium.SceneMode.SCENE3D; },
         globe: { tilesLoaded: failure !== "stalled" },
         postRender: new Cesium.Event(),
       };
       queueMicrotask(() => this.scene.postRender.raiseEvent());
       this.camera = {
-        frustum: { fovy: Math.PI / 3, aspectRatio: 2 },
+        frustum: { fovy: Math.PI / 3, aspectRatio: 2, left: -10000000, right: 10000000 },
         setView(options) {
           this.lastView = options;
         },
@@ -1135,6 +1137,52 @@ test("a mixed study counts only real viewing events", async () => {
   }
 });
 
+test("ground-track dissolved polygons preserve holes and export GeoJSON", async () => {
+  const area = {type: "FeatureCollection", features: [{type: "Feature",
+    properties: {instrument: "Scanner"}, geometry: {type: "Polygon", coordinates: [
+      [[0,0],[4,0],[4,4],[0,4],[0,0]],
+      [[1,1],[1,2],[2,2],[2,1],[1,1]],
+    ]}}]};
+  const {dom, get, viewer, data} = await setup({
+    orbitOnly: true,
+    editFixture: (data) => {
+      data.instrument = {name: "Scanner"};
+      data.ground_area = area;
+      data.ui.view = "ground_track";
+      data.request = {view: "ground_track", satellite_identifiers: ["25544"],
+        start_time: data.scenario.start_time, duration: "1 hour", step_interval: "10 seconds",
+        instrument: {name: "Scanner", field_of_regard: 60}, dissolve_orbits: false};
+    },
+  });
+  try {
+    assert.equal(get("view-title").textContent, "Ground-track study");
+    assert.equal(get("ground-area-label").hidden, false);
+    assert.equal(get("export-area").hidden, false);
+    let exported, filename;
+    dom.window.Blob = class { constructor(parts) { exported = parts.join(""); } };
+    dom.window.URL.createObjectURL = () => "blob:area";
+    dom.window.URL.revokeObjectURL = () => {};
+    dom.window.HTMLAnchorElement.prototype.click = function () { filename = this.download; };
+    get("export-area").click();
+    assert.deepEqual(JSON.parse(exported), area);
+    assert.equal(filename, "tatc-ground-track-area.geojson");
+    const entity = viewer.entities.values.find((e) => e.name?.includes("dissolved sampled"));
+    assert.ok(entity);
+    const hierarchy = entity.polygon.hierarchy.getValue(viewer.clock.currentTime);
+    assert.equal(hierarchy.holes.length, 1);
+    assert.equal(hierarchy.holes[0].positions.length, 5);
+    get("show-ground-area").checked = false;
+    assert.equal(entity.polygon.show.getValue(viewer.clock.currentTime), false);
+    const labels = [...dom.window.document.querySelectorAll("label")];
+    const step = labels.find((e) => e.textContent.startsWith("Ground-track step interval")).querySelector("input");
+    assert.equal(step.value, "10 seconds");
+    step.value = "5 seconds";
+    step.dispatchEvent(new dom.window.Event("input", {bubbles: true}));
+    // The calculated request remains immutable until a server calculation returns.
+    assert.equal(data.request.step_interval, "10 seconds");
+  } finally { dom.window.close(); }
+});
+
 
 test("conical scan footprints preserve holes, sample topology and the layer toggle", async () => {
   const { dom, get, data, viewer } = await setup({
@@ -1244,5 +1292,73 @@ test("a native polar footprint sequence keeps each sampled polygon intact", asyn
     const start = Cesium.JulianDate.fromIso8601(movie.scenario.start_time);
     const between = Cesium.JulianDate.addSeconds(start,10,new Cesium.JulianDate());
     assert.deepEqual(polygons[0].polygon.hierarchy.getValue(between),polygons[0].polygon.hierarchy.getValue(start));
+  } finally { dom.window.close(); }
+});
+
+
+test("coverage map2d starts centered and preserves presentation on rerun", async () => {
+  const { dom, w, get, viewer, sizes, data } = await setup({ presentation: "map2d" });
+  try {
+    assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE2D);
+    assert.equal(get("view-2d").getAttribute("aria-pressed"), "true");
+    const position = Cesium.Cartographic.fromCartesian(viewer.camera.lastView.destination);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.longitude) - data.points[0].longitude) < 1e-7);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.latitude) - data.points[0].latitude) < 1e-7);
+    w.document.querySelector('[data-tab="inputs"]').click();
+    get("study-form").dispatchEvent(new w.Event("submit", { cancelable: true }));
+    assert.equal(sizes.find((m) => m.type === "tatc-workspace:run").payload.params.presentation, "map2d");
+  } finally { dom.window.close(); }
+});
+
+test("other presentations retain 3D map defaults", async () => {
+  const { dom, viewer } = await setup({ presentation: "simulation3d" });
+  try {
+    assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE3D);
+  } finally { dom.window.close(); }
+});
+
+
+test("polar dissolved patches triangulate, outline only native boundaries, and export original geometry", async () => {
+  const polar = JSON.parse(execFileSync(process.env.TATC_PYTHON || "python3", ["-c",
+    "import json; from tests.polar_fixtures import polar_cases; print(json.dumps(polar_cases()[0]))"],
+    {cwd: root, env: {...process.env, PYTHONPATH: path.join(root, "apps/mcp-server")}, encoding: "utf8"}));
+  const area = {type: "FeatureCollection", features: [{type: "Feature", properties: {instrument: "Polar"},
+    geometry: polar.native, cesium_parts: polar.parts, cesium_boundary: polar.boundaries}]};
+  const {dom, get, viewer} = await setup({orbitOnly: true, editFixture: (data) => {
+    data.instrument = {name: "Polar"}; data.ground_area = area;
+  }});
+  try {
+    const polygons = viewer.entities.values.filter((e) => e.name?.includes("dissolved sampled"));
+    assert.equal(polygons.length, polar.parts.length);
+    for (const entity of polygons) {
+      assert.equal(entity.polygon.outline.getValue(), false);
+      assert.ok(Cesium.PolygonGeometry.createGeometry(new Cesium.PolygonGeometry({
+        polygonHierarchy: entity.polygon.hierarchy.getValue()
+      })));
+    }
+    const boundaries = viewer.entities.values.filter((e) => e.name?.includes("dissolved footprint boundary"));
+    assert.equal(boundaries.length, polar.boundaries.length);
+    let exported;
+    dom.window.Blob = class { constructor(parts) { exported = parts.join(""); } };
+    dom.window.URL.createObjectURL = () => "blob:area";
+    dom.window.URL.revokeObjectURL = () => {};
+    dom.window.HTMLAnchorElement.prototype.click = () => {};
+    get("export-area").click();
+    assert.deepEqual(JSON.parse(exported).features[0].geometry, polar.native);
+    assert.equal("cesium_parts" in JSON.parse(exported).features[0], false);
+  } finally { dom.window.close(); }
+});
+
+
+test("ground-track map2d starts centered on its first sampled position", async () => {
+  const {dom, get, viewer, data} = await setup({presentation: "map2d", orbitOnly: true,
+    editFixture: (result) => { result.ui.view = "ground_track"; }});
+  try {
+    assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE2D);
+    assert.equal(get("view-2d").getAttribute("aria-pressed"), "true");
+    const position = Cesium.Cartographic.fromCartesian(viewer.camera.lastView.destination);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.longitude) - data.tracks[0].samples[0][1]) < 1e-7);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.latitude) - data.tracks[0].samples[0][2]) < 1e-7);
+    assert.ok(Math.abs(position.height - 20000000) < 1e-5);
   } finally { dom.window.close(); }
 });
