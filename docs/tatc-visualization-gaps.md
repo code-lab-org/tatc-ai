@@ -17,10 +17,10 @@ reviewed.
 | TATC API | Where TATC-AI uses it | Visualization |
 | --- | --- | --- |
 | `analysis.coverage.collect_observations` | `analyze_coverage` and `visualize(view="coverage")` | Study pane: results, observation/gap timeline, tables, CSV and study JSON downloads, Cesium 2D/3D orbits and observation links |
-| `analysis.track.compute_ground_track` | `ground_track_map` | Inline MapLibre map with a circular footprint from an assumed 60° field of view; not in the Cesium pane |
+| `analysis.collect_ground_track` | Study pane and legacy `ground_track_map` | Study pane: instrument footprints and sampled footprint trails. Legacy map: assumed 60° field of regard |
 | `schemas.Satellite` with any TATC orbit type | Coverage scenarios | Orbit tracks in Cesium |
-| `schemas.Instrument`, `schemas.PointedInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |
-| `PointedInstrument.compute_footprint`, `compute_footprint_center` | Coverage scenes with pointed instruments | Footprints layer: instantaneous footprint and boresight line |
+| `schemas.Instrument`, `schemas.PointedInstrument`, `schemas.ConicalInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |
+| `Instrument.compute_footprint_center` and specialized implementations | Coverage scenes | Footprint-center / scan-center lines |
 | `schemas.Point` | Coverage study points | Point markers and per-point timelines |
 
 Orbit views (`visualize(view="orbit")`) use CelesTrak GP (OMM) elements and TATC propagation
@@ -37,7 +37,7 @@ the result does not show them.
 | Instrument constraints (`req_self_sunlit`, `req_target_sunlit`, `min_access_time`, `access_time_fixed`) | Yes | Yes | Yes, except `access_time_fixed` | No day/night context |
 | Non-circular orbits (`sso`, `keplerian`, `molniya`, `tundra`, `geosynchronous`) | Yes; orbit JSON is listed | Yes | No; "Orbital elements are preserved" | Yes, as tracks |
 | Circular RAAN and true anomaly | Yes | Yes | No; only altitude and inclination | Yes |
-| `compute_ground_track` swaths | Only in `ground_track_map` | One-line summary | n/a | No; MapLibre only, assumed field of view |
+| Native `compute_ground_track` dissolved swaths | Not yet called; the legacy tool uses a local alias of `generate_ground_track` | n/a | n/a | Pending separately in [#70](https://github.com/code-lab-org/tatc-ai/issues/70) |
 
 Tool descriptions mention only circular, OMM and TLE orbits.
 An invalid orbit returns TATC's full multi-model validation error (16 entries
@@ -54,14 +54,14 @@ for chat follow-ups.
 | TATC API | Computes | Cesium visualization | Pane control |
 | --- | --- | --- | --- |
 | `utils.projection.compute_projected_ray_position` | Ground intersection of any ray | Satellite-to-corner frustum lines | Part of the Footprints layer |
-| `analysis.track.collect_ground_track` | One footprint polygon per time step | Swath accumulating behind the satellite | Swath layer, trail length |
 | `analysis.track.compute_ground_track` | Footprints dissolved per orbit or over the window | Total observed area per satellite or instrument | Observed-area layer (replaces the assumed 60° circle) |
 | `analysis.track.collect_ground_pixels` | Ground position of each detector pixel (rectangular `PointedInstrument`) | Pixel grid showing sampling and overlap | Pixel counts, oversampling |
 | `utils.projection.compute_limb` | Outline of the Earth disk visible from the satellite | Horizon circle following the satellite | Visible-Earth layer |
 
-Pointing is a fixed roll and pitch per instrument; TATC has no yaw or
-time-varying attitude. Conical scanners (for example TMI, GMI, MWRI-RM) can only
-be approximated as a pitched rectangle, not the scanned arc.
+Conical scanners use native TATC `ConicalInstrument` geometry. The pane draws
+their instantaneous scan footprints, preserving sectors, holes and antimeridian
+splits, at the nearest display sample. The optional trail shows sampled polygons without
+dissolving them into a continuous swath.
 
 ### Orbits and constellations
 
@@ -111,8 +111,8 @@ TATC does not produce a solar-illumination mask as a separate product.
 
 ## Unsupported list in the MCP instructions
 
-The server currently tells the model that the study pane does not draw swaths,
-footprints of basic field-of-regard instruments or illumination masks, and that
+The server currently tells the model that the study pane does not draw dissolved
+swaths or illumination masks, and that
 scheduling, downlink/latency, cost models and design-space optimization are
 unsupported. Regional coverage goes to the begin, region and finish workflow,
 whose cells are not yet drawn in the pane. Swaths, area heatmaps and downlink

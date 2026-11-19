@@ -30,10 +30,16 @@ The pane contains:
   axes, numerical tick marks, a shared zero baseline, and exact-value inspection. Missing values
   remain missing, not zero.
 - **Map:** CesiumJS 2D/3D views, satellite legend, orbit/ground-track/observation
-  layers, and adjustable trail duration. Pointed instruments add a Footprints layer:
-  the instantaneous footprint from TATC `PointedInstrument.compute_footprint` and a
-  boresight line from the satellite, sampled at the display step and interpolated
-  between samples. Cesium loads only when this view opens.
+  layers, and adjustable trail duration. The Footprints layer uses native TATC
+  `collect_ground_track` for supplied basic, pointed and conical instruments.
+  It preserves polygon holes, scan sectors and antimeridian splits. All footprints
+  use the nearest native display sample; longitude lists are not interpolated
+  across polar topology changes. Lines show the footprint center (the conical
+  scan-sector center, not a rotating beam). An optional **Sampled footprint trail**
+  shows past valid sampled polygons within the trail duration; it does not fill
+  gaps between samples or compute a dissolved swath. `valid_obs` checks constraints
+  at the footprint center, not every location inside the polygon. Cesium loads
+  only when Map opens.
 - **Table:** computed values and individual events, with CSV export of the current
   table. Selecting an observation or gap seeks the shared clock to its midpoint, or
   to its viewing epoch for a pointed or conical instrument.
@@ -276,15 +282,14 @@ which satellite is meant instead of an empty list, which LibreChat shows as
 - Event queries pad the window by twice TATC's maximum-access bound. A very
   eccentric or continuously visible pass can still be clipped at that padded edge.
 - Display sampling from 30 to 300 seconds, with at most 6,000 total samples.
-- At most 5,768 footprint samples per scene (8 pointed instruments over 24 hours
+- At most 5,768 footprint samples per scene (8 instruments over 24 hours
   at 120 seconds); otherwise the error asks for a larger display step.
 - Satellite/instrument names must be unique within their relevant scope.
 - Unknown fields, missing required assumptions, and non-finite numbers are rejected.
 
 The first increment evaluates discrete points. It does not interpolate area
 coverage, construct regional grids, automatically run design sweeps, or calculate downlink latency.
-Tool descriptions list these, plus swath rendering, footprints of basic
-field-of-regard instruments,
+Tool descriptions list these, plus dissolved swath rendering,
 solar-illumination masks, observation scheduling and cost models, as unsupported
 studies the model should explain rather than approximate with invented inputs.
 
@@ -355,3 +360,9 @@ The map's loading deadline counts 30 seconds while the Map tab, study pane, and 
 document are visible. Closing the pane, switching views, or backgrounding the document pauses the
 deadline; returning resumes the remaining budget. It does not restart the map or
 substitute a different renderer.
+
+
+Wide polar polygons are partitioned for Cesium triangulation without changing
+TAT-C's footprint union. Native coordinate precision and interior exclusions
+are retained. True outlines use TAT-C boundary arcs, omitting artificial display
+seams. This display handling does not change point-event calculations.

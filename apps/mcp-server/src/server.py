@@ -267,7 +267,7 @@ SERVER_INSTRUCTIONS = (
     "In a point study, use only values the user supplied or tools returned in this conversation; never invent "
     "satellites, TLEs, orbits, sensor field of regard, locations, dates or metrics. Place names such as Phoenix are study points "
     "or ground stations, not satellites. "
-    "The study pane draws footprints of pointed instruments only; it does not render swaths or "
+    "The study pane draws supplied basic, pointed and conical instrument footprints and sampled footprint trails; it does not render dissolved swaths or "
     "solar-illumination masks. The explorer does not support observation scheduling, downlink latency, cost "
     "models or design-space optimization: say so plainly, offer what is supported, and never suggest tool calls "
     "with placeholder inputs. After an explorer error that user-supplied values cannot fix, stop and ask the user."
@@ -612,8 +612,8 @@ def visualize(
     for text and numbers. Use conversation context; clarify only missing facts
     that affect the result. A place and date alone are not a coverage study: ask
     which satellites and sensors to use. Never invent measurements or sensor assumptions.
-    Not supported, so explain instead of calling: swath rendering, footprints of
-    basic field-of-regard instruments, solar-illumination masks, observation
+    Not supported, so explain instead of calling: dissolved swath rendering,
+    solar-illumination masks, observation
     scheduling/tasking, ground-station downlink/latency, cost models or
     design-space optimization. Regional coverage uses the begin, region and finish
     coverage workflow instead. Never invent TLEs, orbits or field of regard to approximate them.
@@ -889,8 +889,8 @@ def analyze_coverage(scenario: json_string_or(CoverageRequest)) -> Dict[str, Any
 
     If the user has not supplied or agreed to satellites and sensor assumptions,
     ask for them before calling. Never invent TLEs or instrument field of regard.
-    Not supported, so explain instead of calling: swath rendering, footprints of
-    basic field-of-regard instruments, solar-illumination masks, observation
+    Not supported, so explain instead of calling: dissolved swath rendering,
+    solar-illumination masks, observation
     scheduling/tasking, ground-station downlink/latency, cost models or
     design-space optimization. Regional coverage uses the begin, region and finish
     coverage workflow instead. Never invent TLEs, orbits or field of regard to approximate them.
@@ -1017,9 +1017,10 @@ def _study_text(result: dict, scenario: CoverageRequest, example: bool) -> str:
         "Scope: access opportunities at the listed study points only. Nothing here is an "
         "area heatmap, swath, illumination mask, observation schedule, downlink or latency, "
         "or cost result; never describe it as one, and if the user asked for one, say that "
-        "this point study does not provide it. The study map draws the instantaneous TATC footprint and "
-        "boresight of pointed instruments only (those with cross_track_field_of_view), "
-        "throughout the window, whether or not a study point is observed.",
+        "this point study does not provide it. The study map draws sampled footprints of basic, "
+        "pointed and conical instruments from TATC collect_ground_track, with an optional "
+        "sampled footprint trail. These are not dissolved swaths or continuous viewing durations; "
+        "valid_obs checks observation constraints at the footprint center, not every polygon location.",
         f"Satellites ({len(scenario.satellites)}; name each in your reply):",
     ]
     for satellite in scenario.satellites:
