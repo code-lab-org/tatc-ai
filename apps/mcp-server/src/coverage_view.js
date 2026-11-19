@@ -323,12 +323,12 @@
       viewer.resize();
       const frustum = viewer.camera.frustum;
       if (viewer.scene.mode === C.SceneMode.SCENE2D) {
-        if (DATA.ui?.view === "ground_track") {
-          viewer.camera.setView({
-            destination: C.Cartesian3.fromDegrees(focus[0], focus[1], frustum.right - frustum.left),
-          });
-          viewer.scene.requestRender();
-        }
+        viewer.camera.setView({
+          destination: C.Cartesian3.fromDegrees(
+            focus[0], focus[1], frustum.right - frustum.left,
+          ),
+        });
+        viewer.scene.requestRender();
         return;
       }
       if (viewer.scene.mode !== C.SceneMode.SCENE3D) return;

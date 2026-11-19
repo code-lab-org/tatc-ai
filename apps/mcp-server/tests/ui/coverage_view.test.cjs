@@ -1296,11 +1296,14 @@ test("a native polar footprint sequence keeps each sampled polygon intact", asyn
 });
 
 
-test("map2d starts in 2D and preserves presentation on rerun", async () => {
-  const { dom, w, get, viewer, sizes } = await setup({ presentation: "map2d" });
+test("coverage map2d starts centered and preserves presentation on rerun", async () => {
+  const { dom, w, get, viewer, sizes, data } = await setup({ presentation: "map2d" });
   try {
     assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE2D);
     assert.equal(get("view-2d").getAttribute("aria-pressed"), "true");
+    const position = Cesium.Cartographic.fromCartesian(viewer.camera.lastView.destination);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.longitude) - data.points[0].longitude) < 1e-7);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.latitude) - data.points[0].latitude) < 1e-7);
     w.document.querySelector('[data-tab="inputs"]').click();
     get("study-form").dispatchEvent(new w.Event("submit", { cancelable: true }));
     assert.equal(sizes.find((m) => m.type === "tatc-workspace:run").payload.params.presentation, "map2d");
