@@ -9,6 +9,7 @@ from shapely.geometry import mapping
 from tatc.analysis import compute_ground_track
 from tatc.schemas import ConicalInstrument, Instrument, PointedInstrument, Satellite
 
+from .cesium_geometry import boundary_lines, cesium_parts, needs_partition, part_rings
 from .coverage_analysis import _reject_unknown, check_element_epoch, timestamp
 from .tatc_integration import _sample_times, create_orbit_from_omm
 
@@ -75,6 +76,14 @@ def build_ground_track_scene(
                 {
                     "type": "Feature",
                     "geometry": mapping(orient_polygons(row.geometry)),
+                    **(
+                        {
+                            "cesium_parts": part_rings(cesium_parts(row.geometry)),
+                            "cesium_boundary": boundary_lines(row.geometry),
+                        }
+                        if needs_partition(row.geometry)
+                        else {}
+                    ),
                     "properties": {
                         "satellite": name,
                         "instrument": sensor.name,

@@ -26,6 +26,7 @@ const fixture = JSON.parse(
       cwd: root,
       env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
       encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     },
   ),
 );
@@ -46,6 +47,7 @@ const pointedFixture = JSON.parse(
       cwd: root,
       env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
       encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     },
   ),
 );
@@ -66,6 +68,7 @@ const conicalFixture = JSON.parse(
       cwd: root,
       env: { ...process.env, PYTHONPATH: path.join(root, "apps/mcp-server") },
       encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     },
   ),
 );
@@ -170,7 +173,9 @@ async function setup({
       this.scene = {
         renderError: new Cesium.Event(),
         requestRender: () => {},
-        mode: Cesium.SceneMode.SCENE3D,
+        mode: options.sceneMode,
+        morphTo2D: () => { this.scene.mode = Cesium.SceneMode.SCENE2D; },
+        morphTo3D: () => { this.scene.mode = Cesium.SceneMode.SCENE3D; },
         globe: { tilesLoaded: failure !== "stalled" },
         postRender: new Cesium.Event(),
       };
@@ -209,13 +214,8 @@ async function setup({
       fs.readFileSync(path.join(root, "apps/mcp-server/src", name), "utf8"),
     );
   w.eval(code);
-  for (
-    let i = 0;
-    i < 100 &&
-    ![...w.document.scripts].some((s) => s.src.endsWith("/Cesium.js"));
-    i++
-  )
-    await new Promise(setImmediate);
+  await w.tatcStudy;
+  await new Promise(setImmediate);
   const script = [...w.document.scripts].find((s) =>
     s.src.endsWith("/Cesium.js"),
   );
@@ -373,6 +373,7 @@ test("timeline drives the clock and links follow computed observation intervals"
         Cesium.JulianDate.toDate(viewer.clock.currentTime).getTime() - expected,
       ) < 2,
     );
+    get("show-footprints").checked = false;
     const link = viewer.entities.values.find(
       (e) =>
         e.polyline?.show?.getValue(viewer.clock.currentTime) &&
@@ -1179,5 +1180,168 @@ test("ground-track dissolved polygons preserve holes and export GeoJSON", async 
     step.dispatchEvent(new dom.window.Event("input", {bubbles: true}));
     // The calculated request remains immutable until a server calculation returns.
     assert.equal(data.request.step_interval, "10 seconds");
+  } finally { dom.window.close(); }
+});
+
+
+test("conical scan footprints preserve holes, sample topology and the layer toggle", async () => {
+  const { dom, get, data, viewer } = await setup({
+    editFixture: (data) => Object.assign(data, conicalFixture),
+  });
+  try {
+    assert.ok(viewer, get("status").textContent);
+    assert.equal(get("footprints-label").hidden, false);
+    const track = data.tracks[0];
+    const footprint = track.footprints[0];
+    assert.equal(footprint.kind, "conical");
+    const polygons = viewer.entities.values.filter((e) => e.polygon);
+    const entities = polygons.filter((e) => e.name === track.name + " / " + footprint.instrument);
+    assert.ok(entities.length > 0);
+    const index = footprint.holes.findIndex((sample) => sample.some((holes) => holes.length));
+    assert.ok(index >= 0, "full scan retains its unobserved interior");
+    const time = Cesium.JulianDate.fromIso8601(track.samples[index][0]);
+    entities.forEach((entity, part) => {
+      const hierarchy = entity.polygon.hierarchy.getValue(time);
+      if (!footprint.parts[index][part]) {
+        assert.equal(hierarchy, undefined);
+        assert.equal(entity.polygon.show.getValue(time), false);
+        return;
+      }
+      assert.equal(hierarchy.positions.length, footprint.parts[index][part]?.length || 0);
+      assert.equal(hierarchy.holes.length, footprint.holes[index][part]?.length || 0);
+      hierarchy.holes.forEach((hole, n) => {
+        assert.equal(hole.positions.length, footprint.holes[index][part][n].length);
+      });
+      assert.equal(entity.polygon.show.getValue(time), !!footprint.parts[index][part]);
+      get("show-footprints").checked = false;
+      assert.equal(entity.polygon.show.getValue(time), false);
+      get("show-footprints").checked = true;
+    });
+    // Between samples, keep one complete TATC scan rather than morphing a thin ring.
+    const between = Cesium.JulianDate.addSeconds(time, 10, new Cesium.JulianDate());
+    assert.deepEqual(
+      entities[0].polygon.hierarchy.getValue(between),
+      entities[0].polygon.hierarchy.getValue(time),
+    );
+    assert.equal(data.points[0].metrics.covered_seconds, null);
+  } finally {
+    dom.window.close();
+  }
+});
+
+
+test("sampled footprint trails follow the shared clock, validity, and trail length", async () => {
+  const { dom, get, data, viewer } = await setup();
+  try {
+    assert.equal(get("swath-label").hidden, false);
+    const trails = viewer.entities.values.filter((e) => e.name?.endsWith(" / sampled trail"));
+    assert.ok(trails.length > 0);
+    const time = Cesium.JulianDate.fromIso8601(data.tracks[0].samples[0][0]);
+    assert.ok(trails.every((e) => !e.polygon.show.getValue(time)));
+    get("show-swath").checked = true;
+    assert.ok(trails.some((e) => e.polygon.show.getValue(time)));
+    get("trail-minutes").value = "1";
+    const later = Cesium.JulianDate.addSeconds(time, 61, new Cesium.JulianDate());
+    assert.equal(trails[0].polygon.show.getValue(later), false);
+    const before = Cesium.JulianDate.addSeconds(time, -1, new Cesium.JulianDate());
+    assert.ok(trails.every((e) => !e.polygon.show.getValue(before)));
+  } finally {
+    dom.window.close();
+  }
+});
+
+
+test("invalid sampled footprints are hidden and excluded from the trail", async () => {
+  const { dom, get, data, viewer } = await setup({
+    editFixture: (data) => {
+      Object.assign(data, conicalFixture);
+      data.tracks[0].footprints[0].valid_obs.fill(false);
+    },
+  });
+  try {
+    get("show-footprints").checked = true;
+    get("show-swath").checked = true;
+    const time = Cesium.JulianDate.fromIso8601(data.tracks[0].samples[0][0]);
+    const polygons = viewer.entities.values.filter((entity) => entity.polygon);
+    assert.ok(polygons.length > 0);
+    assert.ok(polygons.every((entity) => !entity.polygon.show.getValue(time)));
+    assert.ok(!polygons.some((entity) => entity.name?.endsWith(" / sampled trail")));
+  } finally {
+    dom.window.close();
+  }
+});
+
+
+test("a native polar footprint sequence keeps each sampled polygon intact", async () => {
+  const movie = JSON.parse(execFileSync(process.env.TATC_PYTHON || "python3", ["-c",
+    "import json; from tests.polar_fixtures import polar_movie; print(json.dumps(polar_movie()))"], {
+      cwd: root, env: {...process.env, PYTHONPATH: path.join(root,"apps/mcp-server")}, encoding:"utf8",
+  }));
+  const {dom, viewer} = await setup({editFixture: (data) => Object.assign(data,movie)});
+  try {
+    const polygons = viewer.entities.values.filter((e) => e.polygon);
+    assert.ok(polygons.length > 0);
+    for (const [stamp] of movie.tracks[0].samples) {
+      const time = Cesium.JulianDate.fromIso8601(stamp);
+      for (const entity of polygons) {
+        const hierarchy = entity.polygon.hierarchy.getValue(time);
+        if (!hierarchy) { assert.equal(entity.polygon.show.getValue(time),false); continue; }
+        assert.ok(Cesium.PolygonGeometry.createGeometry(new Cesium.PolygonGeometry({polygonHierarchy:hierarchy})));
+      }
+    }
+    const start = Cesium.JulianDate.fromIso8601(movie.scenario.start_time);
+    const between = Cesium.JulianDate.addSeconds(start,10,new Cesium.JulianDate());
+    assert.deepEqual(polygons[0].polygon.hierarchy.getValue(between),polygons[0].polygon.hierarchy.getValue(start));
+  } finally { dom.window.close(); }
+});
+
+
+test("map2d starts in 2D and preserves presentation on rerun", async () => {
+  const { dom, w, get, viewer, sizes } = await setup({ presentation: "map2d" });
+  try {
+    assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE2D);
+    assert.equal(get("view-2d").getAttribute("aria-pressed"), "true");
+    w.document.querySelector('[data-tab="inputs"]').click();
+    get("study-form").dispatchEvent(new w.Event("submit", { cancelable: true }));
+    assert.equal(sizes.find((m) => m.type === "tatc-workspace:run").payload.params.presentation, "map2d");
+  } finally { dom.window.close(); }
+});
+
+test("other presentations retain 3D map defaults", async () => {
+  const { dom, viewer } = await setup({ presentation: "simulation3d" });
+  try {
+    assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE3D);
+  } finally { dom.window.close(); }
+});
+
+
+test("polar dissolved patches triangulate, outline only native boundaries, and export original geometry", async () => {
+  const polar = JSON.parse(execFileSync(process.env.TATC_PYTHON || "python3", ["-c",
+    "import json; from tests.polar_fixtures import polar_cases; print(json.dumps(polar_cases()[0]))"],
+    {cwd: root, env: {...process.env, PYTHONPATH: path.join(root, "apps/mcp-server")}, encoding: "utf8"}));
+  const area = {type: "FeatureCollection", features: [{type: "Feature", properties: {instrument: "Polar"},
+    geometry: polar.native, cesium_parts: polar.parts, cesium_boundary: polar.boundaries}]};
+  const {dom, get, viewer} = await setup({orbitOnly: true, editFixture: (data) => {
+    data.instrument = {name: "Polar"}; data.ground_area = area;
+  }});
+  try {
+    const polygons = viewer.entities.values.filter((e) => e.name?.includes("dissolved sampled"));
+    assert.equal(polygons.length, polar.parts.length);
+    for (const entity of polygons) {
+      assert.equal(entity.polygon.outline.getValue(), false);
+      assert.ok(Cesium.PolygonGeometry.createGeometry(new Cesium.PolygonGeometry({
+        polygonHierarchy: entity.polygon.hierarchy.getValue()
+      })));
+    }
+    const boundaries = viewer.entities.values.filter((e) => e.name?.includes("dissolved footprint boundary"));
+    assert.equal(boundaries.length, polar.boundaries.length);
+    let exported;
+    dom.window.Blob = class { constructor(parts) { exported = parts.join(""); } };
+    dom.window.URL.createObjectURL = () => "blob:area";
+    dom.window.URL.revokeObjectURL = () => {};
+    dom.window.HTMLAnchorElement.prototype.click = () => {};
+    get("export-area").click();
+    assert.deepEqual(JSON.parse(exported).features[0].geometry, polar.native);
+    assert.equal("cesium_parts" in JSON.parse(exported).features[0], false);
   } finally { dom.window.close(); }
 });

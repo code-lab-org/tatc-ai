@@ -57,6 +57,7 @@ class HttpReplay:
         response = requests.Response()
         response.status_code = entry["status"]
         response._content = entry["text"].encode("utf-8")
+        response._content_consumed = True
         response.encoding = "utf-8"
         response.url = key
         return response

@@ -237,6 +237,7 @@
   $("links-label").hidden = points.length === 0;
   $("footprints-label").hidden = !DATA.tracks.some((t) => t.footprints);
   $("ground-area-label").hidden = !DATA.instrument;
+  $("swath-label").hidden = $("footprints-label").hidden;
   if (points.length) selectPoint(0);
   else setTime(0);
   const assetRoot = new URL("../cesium/1.146/", location.href).href;
@@ -293,6 +294,7 @@
       timeline: false,
       homeButton: false,
       sceneModePicker: false,
+      sceneMode: DATA.ui?.presentation === "map2d" ? C.SceneMode.SCENE2D : C.SceneMode.SCENE3D,
       navigationHelpButton: false,
       fullscreenButton: false,
       infoBox: false,
@@ -364,16 +366,19 @@
     viewer.clock.stopTime = C.JulianDate.fromDate(new Date(end));
     viewer.clock.clockRange = C.ClockRange.CLAMPED;
     const satellites = new Map();
-    // Longitudes move the short way round, so a footprint crossing the
-    // antimeridian between samples does not sweep across the globe.
-    const lerp = ([lon, lat], [lon2, lat2], f) => {
-      const d = lon2 - lon - 360 * Math.round((lon2 - lon) / 360);
-      return [lon + d * f, lat + (lat2 - lat) * f];
-    };
+    const boundaryPositions = (line) => line.map((direction) =>
+      C.Ellipsoid.WGS84.scaleToGeocentricSurface(new C.Cartesian3(...direction)),
+    );
     for (const feature of DATA.ground_area?.features || []) {
+      for (const line of feature.cesium_boundary || [])
+        viewer.entities.add({name: feature.properties.instrument + " / dissolved footprint boundary", polyline: {
+          show: new C.CallbackProperty(() => $("show-ground-area").checked, false),
+          positions: boundaryPositions(line), clampToGround: true, width: 1.5,
+          material: C.Color.fromCssColorString(colors[0]),
+        }});
       const geometry = feature.geometry;
-      const polygons = geometry.type === "Polygon"
-        ? [geometry.coordinates] : geometry.coordinates;
+      const polygons = feature.cesium_parts || (geometry.type === "Polygon"
+        ? [geometry.coordinates] : geometry.coordinates);
       for (const rings of polygons) {
         if (!rings[0]?.length) continue;
         const positions = (ring) => C.Cartesian3.fromDegreesArray(
@@ -389,7 +394,8 @@
             ),
             height: 0,
             material: C.Color.fromCssColorString(colors[0]).withAlpha(0.3),
-            outline: true,
+            // Display patches share internal meridians; those are not footprint boundaries.
+            outline: !feature.cesium_parts,
             outlineColor: C.Color.fromCssColorString(colors[0]),
           },
         });
@@ -441,8 +447,7 @@
         },
       });
       satellites.set(track.name, entity);
-      // TATC footprints and boresights of pointed instruments, interpolated
-      // between display samples so they move with the satellite.
+      // Keep native sampled topology at poles and antimeridian crossings.
       const sampleAt = (time) => {
         const current = C.JulianDate.toDate(time).getTime();
         const step = DATA.scenario.display_step_seconds * 1000;
@@ -455,16 +460,15 @@
         return [k, Math.max(0, Math.min(1, f))];
       };
       for (const footprint of track.footprints || []) {
-        const ring = (time, part) => {
+        const sampleIndex = (time) => {
           const [k, f] = sampleAt(time);
-          const [a, b] = [footprint.parts[k], footprint.parts[k + 1]];
-          // A footprint split at the antimeridian keeps its sampled shape.
-          if (a.length !== b.length || a[part]?.length !== b[part]?.length)
-            return (f < 0.5 ? a : b)[part];
-          return a[part]?.map((p, n) => lerp(p, b[part][n], f));
+          return f < 0.5 ? k : k + 1;
         };
+        const ring = (time, part) => footprint.parts[sampleIndex(time)][part];
         const show = (time, part) =>
-          $("show-footprints").checked && !!ring(time, part);
+          $("show-footprints").checked &&
+          (footprint.valid_obs?.[sampleIndex(time)] ?? true) &&
+          (ring(time, part)?.length || 0) >= 4;
         const parts = Math.max(...footprint.parts.map((p) => p.length));
         for (let part = 0; part < parts; part++)
           viewer.entities.add({
@@ -472,18 +476,62 @@
             polygon: {
               show: new C.CallbackProperty((t) => show(t, part), false),
               hierarchy: new C.CallbackProperty(
-                (t) =>
-                  new C.PolygonHierarchy(
-                    C.Cartesian3.fromDegreesArray((ring(t, part) || []).flat()),
-                  ),
+                (t) => {
+                  const boundary = ring(t, part);
+                  if (!boundary || boundary.length < 4) return undefined;
+                  return new C.PolygonHierarchy(
+                    C.Cartesian3.fromDegreesArray(boundary.flat()),
+                    (footprint.holes?.[sampleIndex(t)]?.[part] || []).map(
+                      (hole) => new C.PolygonHierarchy(
+                        C.Cartesian3.fromDegreesArray(hole.flat()),
+                      ),
+                    ),
+                  );
+                },
                 false,
               ),
               height: 0,
               material: color.withAlpha(0.45),
-              outline: true,
+              outline: new C.CallbackProperty((t) => !footprint.partitioned?.[sampleIndex(t)], false),
               outlineColor: color,
             },
           });
+        footprint.parts.forEach((parts, index) => {
+          if (footprint.valid_obs?.[index] === false) return;
+          const sampleTime = samples[index].time;
+          for (let part = 0; part < parts.length; part++) {
+            if (parts[part].length < 4) continue;
+            viewer.entities.add({
+              name: track.name + " / " + footprint.instrument + " / sampled trail",
+              polygon: {
+                show: new C.CallbackProperty((time) => {
+                  const age = C.JulianDate.toDate(time).getTime() - sampleTime;
+                  return $("show-swath").checked && age >= 0 &&
+                    age <= Number($("trail-minutes").value) * 60000;
+                }, false),
+                hierarchy: new C.PolygonHierarchy(
+                  C.Cartesian3.fromDegreesArray(parts[part].flat()),
+                  (footprint.holes?.[index]?.[part] || []).map(
+                    (hole) => new C.PolygonHierarchy(C.Cartesian3.fromDegreesArray(hole.flat())),
+                  ),
+                ),
+                height: 0,
+                material: color.withAlpha(0.15),
+              },
+            });
+          }
+        });
+        const lineCount = Math.max(0, ...(footprint.boundaries || []).map((lines) => lines.length));
+        for (let line = 0; line < lineCount; line++)
+          viewer.entities.add({polyline: {
+            show: new C.CallbackProperty((t) => $("show-footprints").checked &&
+              (footprint.valid_obs?.[sampleIndex(t)] ?? true) &&
+              !!footprint.boundaries[sampleIndex(t)][line], false),
+            positions: new C.CallbackProperty((t) => boundaryPositions(
+              footprint.boundaries[sampleIndex(t)][line] || [],
+            ), false),
+            clampToGround: true, width: 1.5, material: color,
+          }});
         viewer.entities.add({
           polyline: {
             show: new C.CallbackProperty((t) => show(t, 0), false),
@@ -491,12 +539,7 @@
             arcType: C.ArcType.NONE,
             material: color.withAlpha(0.9),
             positions: new C.CallbackProperty((t) => {
-              const [k, f] = sampleAt(t);
-              const center = lerp(
-                footprint.centers[k],
-                footprint.centers[k + 1],
-                f,
-              );
+              const center = footprint.centers[sampleIndex(t)];
               const location = entity.position.getValue(t);
               return location
                 ? [location, C.Cartesian3.fromDegrees(...center)]
@@ -608,6 +651,8 @@
       $("view-3d").setAttribute("aria-pressed", String(mode === "3d"));
       viewer.scene.requestRender();
     }
+    $("view-2d").setAttribute("aria-pressed", String(DATA.ui?.presentation === "map2d"));
+    $("view-3d").setAttribute("aria-pressed", String(DATA.ui?.presentation !== "map2d"));
     $("view-2d").onclick = () => setMode("2d");
     $("view-3d").onclick = () => setMode("3d");
     $("show-orbits").onchange = () => {
@@ -615,7 +660,7 @@
         satellite.path.show = $("show-orbits").checked;
       viewer.scene.requestRender();
     };
-    for (const id of ["show-ground", "show-links", "show-footprints", "show-ground-area"])
+    for (const id of ["show-ground", "show-links", "show-footprints", "show-ground-area", "show-swath", "trail-minutes"])
       $(id).onchange = () => viewer.scene.requestRender();
     $("globe").hidden = false;
     viewer.resize();
@@ -685,9 +730,6 @@
     }
     started = true;
     initializeGlobe()
-      .then(() => {
-        if (DATA.ui?.presentation === "map2d" && !failed) $("view-2d").click();
-      })
       .catch((error) => fail("Unable to show visualization: " + error.message));
   }
   window.addEventListener("tatc-map-show", showMap);

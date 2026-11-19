@@ -19,8 +19,8 @@ reviewed.
 | `analysis.coverage.collect_observations` | `analyze_coverage` and `visualize(view="coverage")` | Study pane: results, observation/gap timeline, tables, CSV and study JSON downloads, Cesium 2D/3D orbits and observation links |
 | `analysis.compute_ground_track` | `ground_track_map` with explicit instrument; `visualize(view="ground_track")` reruns | Cesium Study pane: dissolved sampled footprint area, per-window or per-orbit groups; GeoJSON export |
 | `schemas.Satellite` with any TATC orbit type | Coverage scenarios | Orbit tracks in Cesium |
-| `schemas.Instrument`, `schemas.PointedInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |
-| `PointedInstrument.compute_footprint`, `compute_footprint_center` | Coverage scenes with pointed instruments | Footprints layer: instantaneous footprint and boresight line |
+| `schemas.Instrument`, `schemas.PointedInstrument`, `schemas.ConicalInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |
+| `Instrument.compute_footprint_center` and specialized implementations | Coverage scenes | Footprint-center / scan-center lines |
 | `schemas.Point` | Coverage study points | Point markers and per-point timelines |
 
 Orbit views (`visualize(view="orbit")`) use CelesTrak GP (OMM) elements and TATC propagation
@@ -58,9 +58,10 @@ for chat follow-ups.
 | `analysis.track.collect_ground_pixels` | Ground position of each detector pixel (rectangular `PointedInstrument`) | Pixel grid showing sampling and overlap | Pixel counts, oversampling |
 | `utils.projection.compute_limb` | Outline of the Earth disk visible from the satellite | Horizon circle following the satellite | Visible-Earth layer |
 
-Pointing is a fixed roll and pitch per instrument; TATC has no yaw or
-time-varying attitude. Conical scanners (for example TMI, GMI, MWRI-RM) can only
-be approximated as a pitched rectangle, not the scanned arc.
+Conical scanners use native TATC `ConicalInstrument` geometry. The pane draws
+their instantaneous scan footprints, preserving sectors, holes and antimeridian
+splits, at the nearest display sample. The optional trail shows sampled polygons without
+dissolving them into a continuous swath.
 
 ### Orbits and constellations
 

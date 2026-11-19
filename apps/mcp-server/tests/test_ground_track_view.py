@@ -183,3 +183,23 @@ def test_empty_dissolved_area_does_not_claim_coverage():
     )
     assert result["ground_area"]["features"] == []
     assert result["instrument"]["name"] == "No overhead sun"
+
+
+def test_polar_dissolve_keeps_native_geometry_and_adds_display_patches():
+    import geopandas as gpd
+    from shapely.geometry import Polygon
+    from shapely import union_all
+    from tests.polar_fixtures import polar_cases
+
+    native = shape(polar_cases()[0]["native"])
+    end = START + timedelta(minutes=2)
+    with mock.patch.object(ground_track_view, "compute_ground_track", return_value=gpd.GeoDataFrame(geometry=[native])):
+        result = ground_track_view.build_ground_track_scene(
+            CATALOG_SATELLITE, messages(end), START, end, 120,
+            {"name": "Polar", "field_of_regard": 100},
+        )
+    feature = result["ground_area"]["features"][0]
+    assert shape(feature["geometry"]).equals(native)
+    assert feature["cesium_boundary"]
+    parts = [Polygon(rings[0], rings[1:]) for rings in feature["cesium_parts"]]
+    assert union_all(parts).symmetric_difference(native).area < 1e-8

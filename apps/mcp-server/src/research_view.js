@@ -788,7 +788,7 @@
   }
   $("export-area").hidden = !data.instrument;
   $("export-area").onclick = () => download(
-    JSON.stringify(data.ground_area), "application/geo+json", "tatc-ground-track-area.geojson",
+    JSON.stringify(data.ground_area, (key, value) => key.startsWith("cesium_") ? undefined : value), "application/geo+json", "tatc-ground-track-area.geojson",
   );
   $("export-json").onclick = () =>
     download(
