@@ -17,6 +17,7 @@ reviewed.
 | TATC API | Where TATC-AI uses it | Visualization |
 | --- | --- | --- |
 | `analysis.coverage.collect_observations` | `analyze_coverage` and `visualize(view="coverage")` | Study pane: results, observation/gap timeline, tables, CSV and study JSON downloads, Cesium 2D/3D orbits and observation links |
+| `analysis.collect_ground_track` | Study pane footprints and trails; `generate_ground_track` 60° footprints | Sampled instrument footprints and trails; numerical ground-track output |
 | `analysis.compute_ground_track` | `ground_track_map` with explicit instrument; `visualize(view="ground_track")` reruns | Cesium Study pane: dissolved sampled footprint area, per-window or per-orbit groups; GeoJSON export |
 | `schemas.Satellite` with any TATC orbit type | Coverage scenarios | Orbit tracks in Cesium |
 | `schemas.Instrument`, `schemas.PointedInstrument`, `schemas.ConicalInstrument` | Coverage scenarios | Access results; all settings in the summary and Inputs |
@@ -54,7 +55,6 @@ for chat follow-ups.
 | TATC API | Computes | Cesium visualization | Pane control |
 | --- | --- | --- | --- |
 | `utils.projection.compute_projected_ray_position` | Ground intersection of any ray | Satellite-to-corner frustum lines | Part of the Footprints layer |
-| `analysis.track.collect_ground_track` | One footprint polygon per time step | Swath accumulating behind the satellite | Swath layer, trail length |
 | `analysis.track.collect_ground_pixels` | Ground position of each detector pixel (rectangular `PointedInstrument`) | Pixel grid showing sampling and overlap | Pixel counts, oversampling |
 | `utils.projection.compute_limb` | Outline of the Earth disk visible from the satellite | Horizon circle following the satellite | Visible-Earth layer |
 

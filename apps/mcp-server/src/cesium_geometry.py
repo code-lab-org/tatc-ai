@@ -4,29 +4,30 @@ from shapely import set_precision, union_all
 from shapely.geometry import box
 
 
-def cesium_parts(geometry):
+def cesium_parts(geometry, *, max_width=180, max_height=None):
     """Partition wide polygons without changing their union or coverage meaning.
 
     TATC splits at poles/antimeridian but can return a cap or annulus spanning
     all longitudes. Cesium cannot triangulate that ring in one local plane.
-    TATC has no Cesium display-partition API: intersect only these wide polygons
-    with longitude patches. Keep native scientific/export geometry unchanged.
+    TATC has no Cesium display-partition API. Wide footprints use longitude
+    patches; dissolved areas also request latitude patches to bound long strips.
+    Keep scientific/export geometry unchanged.
     """
     parts = []
     for polygon in getattr(geometry, "geoms", [geometry]):
         if polygon.is_empty:
             continue
-        west, _, east, _ = polygon.bounds
-        if east - west < 180:
+        if not needs_partition(polygon, max_width=max_width, max_height=max_height):
             parts.append(polygon)
             continue
         for left in (-180, -90, 0, 90):
-            clipped = polygon.intersection(box(left, -90, left + 90, 90))
-            parts.extend(
-                part
-                for part in getattr(clipped, "geoms", [clipped])
-                if part.geom_type == "Polygon" and not part.is_empty
-            )
+            for bottom, top in ((-90, 0), (0, 90)) if max_height is not None else ((-90, 90),):
+                clipped = polygon.intersection(box(left, bottom, left + 90, top))
+                parts.extend(
+                    part
+                    for part in getattr(clipped, "geoms", [clipped])
+                    if part.geom_type == "Polygon" and not part.is_empty
+                )
     return parts
 
 
@@ -41,9 +42,10 @@ def part_rings(parts):
     ]
 
 
-def needs_partition(geometry):
+def needs_partition(geometry, *, max_width=180, max_height=None):
     return any(
-        part.bounds[2] - part.bounds[0] >= 180
+        part.bounds[2] - part.bounds[0] >= max_width
+        or (max_height is not None and part.bounds[3] - part.bounds[1] > max_height)
         for part in getattr(geometry, "geoms", [geometry])
         if not part.is_empty
     )

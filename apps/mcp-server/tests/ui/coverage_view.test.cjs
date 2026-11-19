@@ -181,7 +181,7 @@ async function setup({
       };
       queueMicrotask(() => this.scene.postRender.raiseEvent());
       this.camera = {
-        frustum: { fovy: Math.PI / 3, aspectRatio: 2 },
+        frustum: { fovy: Math.PI / 3, aspectRatio: 2, left: -10000000, right: 10000000 },
         setView(options) {
           this.lastView = options;
         },
@@ -1343,5 +1343,19 @@ test("polar dissolved patches triangulate, outline only native boundaries, and e
     get("export-area").click();
     assert.deepEqual(JSON.parse(exported).features[0].geometry, polar.native);
     assert.equal("cesium_parts" in JSON.parse(exported).features[0], false);
+  } finally { dom.window.close(); }
+});
+
+
+test("ground-track map2d starts centered on its first sampled position", async () => {
+  const {dom, get, viewer, data} = await setup({presentation: "map2d", orbitOnly: true,
+    editFixture: (result) => { result.ui.view = "ground_track"; }});
+  try {
+    assert.equal(viewer.scene.mode, Cesium.SceneMode.SCENE2D);
+    assert.equal(get("view-2d").getAttribute("aria-pressed"), "true");
+    const position = Cesium.Cartographic.fromCartesian(viewer.camera.lastView.destination);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.longitude) - data.tracks[0].samples[0][1]) < 1e-7);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(position.latitude) - data.tracks[0].samples[0][2]) < 1e-7);
+    assert.ok(Math.abs(position.height - 20000000) < 1e-5);
   } finally { dom.window.close(); }
 });

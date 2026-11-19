@@ -78,10 +78,10 @@ def build_ground_track_scene(
                     "geometry": mapping(orient_polygons(row.geometry)),
                     **(
                         {
-                            "cesium_parts": part_rings(cesium_parts(row.geometry)),
+                            "cesium_parts": part_rings(cesium_parts(row.geometry, max_width=90, max_height=90)),
                             "cesium_boundary": boundary_lines(row.geometry),
                         }
-                        if needs_partition(row.geometry)
+                        if needs_partition(row.geometry, max_width=90, max_height=90)
                         else {}
                     ),
                     "properties": {

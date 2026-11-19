@@ -40,3 +40,25 @@ for (const fixture of cases) test(`native ${fixture.name} triangulates without p
   // A rendering sanity check, not a scientific area/accuracy metric.
   assert.ok(Math.abs(area / fixture.area - 1) < 0.01, `mesh/native area ratio: ${area/fixture.area}`);
 });
+
+test("native pole-to-pole dissolved ground track tessellates in bounded patches", () => {
+  const fixture = JSON.parse(execFileSync(process.env.TATC_PYTHON || "python3", ["-c",
+    "import json; from tests.polar_fixtures import polar_dissolve_case; print(json.dumps(polar_dissolve_case()))"], {
+    cwd: root, env: {...process.env, PYTHONPATH: path.join(root, "apps/mcp-server")},
+    encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
+  }));
+  const positions = (ring) => C.Cartesian3.fromDegreesArray(ring.flat());
+  assert.ok(fixture.parts.length > 1);
+  for (const rings of fixture.parts) {
+    const coords = rings.flat();
+    const lons = coords.map((point) => point[0]);
+    const lats = coords.map((point) => point[1]);
+    assert.ok(Math.max(...lons) - Math.min(...lons) <= 90 + 1e-8);
+    assert.ok(Math.max(...lats) - Math.min(...lats) <= 90 + 1e-8);
+    const mesh = C.PolygonGeometry.createGeometry(new C.PolygonGeometry({
+      polygonHierarchy: new C.PolygonHierarchy(positions(rings[0]),
+        rings.slice(1).map((ring) => new C.PolygonHierarchy(positions(ring)))),
+    }));
+    assert.ok(mesh && [...mesh.attributes.position.values].every(Number.isFinite));
+  }
+});

@@ -72,16 +72,17 @@ def polar_cases():
     return cases
 
 
-def case(name, geometry):
+def case(name, geometry, *, dissolved=False):
+    limits = {"max_width": 90, "max_height": 90} if dissolved else {}
     return {
         "name": name,
         "native": mapping(geometry),
-        "parts": part_rings(cesium_parts(geometry)),
+        "parts": part_rings(cesium_parts(geometry, **limits)),
         "area": abs(
             Geod(ellps="WGS84").geometry_area_perimeter(orient_polygons(geometry))[0]
         ),
         "bounds": geometry.bounds,
-        "boundaries": boundary_lines(geometry) if needs_partition(geometry) else [],
+        "boundaries": boundary_lines(geometry) if needs_partition(geometry, **limits) else [],
     }
 
 
@@ -146,3 +147,21 @@ def polar_movie():
             "display_step_seconds": 30,
         },
     }
+
+
+def polar_dissolve_case():
+    """A two-hour native dissolve whose connected strip crosses both poles."""
+    from datetime import timedelta
+    from tatc.analysis import compute_ground_track
+
+    start = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    satellite = Satellite(
+        name="Polar dissolve",
+        orbit=CircularOrbit(mean_altitude=550000, inclination=90, epoch=start),
+        instruments=[Instrument(name="Wide", field_of_regard=100)],
+    )
+    geometry = compute_ground_track(
+        satellite, [start + timedelta(seconds=60 * i) for i in range(121)],
+        dissolve_orbits=True,
+    ).geometry.iloc[0]
+    return case("polar-dissolve", geometry, dissolved=True)

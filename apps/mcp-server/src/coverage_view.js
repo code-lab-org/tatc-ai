@@ -319,14 +319,19 @@
         ),
       );
     function frameEarth() {
-      if (
-        !mapVisible() ||
-        viewer.isDestroyed() ||
-        viewer.scene.mode !== C.SceneMode.SCENE3D
-      )
-        return;
+      if (!mapVisible() || viewer.isDestroyed()) return;
       viewer.resize();
       const frustum = viewer.camera.frustum;
+      if (viewer.scene.mode === C.SceneMode.SCENE2D) {
+        if (DATA.ui?.view === "ground_track") {
+          viewer.camera.setView({
+            destination: C.Cartesian3.fromDegrees(focus[0], focus[1], frustum.right - frustum.left),
+          });
+          viewer.scene.requestRender();
+        }
+        return;
+      }
+      if (viewer.scene.mode !== C.SceneMode.SCENE3D) return;
       const horizontal =
         2 * Math.atan(Math.tan(frustum.fovy / 2) * frustum.aspectRatio);
       const distance =
