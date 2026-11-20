@@ -1527,7 +1527,7 @@ def test_partial_staged_case_requires_both_spacecraft():
         {},
         False,
         "{}",
-        parsed={"satellites": [{"norad_id": 62261}]},
+        parsed={"satellites": [{"norad_id": 62261}, {"norad_id": 38337}]},
     )
     finish_s1c_only = Call(
         "finish_mixed_study",
