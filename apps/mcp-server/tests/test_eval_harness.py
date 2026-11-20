@@ -391,3 +391,46 @@ def test_chat_sends_the_requested_reasoning_effort(monkeypatch):
 
     assert message == {"content": "ok"}
     assert captured["body"]["reasoning_effort"] == "max"
+
+
+def test_run_rejects_now_for_mixed_cases_before_any_model_work(monkeypatch):
+    class FakeReplay:
+        recorded_at = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def install(self):
+            pass
+
+    class FakeCase:
+        id = "mixed_case"
+        tags = ("mixed",)
+
+    monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
+    monkeypatch.setattr(
+        run_eval, "_provider_credentials", lambda _args: ("http://example", "key")
+    )
+    monkeypatch.setattr(run_eval, "_selected_models", lambda _args: ["model"])
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("model work started before the clock guard")
+
+    monkeypatch.setattr(run_eval, "Harness", unexpected)
+    monkeypatch.setattr(run_eval, "probe_streams", unexpected)
+
+    args = SimpleNamespace(
+        now="2026-11-20T00:00:00+00:00",
+        provider="opencode-go",
+        reasoning_effort="max",
+        cases=None,
+        models=["model"],
+        all_models=False,
+        api_key_env=None,
+        base_url=None,
+        hide=[],
+        offline=True,
+    )
+    with pytest.raises(ValueError, match="Mixed cases use the recorded"):
+        run_eval.run(args)

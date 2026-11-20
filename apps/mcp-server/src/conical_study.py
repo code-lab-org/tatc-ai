@@ -227,6 +227,22 @@ def _sha256(payload: Any) -> str:
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
 
+def _configuration_digest(snapshot: Dict[str, Any]) -> str:
+    """Hash a configuration without the app build identity.
+
+    The build commit is provenance, not a numerical input. Excluding it keeps
+    setup revisions stable across server rebuilds that do not change the
+    instrument mapping.
+    """
+    value = {key: item for key, item in snapshot.items() if key != "server_build"}
+    software = value.get("software")
+    if isinstance(software, dict):
+        value["software"] = {
+            key: item for key, item in software.items() if key != "server_build"
+        }
+    return _sha256(value)
+
+
 def _omission_id(item: Dict[str, Any]) -> str:
     """Return a deterministic ID for one requested instrument identity."""
     identity = {
@@ -555,7 +571,7 @@ def _consequential_payload(
             "omm_hash": _omm_hash(satellite["omm_records"]),
             "omm_mean_altitude_km": satellite["omm_mean_altitude_km"],
         },
-        "configuration_digest": _sha256(snapshot),
+        "configuration_digest": _configuration_digest(snapshot),
         "configuration": snapshot,
         "registry_selection": registry_selection,
         "orbit_direction_filter": orbit_direction,
@@ -578,7 +594,11 @@ def _consequential_payload(
             "unresolved_intervals": [],
             "assumptions": [],
         },
-        "software": snapshot["software"],
+        "software": {
+            key: item
+            for key, item in snapshot["software"].items()
+            if key != "server_build"
+        },
         "evaluated_configuration_count": MAX_EVALUATED_CONFIGURATIONS,
     }
 
@@ -841,6 +861,11 @@ def _proposal_payload(
             "setting": "software",
             "value": consequential["software"],
             "why": "A TAT-C or Python change can change numerical results.",
+        },
+        {
+            "setting": "server_build",
+            "value": snapshot["software"].get("server_build"),
+            "why": "Build identity for provenance; it does not change the numerical setup hash.",
         },
         {
             "setting": "orbit_direction_filter",
@@ -1671,7 +1696,7 @@ def prepare_mixed_study(
                 "spacecraft": configuration.spacecraft.model_dump(mode="json"),
                 "satellite": satellite_snapshot,
                 "configuration": snapshot,
-                "configuration_digest": _sha256(snapshot),
+                "configuration_digest": _configuration_digest(snapshot),
                 "registry_selection": registry_selection,
                 "source_choices": source_choices_from_snapshot(snapshot),
                 "applicability": coverage,
@@ -2763,7 +2788,7 @@ def _result_payload(
         "accounting_method": accounting_method,
         "setup_revision": accepted_setup_revision,
         "accepted_setup_revision": accepted_setup_revision,
-        "configuration_digest": _sha256(snapshot),
+        "configuration_digest": _configuration_digest(snapshot),
         "satellite": stage["satellite"],
         "satellites": _public_satellites(stage),
         "instrument": configuration.instrument,

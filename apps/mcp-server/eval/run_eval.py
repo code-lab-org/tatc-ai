@@ -329,7 +329,6 @@ class Harness:
         conversation_timeout: float = CONVERSATION_TIMEOUT,
         user_agent: str = "tatc-ai-eval/1.0",
         session_id: str = "",
-        provider: str = "voyager",
         reasoning_effort: Optional[str] = None,
     ):
         import src.generic_coverage as gc
@@ -346,7 +345,6 @@ class Harness:
         self.conversation_timeout = conversation_timeout
         self.user_agent = user_agent
         self.session_id = session_id
-        self.provider = provider
         self.reasoning_effort = reasoning_effort
         tools = asyncio.run(self._list_tools())
         self.tool_names = [t.name for t in tools if t.name not in hide]
@@ -673,14 +671,20 @@ def run(args: argparse.Namespace) -> None:
     )
     models = _selected_models(args)
     base_url, api_key = _provider_credentials(args)
-    if getattr(args, "provider", "voyager") == "opencode-go":
+    provider = getattr(args, "provider", "voyager")
+    reasoning_effort = getattr(args, "reasoning_effort", None)
+    cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
+    if getattr(args, "now", None) and any("mixed" in case.tags for case in cases):
+        raise ValueError(
+            "Mixed cases use the recorded CelesTrak clock and the reviewed "
+            "Sentinel-1C applicability window. Remove --now or exclude the mixed cases."
+        )
+    if provider == "opencode-go":
         user_agent = OPENCODE_GO_USER_AGENT
         session_id = str(uuid.uuid4())
     else:
         user_agent = "tatc-ai-eval/1.0"
         session_id = ""
-    provider = getattr(args, "provider", "voyager")
-    reasoning_effort = getattr(args, "reasoning_effort", None)
     harness = Harness(
         base_url,
         api_key,
@@ -690,15 +694,8 @@ def run(args: argparse.Namespace) -> None:
         conversation_timeout=args.conversation_timeout,
         user_agent=user_agent,
         session_id=session_id,
-        provider=provider,
         reasoning_effort=reasoning_effort,
     )
-    cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
-    if getattr(args, "now", None) and any("mixed" in case.tags for case in cases):
-        raise ValueError(
-            "Mixed cases use the recorded CelesTrak clock and the reviewed "
-            "Sentinel-1C applicability window. Remove --now or exclude the mixed cases."
-        )
     streams = probe_streams(harness, models)
     if args.stream_only:
         print("\n".join(streams))

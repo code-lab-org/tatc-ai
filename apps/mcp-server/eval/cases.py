@@ -1224,9 +1224,28 @@ def _mixed_follow_up_grid():
             for call in prepares
         ]
         changed_grid = grids[:2] == [(2, 2), (3, 3)]
-        same_scope = len(prepares) >= 2 and all(
-            prepares[0].args.get(key) == prepares[1].args.get(key)
-            for key in ("configurations", "omissions", "applicability_assumptions")
+        begins = [
+            call
+            for call in trace.calls
+            if call.name == "begin_access_run" and not call.error
+        ]
+        regions = [
+            call
+            for call in trace.calls
+            if call.name == "set_access_region" and not call.error
+        ]
+        same_scope = (
+            len(prepares) >= 2
+            and all(
+                prepares[0].args.get(key) == prepares[1].args.get(key)
+                for key in (
+                    "configurations",
+                    "omissions",
+                    "applicability_assumptions",
+                )
+            )
+            and (len(begins) < 2 or begins[0].args == begins[1].args)
+            and (len(regions) < 2 or regions[0].args == regions[1].args)
         )
         revisions = {
             summary.get("setup_revision")

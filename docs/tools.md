@@ -186,7 +186,7 @@ The file is UTF-8 JSON with `schema_version: "tatc-study-export-v1"` and these s
 
 | Section | Contents |
 | --- | --- |
-| `study` | Result ID, kind, status, window, region, grid, applicability, event filter, warnings, limits, definitions, storage note |
+| `study` | Result ID, kind, status, window, region, grid, applicability, event filter definition, warnings, limits, definitions, storage note |
 | `configurations` | One block per configuration with the full geometry, source evidence, source choices, applicability, approximations, and warnings |
 | `omissions` | Each omitted instrument, reason code, reason, and evidence reference |
 | `orbits` | Exact OMM records for every satellite, plus epoch, age, mean altitude, and hash |

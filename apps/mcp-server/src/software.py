@@ -16,7 +16,8 @@ def _version(name: str) -> str:
 def software_versions() -> Dict[str, str]:
     """Return the versions that can change a study's numerical result."""
     return {
-        "server": os.environ.get("TATC_AI_SERVER_VERSION", "dev"),
+        "server": "tatc-ai-mcp-server",
+        "server_build": os.environ.get("TATC_AI_SERVER_VERSION", "dev"),
         "tatc": _version("tatc"),
         "python": platform.python_version(),
         "skyfield": _version("skyfield"),

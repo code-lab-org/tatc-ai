@@ -230,21 +230,13 @@ def _mixed_replay(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _software(payload: Dict[str, Any]) -> Any:
     raw = payload.get("provenance", {}).get("software")
-    if not isinstance(raw, list):
+    if not isinstance(raw, list) or not raw:
         return raw
-    versions = [
-        {
-            key: value
-            for key, value in item.items()
-            if key not in ("configuration_id", "configuration_revision")
-        }
-        for item in raw
-    ]
-    unique = []
-    for item in versions:
-        if item not in unique:
-            unique.append(item)
-    return unique[0] if len(unique) == 1 else unique
+    return {
+        key: value
+        for key, value in raw[0].items()
+        if key not in ("configuration_id", "configuration_revision")
+    }
 
 
 def build_study_export(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -253,7 +245,6 @@ def build_study_export(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any
     window = setup.get("window", {})
     document = {
         "schema_version": EXPORT_SCHEMA_VERSION,
-        "export_kind": "tatc-ai-study",
         "exported_at_utc": datetime.now(timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
@@ -275,7 +266,6 @@ def build_study_export(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any
             "applicability_assumptions": payload.get(
                 "applicability_assumptions", []
             ),
-            "event_filter": payload.get("event_filter"),
             "event_filter_definition": EVENT_FILTER_DEFINITION,
             "warnings": payload.get("warnings", []),
             "limits": payload.get("limits", []),

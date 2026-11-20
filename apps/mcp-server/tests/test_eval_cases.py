@@ -1608,3 +1608,9 @@ def test_mixed_follow_up_grid_checker_requires_two_runs_and_a_new_revision():
     assert not checks["new_revision"]
     assert not checks["two_results"]
 
+    trace.calls[2].args["configurations"] = [
+        {"configuration_id": "different-configuration"}
+    ]
+    checks = case.checks(trace, _clock())
+    assert not checks["same_scope"]
+

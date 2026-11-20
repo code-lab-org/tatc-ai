@@ -5,9 +5,6 @@ RUN npm ci --ignore-scripts --omit=dev
 
 FROM python:3.12-slim
 
-ARG GIT_SHA=dev
-ENV TATC_AI_SERVER_VERSION=${GIT_SHA}
-
 WORKDIR /app
 
 COPY apps/mcp-server/requirements.txt /app/requirements.txt
@@ -20,6 +17,9 @@ COPY apps/mcp-server/src /app/src
 COPY --from=viewer-assets /assets/node_modules/cesium/Build/Cesium /app/viewer-assets/node_modules/cesium/Build/Cesium
 COPY --from=viewer-assets /assets/node_modules/cesium/LICENSE.md /app/viewer-assets/CESIUM-LICENSE.md
 COPY apps/mcp-server/data /app/data
+
+ARG GIT_SHA=dev
+ENV TATC_AI_SERVER_VERSION=${GIT_SHA}
 
 EXPOSE 8000
 
