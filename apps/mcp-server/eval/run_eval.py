@@ -665,6 +665,26 @@ def run(args: argparse.Namespace) -> None:
         session_id=session_id,
     )
     cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
+    harness_cache = {None: harness}
+
+    def harness_for(case):
+        override = getattr(case, "clock_override", None)
+        if override is None:
+            return harness, clock
+        key = override
+        if key not in harness_cache:
+            harness_cache[key] = Harness(
+                base_url,
+                api_key,
+                args.hide,
+                Clock(key),
+                request_timeout=args.request_timeout,
+                conversation_timeout=args.conversation_timeout,
+                user_agent=user_agent,
+                session_id=session_id,
+            )
+        return harness_cache[key], Clock(key)
+
     streams = probe_streams(harness, models)
     if args.stream_only:
         print("\n".join(streams))
@@ -707,10 +727,14 @@ def run(args: argparse.Namespace) -> None:
     def job(item):
         model, case, repeat = item
         started = time.time()
+        case_harness, case_clock = harness_for(case)
         record = {"label": args.label, "model": model,
-                  "case": case.id, "tags": case.tags, "repeat": repeat}
+                  "case": case.id, "tags": case.tags, "repeat": repeat,
+                  "clock": case_clock.now.isoformat()}
         try:
-            trace = _converse_with_case_state(harness, model, case, record_request)
+            trace = _converse_with_case_state(
+                case_harness, model, case, record_request
+            )
             if trace.error_category:
                 record.update(
                     status="infra_error",
@@ -728,7 +752,7 @@ def run(args: argparse.Namespace) -> None:
                     },
                 )
             else:
-                checks = case.checks(trace, clock)
+                checks = case.checks(trace, case_clock)
                 summary_id = next(
                     (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
                     None,

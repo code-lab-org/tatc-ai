@@ -9,9 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import urlsplit
 
 import pytest
 from fastmcp import Client
+from starlette.testclient import TestClient
 
 from src import configuration_registry, conical_study, generic_coverage, result_store
 from src import server as server_module
@@ -1576,7 +1578,10 @@ def test_compact_setup_reference_and_full_setup_getter():
     legacy_id = result_store.save_result({"result_kind": "legacy_intervals_v1"})
     error, text, _ = _call("get_study_setup", {"result_id": legacy_id})
     assert error
-    assert "not a conical or pointed study" in text
+    assert "not a conical, pointed, or mixed study" in text
+    error, text, _ = _call("export_study", {"result_id": legacy_id})
+    assert error
+    assert "supports conical, pointed, or mixed studies" in text
 
     error, text, summary = _finish(draft["draft_id"], proposal["setup_revision"])
     assert not error, text
@@ -1728,3 +1733,57 @@ def test_single_configuration_partial_study_finishes_with_unresolved_dates(monke
     assert summary["completeness_status"] == "partial"
     assert summary["unresolved_dates"]
     assert summary["applicable_dates"]["start_utc"] == "2026-10-05T00:00:00Z"
+
+
+def test_single_conical_pass_direction_filter_is_recorded_and_applied():
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration": _config(),
+            "orbit_direction": "descending",
+        },
+    )
+    assert not error, text
+    assert proposal["orbit_direction_filter"] == "descending"
+    assert proposal["consequential_settings"]
+    assert any(
+        item["setting"] == "orbit_direction_filter"
+        and item["value"] == "descending"
+        for item in proposal["consequential_settings"]
+    )
+    assert any("Only descending passes" in warning for warning in proposal["warnings"])
+    error, text, summary = _call(
+        "finish_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    assert summary["event_filter"]["orbit_direction"] == "descending"
+    assert summary["summary_counts"]["event_count"] == 4
+    error, text, page = _call(
+        "get_access_events", {"result_id": summary["result_id"], "limit": 20}
+    )
+    assert not error, text
+    assert page["event_filter"]["orbit_direction"] == "descending"
+    assert all(
+        event["orbit_direction"] == "descending" for event in page["events"]
+    )
+    error, text, link = _call("export_study", {"result_id": summary["result_id"]})
+    assert not error, text
+    parts = urlsplit(link["download_url"])
+    with TestClient(server_module.mcp.http_app()) as client:
+        response = client.get(parts.path)
+    assert response.status_code == 200
+    document = response.json()
+    assert len(document["configurations"]) == 1
+    assert len(document["orbits"]) == 1
+    assert document["configurations"][0]["orbit_direction_filter"] == "descending"
+    assert document["replay"]["prepare"]["orbit_direction"] == "descending"

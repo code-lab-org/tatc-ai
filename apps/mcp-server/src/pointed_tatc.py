@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import platform
-from datetime import datetime
 from typing import Any, Dict, Sequence
 
 from tatc.analysis import collect_observations
 from tatc.schemas import Point, PointedInstrument, Satellite
 from tatc.utils import NadirReference, VelocityFrame
 
-from .conical_tatc import event_rows_from_observations, tatc_version
+from .conical_tatc import event_rows_from_observations
 from .pointed_config import PointedConfiguration
+from .software import software_versions
 from .tatc_integration import create_orbit_from_omm
 
 
@@ -67,7 +66,7 @@ def resolved_pointed_snapshot(
     snapshot = configuration.portable()
     geometry = configuration.geometry
     snapshot["tatc_mapping"] = {
-        "tatc_version": tatc_version(),
+        "tatc_version": software_versions()["tatc"],
         "instrument_class": "tatc.schemas.PointedInstrument",
         "velocity_frame_source": "tatc.schemas.PointedInstrument.velocity_frame",
         "nadir_reference_source": "tatc.schemas.PointedInstrument.nadir_reference",
@@ -89,11 +88,7 @@ def resolved_pointed_snapshot(
             "Incidence angles are ground-normal references and are not passed as off-nadir view angles.",
         ],
     }
-    snapshot["software"] = {
-        "tatc": tatc_version(),
-        "python": platform.python_version(),
-        "server": "tatc-ai-mcp-server",
-    }
+    snapshot["software"] = software_versions()
     return snapshot
 
 
@@ -121,4 +116,6 @@ def collect_pointed_cell_events(task: Dict[str, Any]) -> list[Dict[str, Any]]:
         raise ValueError(
             f"TAT-C pointed analysis failed for cell {task['cell_id']}: {exc}"
         ) from exc
-    return event_rows_from_observations(observations, configuration, int(task["cell_id"]))
+    return event_rows_from_observations(
+        observations, configuration, int(task["cell_id"]), satellite.orbit
+    )

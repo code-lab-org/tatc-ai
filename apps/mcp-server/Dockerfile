@@ -5,6 +5,9 @@ RUN npm ci --ignore-scripts --omit=dev
 
 FROM python:3.12-slim
 
+ARG GIT_SHA=dev
+ENV TATC_AI_SERVER_VERSION=${GIT_SHA}
+
 WORKDIR /app
 
 COPY apps/mcp-server/requirements.txt /app/requirements.txt

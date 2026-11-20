@@ -174,6 +174,12 @@ EVIDENCE_NOTE = (
     "confirm an actual acquisition, cloud-free pixels, or usable imagery."
 )
 
+EVENT_FILTER_DEFINITION = (
+    "Pass direction is the sign of the TAT-C propagated geodetic latitude change "
+    "around the event epoch. An event at a turning point can be unclassified; when "
+    "a filter is set, unclassified events are excluded."
+)
+
 BASE_LIMITS = [
     "Modeled orbital access is not confirmation of an actual instrument acquisition.",
     "Cloud conditions and retrieval quality are not modeled.",
@@ -199,6 +205,20 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _validated_orbit_direction(value: Any) -> Optional[str]:
+    """Validate a study-level pass-direction filter."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value.strip().lower() not in (
+        "ascending",
+        "descending",
+    ):
+        raise ValueError(
+            "orbit_direction must be None, 'ascending', or 'descending'"
+        )
+    return value.strip().lower()
+
+
 def _canonical(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
@@ -219,6 +239,22 @@ def _omission_id(item: Dict[str, Any]) -> str:
 
 def _omm_hash(omm_records: Sequence[Dict[str, Any]]) -> str:
     return _sha256(list(omm_records))
+
+
+def _stage_orbits(stage: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the exact orbit inputs retained with a study."""
+    return [
+        {
+            "norad_id": int(item["norad_id"]),
+            "satellite": item["satellite"],
+            "omm_epoch_utc": item["omm_epoch_utc"],
+            "omm_age_hours": item["omm_age_hours"],
+            "omm_mean_altitude_km": item["omm_mean_altitude_km"],
+            "omm_hash": _omm_hash(item["omm_records"]),
+            "omm_records": copy.deepcopy(item["omm_records"]),
+        }
+        for item in stage["satellites"]
+    ]
 
 
 def _snapshot_reference(
@@ -492,6 +528,7 @@ def _consequential_payload(
     registry_selection: Optional[Dict[str, Any]] = None,
     study_kind: str = "conical",
     applicability: Optional[Dict[str, Any]] = None,
+    orbit_direction: Optional[str] = None,
 ) -> Dict[str, Any]:
     satellite = stage["satellites"][0]
     start, end = _parse_window(stage)
@@ -521,6 +558,7 @@ def _consequential_payload(
         "configuration_digest": _sha256(snapshot),
         "configuration": snapshot,
         "registry_selection": registry_selection,
+        "orbit_direction_filter": orbit_direction,
         "source_choices": source_choices_from_snapshot(snapshot),
         "approximation_ids": [
             approximation["approximation_id"]
@@ -554,6 +592,7 @@ def _setup_revision(
     registry_selection: Optional[Dict[str, Any]] = None,
     study_kind: str = "conical",
     applicability: Optional[Dict[str, Any]] = None,
+    orbit_direction: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     consequential = _consequential_payload(
         stage,
@@ -564,6 +603,7 @@ def _setup_revision(
         registry_selection,
         study_kind,
         applicability,
+        orbit_direction,
     )
     return "sha256:" + _sha256(consequential), consequential
 
@@ -660,6 +700,16 @@ def _limits(
     return limits
 
 
+def _direction_warning(direction: Optional[str]) -> List[str]:
+    if not direction:
+        return []
+    return [
+        f"Only {direction} passes are counted. Pass direction is derived from the "
+        "TAT-C propagated latitude at each event epoch, not from an acquisition "
+        "schedule. Events whose direction cannot be classified are excluded."
+    ]
+
+
 def _warnings(
     configuration: InstrumentConfiguration,
     proposal: Optional[bool] = False,
@@ -727,6 +777,7 @@ def _proposal_payload(
     study_kind: str = "conical",
     assumptions: Sequence[ApplicabilityAssumption] = (),
     coverage: Optional[Dict[str, Any]] = None,
+    orbit_direction: Optional[str] = None,
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     long_window = end - start > SHORT_WINDOW_MAX
@@ -737,6 +788,7 @@ def _proposal_payload(
         configuration, proposal=True, registry_selection=registry_selection
     )
     warnings.extend(_applicability_warnings(coverage))
+    warnings.extend(_direction_warning(orbit_direction))
     consequential_settings = [
         {
             "setting": "window",
@@ -790,6 +842,11 @@ def _proposal_payload(
             "value": consequential["software"],
             "why": "A TAT-C or Python change can change numerical results.",
         },
+        {
+            "setting": "orbit_direction_filter",
+            "value": orbit_direction or "both",
+            "why": "A one-sided pass filter changes which viewing events are counted.",
+        },
     ]
     if registry_selection is not None:
         consequential_settings.append(
@@ -825,6 +882,7 @@ def _proposal_payload(
         "configuration_revision": configuration.revision,
         "registry_selection": registry_selection,
         "configuration": _compact_configuration(snapshot),
+        "orbit_direction_filter": orbit_direction,
         "window_start_utc": iso_utc(start),
         "window_end_utc_exclusive": iso_utc(end),
         "window_duration_hours": round((end - start).total_seconds() / 3600, 3),
@@ -895,10 +953,12 @@ def _prepare_study(
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
     applicability_assumptions: Any = None,
+    orbit_direction: Any = None,
     *,
     study_kind: str,
 ) -> Dict[str, Any]:
     """Resolve one sourced instrument configuration into a proposal."""
+    orbit_direction = _validated_orbit_direction(orbit_direction)
     registry_selection = None
     if configuration_id is not None or configuration_revision is not None:
         if configuration is not None:
@@ -976,6 +1036,7 @@ def _prepare_study(
         registry_selection,
         study_kind,
         coverage,
+        orbit_direction,
     )
     proposal = _proposal_payload(
         stage,
@@ -990,6 +1051,7 @@ def _prepare_study(
         study_kind,
         assumptions,
         coverage,
+        orbit_direction,
     )
     proposal["draft_id"] = str(draft_id).strip()
     proposal["snapshot"]["draft_id"] = proposal["draft_id"]
@@ -1008,6 +1070,7 @@ def _prepare_study(
                 assumption.public() for assumption in assumptions
             ],
             "applicability": coverage,
+            "orbit_direction_filter": orbit_direction,
             "consequential": consequential,
             "consequential_settings": proposal["consequential_settings"],
             "warnings": proposal["warnings"],
@@ -1027,6 +1090,7 @@ def prepare_conical_study(
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
     applicability_assumptions: Any = None,
+    orbit_direction: Any = None,
 ) -> Dict[str, Any]:
     """Resolve a sourced conical configuration into an acceptance proposal."""
     return _prepare_study(
@@ -1036,8 +1100,9 @@ def prepare_conical_study(
         configuration,
         configuration_id,
         configuration_revision,
+        applicability_assumptions,
+        orbit_direction,
         study_kind="conical",
-        applicability_assumptions=applicability_assumptions,
     )
 
 
@@ -1049,6 +1114,7 @@ def prepare_pointed_study(
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
     applicability_assumptions: Any = None,
+    orbit_direction: Any = None,
 ) -> Dict[str, Any]:
     """Resolve a sourced pointed configuration into an acceptance proposal."""
     return _prepare_study(
@@ -1058,22 +1124,27 @@ def prepare_pointed_study(
         configuration,
         configuration_id,
         configuration_revision,
+        applicability_assumptions,
+        orbit_direction,
         study_kind="pointed",
-        applicability_assumptions=applicability_assumptions,
     )
 
 
 def _resolve_mixed_configuration(selection: Any) -> Tuple[
-    InstrumentConfiguration, Optional[Dict[str, Any]]
+    InstrumentConfiguration, Optional[Dict[str, Any]], Optional[str]
 ]:
     if not isinstance(selection, dict):
         raise ValueError("Each mixed configuration must be an object")
+    direction = _validated_orbit_direction(selection.get("orbit_direction"))
     if "configuration_id" in selection or "configuration_revision" in selection:
-        if set(selection) != {"configuration_id", "configuration_revision"}:
+        if set(selection) - {"orbit_direction"} != {
+            "configuration_id",
+            "configuration_revision",
+        }:
             raise ValueError(
-                "A registry selection must contain only configuration_id and "
-                "configuration_revision; do not combine it with a study-specific "
-                "configuration."
+                "A registry selection must contain only configuration_id, "
+                "configuration_revision, and optional orbit_direction; do not "
+                "combine it with a study-specific configuration."
             )
         if not selection.get("configuration_id") or not selection.get(
             "configuration_revision"
@@ -1090,13 +1161,14 @@ def _resolve_mixed_configuration(selection: Any) -> Tuple[
                 f"Registry ID {selection['configuration_id']!r} is not a supported "
                 "conical or pointed configuration."
             )
-        return configuration, registry_selection
+        return configuration, registry_selection, direction
 
-    if set(selection) != {"configuration"}:
+    if set(selection) - {"orbit_direction"} != {"configuration"}:
         raise ValueError(
             "Each mixed configuration must be either an exact registry selection "
             "with configuration_id and configuration_revision, or a complete "
-            "study-specific configuration under configuration."
+            "study-specific configuration under configuration. An optional "
+            "orbit_direction may be added."
         )
     raw = selection["configuration"]
     if not isinstance(raw, dict):
@@ -1112,7 +1184,7 @@ def _resolve_mixed_configuration(selection: Any) -> Tuple[
             "supported conical or pointed configuration."
         )
     try:
-        return expected.model_validate(raw), None
+        return expected.model_validate(raw), None, direction
     except ValidationError as exc:
         raise ValueError(
             f"Configuration rejected: {_configuration_error(exc)}"
@@ -1410,6 +1482,7 @@ def _mixed_consequential_payload(
                 "source_choices": item["source_choices"],
                 "applicability": item["applicability"],
                 "applicability_status": item["applicability"]["status"],
+                "orbit_direction_filter": item.get("orbit_direction_filter"),
                 "tatc_mapping": item["configuration"]["tatc_mapping"],
             }
             for item in prepared_configurations
@@ -1480,7 +1553,9 @@ def prepare_mixed_study(
             "instrument configurations. Reduce the selection and prepare again."
         )
 
-    resolved: List[Tuple[InstrumentConfiguration, Optional[Dict[str, Any]]]] = []
+    resolved: List[
+        Tuple[InstrumentConfiguration, Optional[Dict[str, Any]], Optional[str]]
+    ] = []
     for index, selection in enumerate(configurations):
         try:
             resolved.append(_resolve_mixed_configuration(selection))
@@ -1491,10 +1566,10 @@ def prepare_mixed_study(
                 "omission with a reason and prepare again."
             ) from exc
     prepared_omissions = _resolve_omissions(
-        [configuration for configuration, _ in resolved], omissions
+        [configuration for configuration, _, _ in resolved], omissions
     )
     identities: Dict[str, Tuple[str, str, int]] = {}
-    for configuration, _registry in resolved:
+    for configuration, _registry, _direction in resolved:
         identity = (
             configuration.revision,
             configuration.instrument,
@@ -1532,13 +1607,13 @@ def prepare_mixed_study(
         )
     staged_by_id = _check_mixed_spacecraft(
         stage,
-        [configuration for configuration, _ in resolved],
+        [configuration for configuration, _, _ in resolved],
         prepared_omissions,
     )
     start, end = _parse_window(stage)
     assumptions = _resolve_applicability_assumptions(
         applicability_assumptions,
-        [configuration.configuration_id for configuration, _ in resolved],
+        [configuration.configuration_id for configuration, _, _ in resolved],
         start,
         end,
     )
@@ -1561,7 +1636,7 @@ def prepare_mixed_study(
             )
 
     prepared_configurations = []
-    for configuration, registry_selection in resolved:
+    for configuration, registry_selection, direction_filter in resolved:
         configuration_assumptions = _assumptions_for(
             configuration.configuration_id, assumptions
         )
@@ -1600,6 +1675,7 @@ def prepare_mixed_study(
                 "registry_selection": registry_selection,
                 "source_choices": source_choices_from_snapshot(snapshot),
                 "applicability": coverage,
+                "orbit_direction_filter": direction_filter,
                 "applicability_assumptions": [
                     assumption.public()
                     for assumption in configuration_assumptions
@@ -1607,7 +1683,8 @@ def prepare_mixed_study(
                 "warnings": _warnings(
                     configuration, registry_selection=registry_selection
                 )
-                + _applicability_warnings(coverage),
+                + _applicability_warnings(coverage)
+                + _direction_warning(direction_filter),
             }
         )
 
@@ -1911,6 +1988,8 @@ def _mixed_result_payload(
         for item in proposal.get("omissions", [])
         if item["status"] == "awaiting_clarification"
     ]
+    filtered_by_configuration: Dict[str, List[Dict[str, Any]]] = {}
+    direction_counts_by_configuration: Dict[str, Dict[str, int]] = {}
 
     for item in proposal["configurations"]:
         configuration = _configuration_from_mixed_snapshot(item["configuration"])
@@ -1923,6 +2002,11 @@ def _mixed_result_payload(
                 event["epoch"], item["applicability"]["modeled_intervals"]
             )
         ]
+        config_raw_events, direction_counts = _filter_events_by_direction(
+            config_raw_events, item.get("orbit_direction_filter")
+        )
+        filtered_by_configuration[configuration_id] = config_raw_events
+        direction_counts_by_configuration[configuration_id] = direction_counts
         normalized = normalize_events(
             config_raw_events,
             start,
@@ -1963,6 +2047,10 @@ def _mixed_result_payload(
             "instrument": configuration.instrument,
             "satellite": item["satellite"]["satellite"],
             "warnings": item["warnings"],
+            "orbit_direction_filter": item.get("orbit_direction_filter"),
+            "event_filter": _event_filter_payload(
+                item.get("orbit_direction_filter"), direction_counts
+            ),
             "summary_counts": counts,
             **accounting,
             "events": normalized,
@@ -1976,6 +2064,10 @@ def _mixed_result_payload(
                 "satellite": item["satellite"]["satellite"],
                 "summary_counts": counts,
                 "metrics": accounting["metrics"],
+                "orbit_direction_filter": item.get("orbit_direction_filter"),
+                "event_filter": _event_filter_payload(
+                    item.get("orbit_direction_filter"), direction_counts
+                ),
                 "warnings": item["warnings"],
             }
         )
@@ -2014,14 +2106,8 @@ def _mixed_result_payload(
     }
     combined_raw_events = [
         event
-        for event in raw_events
-        if any(
-            event["configuration_id"] == item["configuration_id"]
-            and _event_in_modeled_intervals(
-                event["epoch"], item["applicability"]["modeled_intervals"]
-            )
-            for item in proposal["configurations"]
-        )
+        for item in proposal["configurations"]
+        for event in filtered_by_configuration.get(item["configuration_id"], [])
     ]
     combined_events = normalize_mixed_events(combined_raw_events, start, end)
     combined = summarize_events(
@@ -2056,8 +2142,29 @@ def _mixed_result_payload(
         "Counts distinct contributor envelope intervals by configuration, cell, "
         "start, and end. It does not count a combined event hull as a TAT-C period."
     )
+
     if omitted_configurations:
         combined["definitions"]["omitted_access"] = OMITTED_ACCESS_DEFINITION
+    combined_direction_counts = {
+        "excluded_event_count": sum(
+            counts["excluded_event_count"]
+            for counts in direction_counts_by_configuration.values()
+        ),
+        "unclassified_event_count": sum(
+            counts["unclassified_event_count"]
+            for counts in direction_counts_by_configuration.values()
+        ),
+    }
+    combined["event_filter"] = _event_filter_payload(
+        None, combined_direction_counts
+    )
+    combined["event_filter"]["by_configuration"] = {
+        item["configuration_id"]: _event_filter_payload(
+            item.get("orbit_direction_filter"),
+            direction_counts_by_configuration.get(item["configuration_id"], {}),
+        )
+        for item in proposal["configurations"]
+    }
     combined_counts = _event_summary_counts(combined)
     start_utc, end_utc = iso_utc(start), iso_utc(end)
     long_window = end - start > SHORT_WINDOW_MAX
@@ -2187,6 +2294,7 @@ def _mixed_result_payload(
             for item in proposal["configurations"]
             for assumption in item["applicability"].get("assumptions", [])
         ],
+        "event_filter": combined.get("event_filter"),
         "modeled_configurations": modeled_configurations,
         "omitted_configurations": omitted_configurations,
         "awaiting_clarification": awaiting_clarification,
@@ -2194,6 +2302,7 @@ def _mixed_result_payload(
         "unresolved_dates": unresolved_dates,
         "consequential_settings": proposal["consequential"],
         "provenance": provenance,
+        "orbits": _stage_orbits(stage),
         "warnings": all_warnings,
         "limits": limits,
         "definitions": combined["definitions"],
@@ -2237,6 +2346,7 @@ def _compact_mixed_summary(full: Dict[str, Any], result_id: str) -> Dict[str, An
         "applicability_status": full.get("applicability_status"),
         "applicability": full.get("applicability"),
         "applicability_assumptions": full.get("applicability_assumptions", []),
+        "event_filter": full.get("event_filter"),
         "modeled_configurations": full["modeled_configurations"],
         "omitted_configurations": full["omitted_configurations"],
         "applicable_dates": full["applicable_dates"],
@@ -2473,6 +2583,50 @@ def finish_mixed_study(
     return _compact_mixed_summary(full, result_id)
 
 
+def _filter_events_by_direction(
+    events: Sequence[Dict[str, Any]], direction: Optional[str]
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """Keep events on the requested pass direction and count what was removed."""
+    if not direction:
+        return list(events), {"excluded_event_count": 0, "unclassified_event_count": 0}
+    kept: List[Dict[str, Any]] = []
+    excluded = 0
+    unclassified = 0
+    for event in events:
+        actual = str(event.get("orbit_direction", "unknown"))
+        if actual == direction:
+            kept.append(event)
+        else:
+            excluded += 1
+            if actual == "unknown":
+                unclassified += 1
+    return kept, {
+        "excluded_event_count": excluded,
+        "unclassified_event_count": unclassified,
+    }
+
+
+def _event_filter_payload(
+    direction: Optional[str], counts: Dict[str, int]
+) -> Dict[str, Any]:
+    return {
+        "orbit_direction": direction or "both",
+        "excluded_event_count": counts.get("excluded_event_count", 0),
+        "unclassified_event_count": counts.get("unclassified_event_count", 0),
+    }
+
+
+def _compact_event_filter(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Keep the per-fetch filter small; the full breakdown stays in the export."""
+    if not value:
+        return None
+    return {
+        key: item
+        for key, item in value.items()
+        if key != "by_configuration"
+    }
+
+
 def _tasks_for_cells(
     stage: Dict[str, Any],
     configuration: InstrumentConfiguration,
@@ -2528,6 +2682,7 @@ def _result_payload(
     study_kind: str,
     accounting_method: str,
     coverage: Optional[Dict[str, Any]] = None,
+    direction_counts: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     snapshot = proposal["configuration"]
@@ -2634,6 +2789,9 @@ def _result_payload(
         "applicability_status": coverage.get("status"),
         "applicability": coverage,
         "applicability_assumptions": coverage.get("assumptions", []),
+        "event_filter": _event_filter_payload(
+            proposal.get("orbit_direction_filter"), direction_counts or {}
+        ),
         "modeled_configurations": [
             {
                 "configuration_id": configuration.configuration_id,
@@ -2665,6 +2823,7 @@ def _result_payload(
         "unresolved_dates": coverage.get("unresolved_intervals", []),
         "consequential_settings": proposal["consequential_settings"],
         "provenance": provenance,
+        "orbits": _stage_orbits(stage),
         "evidence": snapshot["evidence"],
         "source_revision": snapshot["source_revision"],
         "source_conflicts": snapshot["source_conflicts"],
@@ -2750,6 +2909,7 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "applicability_status": full.get("applicability_status"),
         "applicability": full.get("applicability"),
         "applicability_assumptions": full.get("applicability_assumptions", []),
+        "event_filter": full.get("event_filter"),
         "modeled_configurations": full["modeled_configurations"],
         "omitted_configurations": full["omitted_configurations"],
         "applicable_dates": full["applicable_dates"],
@@ -2763,6 +2923,7 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "interpretation": full["interpretation"],
         "warnings": full["warnings"],
         "limits": full["limits"],
+        "orbit_direction_filter": full.get("event_filter", {}).get("orbit_direction"),
         "provenance": _summary_provenance(full),
         "accepted_choices": full["provenance"]["accepted_choices"],
         "storage": full["storage"],
@@ -2907,6 +3068,7 @@ def _finish_study(
         stage["roi_bbox"], proposal["grid_rows"], proposal["grid_columns"]
     )
     _check_grid_size(cells, end - start > SHORT_WINDOW_MAX)
+    direction_filter = proposal.get("orbit_direction_filter")
     current_revision, _ = _setup_revision(
         stage,
         proposal["configuration"],
@@ -2916,6 +3078,7 @@ def _finish_study(
         registry_selection,
         study_kind,
         coverage,
+        direction_filter,
     )
     if current_revision != proposed_revision:
         raise ValueError(
@@ -2948,17 +3111,17 @@ def _finish_study(
     accounting_method = (
         POINTED_ACCOUNTING_METHOD if study_kind == "pointed" else ACCOUNTING_METHOD
     )
-    events = normalize_events(
-        [
-            event
-            for event in raw_events
-            if _event_in_modeled_intervals(
-                event["epoch"], coverage["modeled_intervals"]
-            )
-        ],
-        start,
-        end,
+    modeled_events = [
+        event
+        for event in raw_events
+        if _event_in_modeled_intervals(
+            event["epoch"], coverage["modeled_intervals"]
+        )
+    ]
+    filtered_events, direction_counts = _filter_events_by_direction(
+        modeled_events, direction_filter
     )
+    events = normalize_events(filtered_events, start, end)
     accounting = summarize_events(
         cells,
         events,
@@ -2983,6 +3146,7 @@ def _finish_study(
         study_kind,
         accounting_method,
         coverage,
+        direction_counts,
     )
     result_id = _save_result(full)
     return _compact_summary(full, result_id)
@@ -3068,6 +3232,7 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "applicability_status": payload.get("applicability_status"),
         "applicability": payload.get("applicability"),
         "applicability_assumptions": payload.get("applicability_assumptions", []),
+        "event_filter": _compact_event_filter(payload.get("event_filter")),
         "modeled_configurations": payload["modeled_configurations"],
         "omitted_configurations": payload["omitted_configurations"],
         "applicable_dates": payload["applicable_dates"],
@@ -3289,8 +3454,8 @@ def get_study_setup(
     """
     if (draft_id is None) == (result_id is None):
         raise ValueError("Supply exactly one of draft_id or result_id")
-    if study_kind is not None and study_kind not in ("conical", "pointed"):
-        raise ValueError("study_kind must be conical or pointed")
+    if study_kind is not None and study_kind not in ("conical", "pointed", "mixed"):
+        raise ValueError("study_kind must be conical, pointed, or mixed")
     revision_filter = None
     if setup_revision is not None:
         if not isinstance(setup_revision, str) or not setup_revision.strip():
@@ -3299,6 +3464,44 @@ def get_study_setup(
 
     if draft_id is not None:
         stage = copy.deepcopy(_get_draft(draft_id))
+        mixed = stage.get("mixed_proposal")
+        if mixed is not None:
+            if study_kind not in (None, "mixed"):
+                raise ValueError(
+                    "This draft has a mixed proposal, not a conical or pointed proposal"
+                )
+            revision = mixed["setup_revision"]
+            if revision_filter is not None and revision_filter != revision:
+                raise ValueError(
+                    f"Setup revision {revision_filter!r} does not match the current "
+                    f"mixed proposal {revision!r}. Prepare the study again if a "
+                    "consequential setting changed"
+                )
+            proposal = mixed["proposal"]
+            setup_snapshot = {
+                "configurations": proposal["configurations"],
+                "omissions": proposal["omissions"],
+                "window": {
+                    "start_utc": proposal["window_start_utc"],
+                    "end_utc_exclusive": proposal["window_end_utc_exclusive"],
+                },
+                "region": proposal["roi_bbox"],
+                "grid": proposal["grid"],
+                "satellites": mixed["consequential"]["satellites"],
+            }
+            return {
+                "draft_id": str(draft_id).strip(),
+                "study_kind": "mixed",
+                "result_kind": "mixed_study",
+                "status": "awaiting_acceptance",
+                "setup_revision": revision,
+                "setup_snapshot": setup_snapshot,
+                "orbits": _stage_orbits(stage),
+                "warnings": proposal.get("warnings", []),
+                "limits": proposal.get("limits", []),
+                "evidence_note": proposal.get("evidence_note", EVIDENCE_NOTE),
+                "storage": _storage_note(),
+            }
         proposals = {
             kind: stage[f"{kind}_proposal"]
             for kind in ("conical", "pointed")
@@ -3360,6 +3563,7 @@ def get_study_setup(
             "setup_revision": revision,
             "configuration_digest": digest,
             "setup_snapshot": setup_snapshot,
+            "orbits": _stage_orbits(stage),
             "warnings": proposal.get("warnings", []),
             "limits": proposal.get("limits", []),
             "evidence_note": proposal.get("evidence_note", EVIDENCE_NOTE),
@@ -3368,10 +3572,35 @@ def get_study_setup(
 
     payload = _get_saved(result_id)
     result_kind = payload.get("result_kind")
+    if result_kind == "mixed_study":
+        if study_kind not in (None, "mixed"):
+            raise ValueError(f"Result {str(result_id).strip()!r} is a mixed study")
+        revision = payload["setup_revision"]
+        if revision_filter is not None and revision_filter != revision:
+            raise ValueError(
+                f"Setup revision {revision_filter!r} does not match result "
+                f"{str(result_id).strip()!r} at {revision!r}. The saved setup is "
+                "immutable; use its recorded revision"
+            )
+        return {
+            "result_id": str(result_id).strip(),
+            "study_kind": "mixed",
+            "result_kind": result_kind,
+            "status": "accepted",
+            "setup_revision": revision,
+            "setup_snapshot": copy.deepcopy(
+                payload["provenance"]["setup_snapshot"]
+            ),
+            "orbits": copy.deepcopy(payload.get("orbits", [])),
+            "warnings": payload["warnings"],
+            "limits": payload["limits"],
+            "evidence_note": payload["evidence_note"],
+            "storage": payload["storage"],
+        }
     if result_kind not in ("conical_study", "pointed_study"):
         raise ValueError(
-            "This result is not a conical or pointed study. The setup getter "
-            "only returns instrument-study setups"
+            "This result is not a conical, pointed, or mixed study. The setup "
+            "getter only returns instrument-study setups"
         )
     kind = result_kind.removesuffix("_study")
     if study_kind is not None and study_kind != kind:
@@ -3396,6 +3625,7 @@ def get_study_setup(
         "setup_revision": revision,
         "configuration_digest": digest,
         "setup_snapshot": setup_snapshot,
+        "orbits": copy.deepcopy(payload.get("orbits", [])),
         "warnings": payload["warnings"],
         "limits": payload["limits"],
         "evidence_note": payload["evidence_note"],
@@ -3608,6 +3838,11 @@ def _mixed_fetch_header(
         "applicability_status": payload.get("applicability_status"),
         "applicability": payload.get("applicability"),
         "applicability_assumptions": payload.get("applicability_assumptions", []),
+        "event_filter": (
+            _compact_event_filter(payload.get("event_filter"))
+            if is_combined
+            else selected.get("event_filter")
+        ),
         "modeled_configurations": payload["modeled_configurations"],
         "omitted_configurations": [
             _compact_omission(item)

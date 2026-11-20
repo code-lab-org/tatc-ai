@@ -155,6 +155,7 @@ def _merge_event_epochs(
                 "instrument": str(raw.get("instrument", "")),
                 "configuration_id": configuration_id,
                 "configuration_revision": str(raw.get("configuration_revision", "")),
+                "orbit_direction": str(raw.get("orbit_direction", "unknown")),
                 "contributors": {} if mixed else {configuration_id},
             }
             merged[key] = existing
@@ -171,6 +172,7 @@ def _merge_event_epochs(
                     "configuration_revision": str(raw["configuration_revision"]),
                     "instrument": str(raw["instrument"]),
                     "satellite": str(raw["satellite"]),
+                    "orbit_direction": str(raw.get("orbit_direction", "unknown")),
                     "envelope_start": envelope_start,
                     "envelope_end": envelope_end,
                 }
@@ -198,6 +200,16 @@ def _normalized_event_rows(
 ) -> List[Dict[str, Any]]:
     events = []
     for index, event in enumerate(groups):
+        if mixed:
+            directions = sorted(
+                {
+                    contributor.get("orbit_direction", "unknown")
+                    for contributor in event["contributors"].values()
+                }
+            )
+            direction = directions[0] if len(directions) == 1 else "mixed"
+        else:
+            direction = event.get("orbit_direction", "unknown")
         row = {
             "event_id": f"E{index:06d}",
             "cell_id": event["cell_id"],
@@ -205,6 +217,7 @@ def _normalized_event_rows(
             "target_latitude_deg": event["target_latitude_deg"],
             "epoch_utc": _iso(event["epoch"]),
             "utc_date": event["epoch"].date().isoformat(),
+            "orbit_direction": direction,
             **_envelope_fields(event["envelope_start"], event["envelope_end"]),
         }
         if mixed:
@@ -222,6 +235,7 @@ def _normalized_event_rows(
                                 "configuration_revision",
                                 "instrument",
                                 "satellite",
+                                "orbit_direction",
                             )
                         },
                         **_envelope_fields(

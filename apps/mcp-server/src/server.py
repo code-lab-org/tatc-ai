@@ -64,6 +64,8 @@ from .coverage_analysis import (
 )
 from .coverage_view import build_viewer_url, register_viewer_routes
 from .research_data import ResearchData
+from .study_export import export_link as _export_link
+from .study_export import register_export_route
 from .ground_track_view import build_ground_track_scene
 from .schema_formatter import format_ground_track_response
 from .tatc_integration import (
@@ -200,6 +202,13 @@ SERVER_INSTRUCTIONS = (
     "accepted setup revision, configuration digest, and a snapshot reference; "
     "use the study setup getter with the draft or result ID to retrieve the full "
     "configuration, evidence excerpts, rationales, warnings, and definitions. "
+    "A study may set orbit_direction to ascending or descending per configuration; "
+    "the filter keeps only events whose TAT-C propagated latitude is increasing or "
+    "decreasing at the event epoch. State that filter and its events excluded. "
+    "Use the study export tool with a saved result ID when the researcher wants a "
+    "durable file. The download link expires with the result and the JSON file "
+    "contains the exact orbit records, accepted setup, software versions, "
+    "assumptions, results, and a replay block. "
     "Results and drafts expire after 24 hours and can be lost earlier on restart "
     "or capacity eviction. Study-specific settings are not promoted to a shared "
     "registry. "
@@ -216,6 +225,8 @@ SERVER_INSTRUCTIONS = (
     "For more than one selected configuration, use the mixed study preparation "
     "tool and mixed study finish tool. It accepts one to six exact registry revisions or "
     "complete study-specific configurations, across at most six spacecraft. "
+    "Add orbit_direction to an individual selection to keep only its ascending or "
+    "descending passes; each configuration can use a different direction. "
     "Every staged spacecraft must have a selected configuration or recorded "
     "omission. Established applicability is intersected with the window; "
     "unresolved dates remain explicit and make the result partial. "
@@ -304,6 +315,7 @@ mcp = FastMCP(
 
 
 register_viewer_routes(mcp)
+register_export_route(mcp)
 
 # Time unit normalization mapping
 _TIME_UNITS = {
@@ -1648,6 +1660,7 @@ def prepare_conical_study(
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
     applicability_assumptions: Optional[List[Dict[str, Any]]] = None,
+    orbit_direction: Optional[Literal["ascending", "descending"]] = None,
 ) -> Dict[str, Any]:
     """Prepare one sourced conical-scanning study without calculating.
 
@@ -1687,6 +1700,9 @@ def prepare_conical_study(
             {configuration_id, start_utc, end_utc_exclusive, rationale}
             extensions outside the established interval. They become part of
             the accepted setup revision.
+        orbit_direction: Optional "ascending" or "descending" filter. It keeps
+            only events whose TAT-C propagated latitude is increasing or
+            decreasing at the event epoch. Omit it to count both directions.
 
     Returns:
         Proposal with setup_revision, region, grid, window, configuration
@@ -1702,6 +1718,7 @@ def prepare_conical_study(
         configuration_id,
         configuration_revision,
         applicability_assumptions,
+        orbit_direction,
     )
 
 
@@ -1745,6 +1762,7 @@ def prepare_pointed_study(
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
     applicability_assumptions: Optional[List[Dict[str, Any]]] = None,
+    orbit_direction: Optional[Literal["ascending", "descending"]] = None,
 ) -> Dict[str, Any]:
     """Prepare one sourced pointed-instrument study without calculating.
 
@@ -1763,6 +1781,9 @@ def prepare_pointed_study(
         configuration: One complete study-specific pointed configuration.
         configuration_id: Exact shared registry ID, used with configuration_revision.
         configuration_revision: Exact immutable shared registry revision.
+        orbit_direction: Optional "ascending" or "descending" filter. It keeps
+            only events whose TAT-C propagated latitude is increasing or
+            decreasing at the event epoch. Omit it to count both directions.
 
     Returns:
         Proposal, source evidence, measured checks, warnings, and acceptance revision.
@@ -1775,6 +1796,7 @@ def prepare_pointed_study(
         configuration_id,
         configuration_revision,
         applicability_assumptions,
+        orbit_direction,
     )
 
 
@@ -1793,7 +1815,7 @@ def get_study_setup(
     draft_id: Optional[str] = None,
     result_id: Optional[str] = None,
     setup_revision: Optional[str] = None,
-    study_kind: Optional[Literal["conical", "pointed"]] = None,
+    study_kind: Optional[Literal["conical", "pointed", "mixed"]] = None,
 ) -> Dict[str, Any]:
     """Retrieve the full immutable setup for one draft or saved result.
 
@@ -1809,13 +1831,31 @@ def get_study_setup(
         draft_id: Draft ID whose prepared setup should be returned.
         result_id: Saved conical or pointed result ID to return.
         setup_revision: Optional exact setup revision to verify.
-        study_kind: Optional conical or pointed kind to verify.
+        study_kind: Optional conical, pointed, or mixed kind to verify.
 
     Returns:
         The full setup snapshot or an honest unknown, expired, kind, or
         revision error.
     """
     return _get_study_setup(draft_id, result_id, setup_revision, study_kind)
+
+
+@mcp.tool
+def export_study(result_id: str) -> Dict[str, Any]:
+    """Return a short-lived download link for one saved study.
+
+    The downloaded JSON file contains the exact orbit records, the accepted
+    configuration and source snapshots, software versions, assumptions,
+    combined and per-configuration results, and a replay block. The link
+    expires with the saved result. It does not import or rerun the study.
+
+    Args:
+        result_id: Result ID from a conical, pointed, or mixed study.
+
+    Returns:
+        Download URL, file name, expiry time, and file size.
+    """
+    return _export_link(result_id)
 
 
 @mcp.tool
@@ -1832,7 +1872,9 @@ def prepare_mixed_study(
     configurations must be a JSON list of objects. Each item is either an
     exact registry selection with configuration_id and configuration_revision,
     or a complete study-specific configuration nested as an object under
-    configuration; do not pass a JSON-encoded string. Every staged spacecraft
+    configuration; do not pass a JSON-encoded string. Each item may also carry
+    orbit_direction set to ascending or descending to keep only events on that
+    pass direction for that configuration. Every staged spacecraft
     must have a selected configuration or a recorded omission. Preparation
     checks established applicability and workload limits but runs no
     viewing-event calculation. applicability_assumptions is an optional JSON

@@ -8,10 +8,8 @@ mission-specific defaults.
 
 from __future__ import annotations
 
-import importlib.metadata
-import platform
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Sequence
 
 from tatc.analysis import collect_observations
@@ -24,6 +22,7 @@ from tatc.schemas import (
 from tatc.utils import NadirReference, VelocityFrame
 
 from .conical_config import ConicalConfiguration
+from .software import software_versions
 from .tatc_integration import create_orbit_from_omm
 
 
@@ -38,8 +37,25 @@ class MappedConical:
     swath_width_km: float
 
 
-def tatc_version() -> str:
-    return importlib.metadata.version("tatc")
+def orbit_direction_at(orbit: Any, epoch: datetime) -> str:
+    """Classify an event by the latitude change around its epoch.
+
+    TAT-C does not expose a pass-direction field, so this uses the propagated
+    geodetic latitude. A one-second window is small enough to stay inside one
+    pass and large enough to resolve the sign. An event at a turning point can
+    return "unknown"; callers must not silently count it as either direction.
+    """
+    when = epoch if epoch.tzinfo is not None else epoch.replace(tzinfo=timezone.utc)
+    try:
+        positions = orbit.get_geographic_position(
+            [when - timedelta(seconds=1), when + timedelta(seconds=1)]
+        )
+        delta = float(positions.latitude.degrees[1] - positions.latitude.degrees[0])
+    except Exception:
+        return "unknown"
+    if abs(delta) < 1e-9:
+        return "unknown"
+    return "ascending" if delta > 0 else "descending"
 
 
 def build_conical_satellite(
@@ -98,7 +114,7 @@ def resolved_snapshot(
     snapshot = configuration.portable()
     altitude_km = round(mapped.mean_altitude_m / 1000.0, 3)
     snapshot["tatc_mapping"] = {
-        "tatc_version": tatc_version(),
+        "tatc_version": software_versions()["tatc"],
         "instrument_class": "tatc.schemas.ConicalInstrument",
         "velocity_frame_source": (
             "tatc.schemas.Attitude(velocity_frame=...) on the satellite; the "
@@ -124,11 +140,7 @@ def resolved_snapshot(
             "sample-size and sample-spacing helpers, not cone-crossing epochs.",
         ],
     }
-    snapshot["software"] = {
-        "tatc": tatc_version(),
-        "python": platform.python_version(),
-        "server": "tatc-ai-mcp-server",
-    }
+    snapshot["software"] = software_versions()
     return snapshot
 
 
@@ -161,11 +173,13 @@ def collect_cell_events(task: Dict[str, Any]) -> List[Dict[str, Any]]:
         raise ValueError(
             f"TAT-C conical analysis failed for cell {task['cell_id']}: {exc}"
         ) from exc
-    return event_rows_from_observations(observations, configuration, int(task["cell_id"]))
+    return event_rows_from_observations(
+        observations, configuration, int(task["cell_id"]), mapped.satellite.orbit
+    )
 
 
 def event_rows_from_observations(
-    observations: Any, configuration: Any, cell_id: int
+    observations: Any, configuration: Any, cell_id: int, orbit: Any = None
 ) -> List[Dict[str, Any]]:
     """Normalize TAT-C observation rows shared by pointed and conical adapters."""
     events: List[Dict[str, Any]] = []
@@ -173,18 +187,22 @@ def event_rows_from_observations(
         epoch = row.epoch
         if epoch is None or epoch != epoch:  # pandas NaT
             continue
+        event_epoch = epoch.to_pydatetime(warn=False)
         events.append(
             {
                 "cell_id": cell_id,
                 "target_longitude_deg": float(row.geometry.x),
                 "target_latitude_deg": float(row.geometry.y),
-                "epoch": epoch.to_pydatetime(warn=False),
+                "epoch": event_epoch,
                 "envelope_start": row.start.to_pydatetime(warn=False),
                 "envelope_end": row.end.to_pydatetime(warn=False),
                 "satellite": str(row.satellite),
                 "instrument": str(row.instrument),
                 "configuration_id": configuration.configuration_id,
                 "configuration_revision": configuration.revision,
+                "orbit_direction": (
+                    orbit_direction_at(orbit, event_epoch) if orbit is not None else "unknown"
+                ),
             }
         )
     return events

@@ -33,7 +33,7 @@ To build the image locally instead (e.g. to test before pushing):
 docker build -f apps/mcp-server/Dockerfile . -t ghcr.io/code-lab-org/tatc-ai-mcp-server:local
 ```
 
-See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical, pointed-instrument, and mixed-instrument studies.
+See the [tool guide](docs/tools.md) for ground-track maps, legacy coverage estimates, and event-based conical, pointed-instrument, and mixed-instrument studies. Start with the [chat quickstart](docs/quickstart-chat.md) or the [MCP quickstart](docs/quickstart-mcp.md). Read the [methods and limitations](docs/methods-and-limitations.md) before treating a result as a mission claim. The runnable client example is [examples/mixed_study.py](examples/mixed_study.py). Design notes: [glossary](GLOSSARY.md), [ADRs](docs/adr/), [mixed-instrument specification](docs/mixed-instrument-spec.md), and [instrument data sources](docs/instrument-data-sources.md).
 
 The CelesTrak client caches GP results for 2 hours and SATCAT results for 12
 hours, including searches with no matches. The cache has a 50 MiB data budget.

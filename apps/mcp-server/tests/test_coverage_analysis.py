@@ -546,9 +546,9 @@ def test_event_spacing_uses_distinct_epochs_and_ignores_basic_intervals():
 
 
 def test_study_records_the_software_needed_to_reproduce_it():
-    assert {"tatc", "skyfield", "sgp4", "python"} == analyze(sensor_request(BASIC))[
-        "software"
-    ].keys()
+    assert {"server", "tatc", "skyfield", "sgp4", "python"} == analyze(
+        sensor_request(BASIC)
+    )["software"].keys()
 
 
 BARE_CONICAL = {
