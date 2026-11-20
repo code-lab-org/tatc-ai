@@ -12,7 +12,7 @@ timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label routine
 timeout -k 10 1800 .venv312/bin/python -m eval.run_eval --label affected --repeats 3 --cases conical_amsr2_complete pointed_s1c_iw_complete point_study_explicit
 timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label second-model --models glm-5-3 --cases conical_amsr2_complete pointed_s1c_iw_complete
 timeout -k 10 1800 .venv312/bin/python -m eval.run_eval --label issue52-mixed-coverage --workers 4 --repeats 1
-OPENCODE_GO_API_KEY=... timeout -k 10 900 .venv312/bin/python -m eval.run_eval --provider opencode-go --models deepseek-v4.1-flash --label opencode-go
+OPENCODE_GO_API_KEY=... timeout -k 10 900 .venv312/bin/python -m eval.run_eval --provider opencode-go --models deepseek-v4.1-flash --reasoning-effort max --label opencode-go
 .venv312/bin/python -m eval.run_eval --compare /path/to/baseline.jsonl /path/to/current-run.jsonl
 ```
 
@@ -22,7 +22,7 @@ The eval reads the proxy key from `apps/librechat/.env` and sends prompts and to
 
 The run writes a timestamped JSONL file under `eval/results/` and prints its summary. The default file keeps scores, counts, and small partial failure progress, not prompts, replies, or full tool text. A companion `-requests.jsonl` file records model, case, turn, attempt, request and response bytes, duration, token usage, request ID, and error category. Pass `--save-traces` only when full traces are needed for diagnosis. `--rescore` needs saved traces, so use `--save-traces` on runs you expect to rescore. Results and request records are ignored local artifacts. Replace the two comparison paths with existing result files; `--compare` summarizes saved runs and does not start a new model evaluation.
 
-The routine provider is ASU Voyager. Use `--provider opencode-go` to send the same OpenAI-compatible requests to OpenCode Go instead; export `OPENCODE_GO_API_KEY`, do not commit it. The OpenCode Go model ID is `deepseek-v4.1-flash`. The runner sends `x-opencode-session` and the OpenCode user agent, as the provider requires. A provider failure is recorded as infrastructure failure, not a model score.
+The routine provider is ASU Voyager. Use `--provider opencode-go` to send the same OpenAI-compatible requests to OpenCode Go instead. Put `OPENCODE_GO_API_KEY` in the process environment or in the private `apps/mcp-server/.env` file; copy `apps/mcp-server/.env.example` and do not commit the key. The runner also checks `apps/librechat/.env` as a fallback. The OpenCode Go model ID is `deepseek-v4.1-flash`. Pass `--reasoning-effort max` for the Max setting. The runner sends the effort in the request body, plus `x-opencode-session` and the OpenCode user agent. A provider failure is recorded as infrastructure failure, not a model score.
 
 Use the Python 3.12 environment that matches the server Dockerfile, for example `apps/mcp-server/.venv312` if you created one. Token usage plus total duration is all the record keeps; it cannot separate queue time, prefill, and decode time.
 

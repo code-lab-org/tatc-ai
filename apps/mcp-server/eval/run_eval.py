@@ -55,6 +55,7 @@ from .http_replay import HttpReplay
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("EVAL_ENV_FILE", HERE.parents[1] / "librechat" / ".env"))
+MCP_ENV_FILE = HERE.parent / ".env"
 RESULTS = HERE / "results"
 SUFFIX = "_mcp_tatc"
 MAX_TURNS = 20
@@ -328,6 +329,8 @@ class Harness:
         conversation_timeout: float = CONVERSATION_TIMEOUT,
         user_agent: str = "tatc-ai-eval/1.0",
         session_id: str = "",
+        provider: str = "voyager",
+        reasoning_effort: Optional[str] = None,
     ):
         import src.generic_coverage as gc
         import src.server as server
@@ -343,6 +346,8 @@ class Harness:
         self.conversation_timeout = conversation_timeout
         self.user_agent = user_agent
         self.session_id = session_id
+        self.provider = provider
+        self.reasoning_effort = reasoning_effort
         tools = asyncio.run(self._list_tools())
         self.tool_names = [t.name for t in tools if t.name not in hide]
         self.tools = [
@@ -409,9 +414,15 @@ class Harness:
         recorder: Any = None,
     ) -> Dict[str, Any]:
         # A complete sourced configuration must fit in one tool-call response.
-        body = json.dumps(
-            {"model": model, "messages": messages, "tools": self.tools, "max_tokens": 8192}
-        ).encode()
+        request = {
+            "model": model,
+            "messages": messages,
+            "tools": self.tools,
+            "max_tokens": 8192,
+        }
+        if self.reasoning_effort:
+            request["reasoning_effort"] = self.reasoning_effort
+        body = json.dumps(request).encode()
         deadline = deadline or time.monotonic() + self.conversation_timeout
         record = None
         if recorder is not None:
@@ -584,15 +595,29 @@ def _converse_with_case_state(
         )
 
 
+def _env_value(name: str, paths: Sequence[Path]) -> str:
+    """Read a secret from the environment or a local env file."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    for path in paths:
+        if path.exists():
+            value = load_env(path).get(name, "").strip()
+            if value:
+                return value
+    return ""
+
+
 def _provider_credentials(args: argparse.Namespace) -> tuple[str, str]:
     """Return the base URL and API key for the selected eval provider."""
     if getattr(args, "provider", "voyager") == "opencode-go":
         env_name = args.api_key_env or "OPENCODE_GO_API_KEY"
-        key = os.environ.get(env_name, "").strip()
+        key = _env_value(env_name, (MCP_ENV_FILE, ENV_FILE))
         if not key:
             raise ValueError(
-                f"{env_name} is not set. Export the OpenCode Go key before running "
-                "with --provider opencode-go."
+                f"{env_name} is not set in the environment, {MCP_ENV_FILE}, or "
+                f"{ENV_FILE}. Add it to one of those files before running with "
+                "--provider opencode-go."
             )
         return (args.base_url or OPENCODE_GO_BASE_URL), key
     env = load_env(ENV_FILE)
@@ -654,6 +679,8 @@ def run(args: argparse.Namespace) -> None:
     else:
         user_agent = "tatc-ai-eval/1.0"
         session_id = ""
+    provider = getattr(args, "provider", "voyager")
+    reasoning_effort = getattr(args, "reasoning_effort", None)
     harness = Harness(
         base_url,
         api_key,
@@ -663,6 +690,8 @@ def run(args: argparse.Namespace) -> None:
         conversation_timeout=args.conversation_timeout,
         user_agent=user_agent,
         session_id=session_id,
+        provider=provider,
+        reasoning_effort=reasoning_effort,
     )
     cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
     if getattr(args, "now", None) and any("mixed" in case.tags for case in cases):
@@ -687,11 +716,18 @@ def run(args: argparse.Namespace) -> None:
     out = RESULTS / f"{stamp}-{args.label}.jsonl"
     request_log = out.with_name(out.stem + "-requests.jsonl")
     lock = threading.Lock()
-    print(f"{len(jobs)} conversations, tools: {', '.join(harness.tool_names)}", flush=True)
+    print(
+        f"{len(jobs)} conversations, provider: {provider}, "
+        f"reasoning effort: {reasoning_effort or 'provider default'}, "
+        f"tools: {', '.join(harness.tool_names)}",
+        flush=True,
+    )
     print(f"request records: {request_log}", flush=True)
 
     def record_request(**row):
         entry = {
+            "provider": provider,
+            "reasoning_effort": reasoning_effort,
             "model": row["model"],
             "case": row["case"],
             "turn": row["turn"],
@@ -712,7 +748,8 @@ def run(args: argparse.Namespace) -> None:
     def job(item):
         model, case, repeat = item
         started = time.time()
-        record = {"label": args.label, "model": model,
+        record = {"label": args.label, "provider": provider,
+                  "reasoning_effort": reasoning_effort, "model": model,
                   "case": case.id, "tags": case.tags, "repeat": repeat}
         try:
             trace = _converse_with_case_state(harness, model, case, record_request)
@@ -860,6 +897,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     model_selection.add_argument("--models", nargs="+", help="model IDs, default deepseek-v4-1-flash or deepseek-v4.1-flash for OpenCode Go")
     model_selection.add_argument("--all-models", action="store_true", help="run every Voyager model in LibreChat")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high", "max"],
+        help="optional reasoning effort sent to the provider",
+    )
     parser.add_argument("--cases", nargs="+", help="case IDs to run, default all")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--workers", type=int, default=2)
