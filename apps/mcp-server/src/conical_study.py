@@ -27,6 +27,26 @@ from pydantic import (
     model_validator,
 )
 
+from .applicability import (
+    ApplicabilityAssumption,
+    combined_coverage_status,
+    compute_coverage,
+    configuration_established_intervals,
+    modeled_windows,
+    parse_iso,
+    result_completeness,
+)
+from .applicability import (
+    ApplicabilityAssumption,
+    combined_coverage_status,
+    compute_coverage,
+    configuration_established_intervals,
+    iso as _iso,
+    merge_intervals,
+    parse_iso as _parse_interval_utc,
+    result_completeness,
+    subtract_intervals,
+)
 from .conical_accounting import (
     ACCOUNTING_METHOD,
     EVENT_DEFINITION,
@@ -76,6 +96,7 @@ MAX_MIXED_CONFIGURATIONS = 6
 MAX_MIXED_EVENT_PAGE_SIZE = 20
 MAX_MIXED_CELL_PAGE_SIZE = 10
 MAX_MIXED_SPACING_PAGE_SIZE = 20
+MAX_APPLICABILITY_ASSUMPTIONS = 24
 # Below this many cell-days, starting worker processes costs more than it saves.
 POOL_MIN_CELL_DAYS = 100
 
@@ -170,7 +191,7 @@ BASE_LIMITS = [
     "A daily observed area counts each visited cell once per day; it is not continuous observation time.",
     "Field-of-regard envelopes are retained as event metadata only. Their durations are not viewing duration or uncovered duration.",
     "Continuous viewing duration and continuous uncovered duration are unavailable for this event-based result.",
-    "The established configuration applicability interval must contain the full requested window; only the accepted configuration set is modeled, without partial-window rows.",
+    "Calculations are clipped to each configuration's established applicability and any accepted study assumption. Unresolved dates are reported as unknown, never as zero-access observations.",
     "Configuration applicability is not orbit availability or a confirmed acquisition schedule; orbit freshness is checked separately.",
     "The server validates configuration structure, units, ranges, and evidence references; it does not authenticate source text or independently verify the researcher's conversation.",
     "This is a geometric-access and software-integration exercise, not mission validation or an acquisition schedule.",
@@ -315,38 +336,160 @@ def _check_grid_size(
         )
 
 
-def _validate_applicability(
-    configuration: InstrumentConfiguration, start: datetime, end: datetime
-) -> Tuple[datetime, datetime]:
-    app_start = _parse_utc(
-        iso_utc(configuration.applicability.start_utc), "applicability.start_utc"
-    )
-    app_end = _parse_utc(
-        iso_utc(configuration.applicability.end_utc_exclusive),
-        "applicability.end_utc_exclusive",
-    )
-    uncovered: List[str] = []
-    if start < app_start:
-        uncovered.append(
-            f"{iso_utc(start)} to {iso_utc(min(end, app_start))} (before applicability)"
-        )
-    if end > app_end:
-        uncovered.append(
-            f"{iso_utc(max(start, app_end))} to {iso_utc(end)} (after applicability)"
-        )
-    if uncovered:
+def _resolve_applicability_assumptions(
+    raw: Any,
+    configuration_ids: Sequence[str],
+    start: datetime,
+    end: datetime,
+) -> List[ApplicabilityAssumption]:
+    """Validate the caller's explicitly recorded applicability extensions."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("applicability_assumptions must be a JSON list")
+    if len(raw) > MAX_APPLICABILITY_ASSUMPTIONS:
         raise ValueError(
-            f"Configuration {configuration.configuration_id!r} revision "
-            f"{configuration.revision!r}: the requested window is not fully "
-            "covered by its established applicability interval "
-            f"[{iso_utc(app_start)}, {iso_utc(app_end)}). Uncovered: "
-            + "; ".join(uncovered)
-            + ". This increment requires a fully covered window; partial-study "
-            "applicability is not supported yet. Choose a window inside the "
-            "interval, supply a different sourced configuration, or, in a mixed "
-            "study, record this configuration as an omission with a reason."
+            f"At most {MAX_APPLICABILITY_ASSUMPTIONS} applicability assumptions "
+            "are allowed"
         )
-    return app_start, app_end
+    known = set(configuration_ids)
+    resolved: List[ApplicabilityAssumption] = []
+    seen = set()
+    for index, item in enumerate(raw):
+        try:
+            assumption = ApplicabilityAssumption.model_validate(item)
+        except ValidationError as exc:
+            raise ValueError(
+                f"Applicability assumption {index + 1} rejected: "
+                f"{_configuration_error(exc)}"
+            ) from exc
+        if assumption.configuration_id not in known:
+            raise ValueError(
+                f"Applicability assumption {index + 1} names configuration "
+                f"{assumption.configuration_id!r}, which this study does not "
+                "select"
+            )
+        if (
+            assumption.end_utc_exclusive <= start
+            or assumption.start_utc >= end
+        ):
+            raise ValueError(
+                f"Applicability assumption {index + 1} for "
+                f"{assumption.configuration_id!r} does not overlap the requested "
+                "window"
+            )
+        key = (
+            assumption.configuration_id,
+            iso_utc(assumption.start_utc),
+            iso_utc(assumption.end_utc_exclusive),
+        )
+        if key in seen:
+            raise ValueError(
+                f"Applicability assumption {index + 1} repeats the same "
+                "configuration and interval"
+            )
+        seen.add(key)
+        resolved.append(assumption)
+    return resolved
+
+
+def _assumptions_for(
+    configuration_id: str, assumptions: Sequence[ApplicabilityAssumption]
+) -> List[ApplicabilityAssumption]:
+    return [
+        assumption
+        for assumption in assumptions
+        if assumption.configuration_id == configuration_id
+    ]
+
+
+def _coverage_for_configuration(
+    configuration: InstrumentConfiguration,
+    assumptions: Sequence[ApplicabilityAssumption],
+    start: datetime,
+    end: datetime,
+) -> Dict[str, Any]:
+    return compute_coverage(
+        configuration_id=configuration.configuration_id,
+        established=configuration_established_intervals(configuration),
+        assumptions=assumptions,
+        start=start,
+        end=end,
+    )
+
+
+def _validate_assumption_extends(
+    configuration: InstrumentConfiguration,
+    assumptions: Sequence[ApplicabilityAssumption],
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Require each assumption to add accepted time inside the window."""
+    established = configuration_established_intervals(configuration)
+    for assumption in assumptions:
+        addition = subtract_intervals([assumption.interval()], established)
+        addition = [
+            (max(start, left), min(end, right))
+            for left, right in addition
+            if max(start, left) < min(end, right)
+        ]
+        if not addition:
+            raise ValueError(
+                f"Applicability assumption for "
+                f"{configuration.configuration_id!r} lies entirely inside the "
+                "established applicability interval and adds no modeled time"
+            )
+
+
+def _require_modeled_overlap(
+    coverage: Dict[str, Any],
+    *,
+    configuration_id: str,
+    mixed: bool,
+    label: str = "configuration",
+) -> None:
+    if coverage["modeled_intervals"]:
+        return
+    established = coverage["established_intervals"]
+    established_text = ", ".join(
+        f"[{row['start_utc']}, {row['end_utc_exclusive']})"
+        for row in established
+    ) or "none"
+    if mixed:
+        raise ValueError(
+            f"Configuration {configuration_id!r} has no calculable overlap with "
+            f"the requested window. Its established intervals are {established_text}. "
+            "Record this configuration as an explicit omission with a reason, or "
+            "provide an explicit applicability assumption the researcher accepts."
+        )
+    raise ValueError(
+        f"Configuration {configuration_id!r} has no calculable overlap with the "
+        f"requested window. Its established intervals are {established_text}. "
+        "Choose a window inside an established interval, supply a different "
+        "sourced configuration, or provide an explicit applicability assumption."
+    )
+
+
+def _applicability_warnings(coverage: Dict[str, Any]) -> List[str]:
+    warnings = []
+    if coverage["status"] == "partial":
+        warnings.append(
+            "This study is partial by date: unresolved intervals remain outside "
+            "established applicability and outside accepted assumptions. Those "
+            "intervals are unknown, not zero access."
+        )
+    if coverage["status"] == "complete_under_assumptions":
+        warnings.append(
+            "Part of this window is modeled only under researcher-accepted "
+            "applicability assumptions, not independently established dates."
+        )
+    for assumption in coverage["assumptions"]:
+        warnings.append(
+            "Accepted applicability assumption for "
+            f"{assumption['configuration_id']} from {assumption['start_utc']} to "
+            f"{assumption['end_utc_exclusive']}: {assumption['rationale']}"
+        )
+    return warnings
 
 
 def _consequential_payload(
@@ -357,6 +500,7 @@ def _consequential_payload(
     grid_columns: int,
     registry_selection: Optional[Dict[str, Any]] = None,
     study_kind: str = "conical",
+    applicability: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     satellite = stage["satellites"][0]
     start, end = _parse_window(stage)
@@ -391,9 +535,19 @@ def _consequential_payload(
             approximation["approximation_id"]
             for approximation in snapshot["approximations"]
         ],
-        "applicability": {
-            "start_utc": snapshot["applicability"]["start_utc"],
-            "end_utc_exclusive": snapshot["applicability"]["end_utc_exclusive"],
+        "applicability": applicability
+        or {
+            "established_intervals": [
+                {
+                    "start_utc": snapshot["applicability"]["start_utc"],
+                    "end_utc_exclusive": snapshot["applicability"][
+                        "end_utc_exclusive"
+                    ],
+                }
+            ],
+            "modeled_intervals": [],
+            "unresolved_intervals": [],
+            "assumptions": [],
         },
         "software": snapshot["software"],
         "evaluated_configuration_count": MAX_EVALUATED_CONFIGURATIONS,
@@ -408,9 +562,17 @@ def _setup_revision(
     grid_columns: int,
     registry_selection: Optional[Dict[str, Any]] = None,
     study_kind: str = "conical",
+    applicability: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     consequential = _consequential_payload(
-        stage, snapshot, cells, grid_rows, grid_columns, registry_selection, study_kind
+        stage,
+        snapshot,
+        cells,
+        grid_rows,
+        grid_columns,
+        registry_selection,
+        study_kind,
+        applicability,
     )
     return "sha256:" + _sha256(consequential), consequential
 
@@ -481,14 +643,25 @@ def _limits(
     stage: Dict[str, Any],
     configuration: InstrumentConfiguration,
     long_window: bool,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     start, end = _parse_window(stage)
+    coverage = coverage or {}
+    applicability_limit = (
+        "Configuration applicability status: "
+        f"{coverage.get('status', 'unknown')}. Modeled intervals: "
+        + (
+            ", ".join(
+                f"[{row['start_utc']}, {row['end_utc_exclusive']})"
+                for row in coverage.get("modeled_intervals", [])
+            )
+            or "none"
+        )
+        + ". Unresolved intervals are unknown, not zero access."
+    )
     limits = [
         *BASE_LIMITS,
-        "Configuration applicability is ["
-        f"{iso_utc(configuration.applicability.start_utc)}, "
-        f"{iso_utc(configuration.applicability.end_utc_exclusive)}); only the "
-        "requested window is modeled.",
+        applicability_limit,
         f"Exactly one configuration and one spacecraft are evaluated in this increment; requested window length is {round((end - start).total_seconds() / 3600, 3)} hours.",
     ]
     if long_window:
@@ -561,10 +734,18 @@ def _proposal_payload(
     consequential: Dict[str, Any],
     registry_selection: Optional[Dict[str, Any]] = None,
     study_kind: str = "conical",
+    assumptions: Sequence[ApplicabilityAssumption] = (),
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     long_window = end - start > SHORT_WINDOW_MAX
-    limits = _limits(stage, configuration, long_window)
+    coverage = coverage or consequential["applicability"]
+    limits = _limits(stage, configuration, long_window, coverage)
+    completeness = result_completeness(coverage["status"], False)
+    warnings = _warnings(
+        configuration, proposal=True, registry_selection=registry_selection
+    )
+    warnings.extend(_applicability_warnings(coverage))
     consequential_settings = [
         {
             "setting": "window",
@@ -610,8 +791,8 @@ def _proposal_payload(
         },
         {
             "setting": "applicability",
-            "value": consequential["applicability"],
-            "why": "The full window must lie inside the established interval.",
+            "value": coverage,
+            "why": "Established dates, accepted study assumptions, modeled intervals, and unresolved dates define what can be calculated.",
         },
         {
             "setting": "software",
@@ -676,6 +857,12 @@ def _proposal_payload(
             ),
         },
         "consequential_settings": consequential_settings,
+        "applicability": coverage,
+        "applicability_status": coverage.get("status"),
+        "completeness_status": completeness,
+        "modeled_hours": coverage.get("modeled_hours", 0),
+        "unresolved_hours": coverage.get("unresolved_hours", 0),
+        "unresolved_dates": coverage.get("unresolved_intervals", []),
         "source_conflicts": snapshot["source_conflicts"],
         "approximations": snapshot["approximations"],
         "approximation_status": snapshot["approximation_status"],
@@ -683,7 +870,8 @@ def _proposal_payload(
         "interpretation": snapshot["interpretation"],
         "warnings": _warnings(
             configuration, proposal=True, registry_selection=registry_selection
-        ),
+        )
+        + _applicability_warnings(coverage),
         "limits": limits,
         "evidence_note": EVIDENCE_NOTE,
         "acceptance": {
@@ -691,10 +879,13 @@ def _proposal_payload(
             "setup_revision": setup_revision,
             "instruction": (
                 "Present the chosen source options, approximations, warnings, "
-                "region, grid, and window to the researcher. If they accept, "
-                f"call the {study_kind} finish tool with this exact setup revision and "
-                "accept_setup=true. Any change to a consequential setting "
-                "requires a new preparation and acceptance."
+                "region, grid, window, and the modeled and unresolved dates. "
+                "If they accept, call the "
+                f"{study_kind} finish tool with this exact setup revision and "
+                "accept_setup=true. An accepted applicability assumption is "
+                "part of this revision. Any change to a consequential setting "
+                "requires a new preparation and acceptance. A partial-date "
+                "result must be described as partial, not complete."
             ),
         },
         "next_step": (
@@ -715,6 +906,7 @@ def _prepare_study(
     configuration: Any = None,
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
+    applicability_assumptions: Any = None,
     *,
     study_kind: str,
 ) -> Dict[str, Any]:
@@ -760,7 +952,21 @@ def _prepare_study(
         )
     _check_staged_spacecraft(stage, resolved_configuration, study_kind)
     start, end = _parse_window(stage)
-    _validate_applicability(resolved_configuration, start, end)
+    assumptions = _resolve_applicability_assumptions(
+        applicability_assumptions,
+        [resolved_configuration.configuration_id],
+        start,
+        end,
+    )
+    _validate_assumption_extends(resolved_configuration, assumptions, start, end)
+    coverage = _coverage_for_configuration(
+        resolved_configuration, assumptions, start, end
+    )
+    _require_modeled_overlap(
+        coverage,
+        configuration_id=resolved_configuration.configuration_id,
+        mixed=False,
+    )
     cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
     _check_grid_size(cells, end - start > SHORT_WINDOW_MAX)
     try:
@@ -781,6 +987,7 @@ def _prepare_study(
         grid_columns,
         registry_selection,
         study_kind,
+        coverage,
     )
     proposal = _proposal_payload(
         stage,
@@ -793,6 +1000,8 @@ def _prepare_study(
         consequential,
         registry_selection,
         study_kind,
+        assumptions,
+        coverage,
     )
     proposal["draft_id"] = str(draft_id).strip()
     proposal["snapshot"]["draft_id"] = proposal["draft_id"]
@@ -807,6 +1016,10 @@ def _prepare_study(
             "grid_columns": int(grid_columns),
             "configuration": snapshot,
             "registry_selection": registry_selection,
+            "applicability_assumptions": [
+                assumption.public() for assumption in assumptions
+            ],
+            "applicability": coverage,
             "consequential": consequential,
             "consequential_settings": proposal["consequential_settings"],
             "warnings": proposal["warnings"],
@@ -825,6 +1038,7 @@ def prepare_conical_study(
     configuration: Any = None,
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
+    applicability_assumptions: Any = None,
 ) -> Dict[str, Any]:
     """Resolve a sourced conical configuration into an acceptance proposal."""
     return _prepare_study(
@@ -835,6 +1049,7 @@ def prepare_conical_study(
         configuration_id,
         configuration_revision,
         study_kind="conical",
+        applicability_assumptions=applicability_assumptions,
     )
 
 
@@ -845,6 +1060,7 @@ def prepare_pointed_study(
     configuration: Any = None,
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
+    applicability_assumptions: Any = None,
 ) -> Dict[str, Any]:
     """Resolve a sourced pointed configuration into an acceptance proposal."""
     return _prepare_study(
@@ -855,6 +1071,7 @@ def prepare_pointed_study(
         configuration_id,
         configuration_revision,
         study_kind="pointed",
+        applicability_assumptions=applicability_assumptions,
     )
 
 
@@ -1204,9 +1421,18 @@ def _mixed_consequential_payload(
                 "registry_selection": item["registry_selection"],
                 "source_choices": item["source_choices"],
                 "applicability": item["applicability"],
+                "applicability_status": item["applicability"]["status"],
                 "tatc_mapping": item["configuration"]["tatc_mapping"],
             }
             for item in prepared_configurations
+        ],
+        "applicability_status": combined_coverage_status(
+            [item["applicability"] for item in prepared_configurations]
+        ),
+        "applicability_assumptions": [
+            assumption
+            for item in prepared_configurations
+            for assumption in item["applicability"].get("assumptions", [])
         ],
         "evaluated_configuration_count": len(prepared_configurations),
         "requested_configuration_count": len(prepared_configurations) + len(omissions),
@@ -1248,6 +1474,7 @@ def prepare_mixed_study(
     grid_columns: Any,
     configurations: Any,
     omissions: Any = None,
+    applicability_assumptions: Any = None,
 ) -> Dict[str, Any]:
     """Resolve a bounded set of configurations and any requested omissions."""
     if not isinstance(configurations, list) or not configurations:
@@ -1321,6 +1548,12 @@ def prepare_mixed_study(
         prepared_omissions,
     )
     start, end = _parse_window(stage)
+    assumptions = _resolve_applicability_assumptions(
+        applicability_assumptions,
+        [configuration.configuration_id for configuration, _ in resolved],
+        start,
+        end,
+    )
     long_window = end - start > SHORT_WINDOW_MAX
     cells = _build_grid(stage["roi_bbox"], grid_rows, grid_columns)
     if not long_window and len(cells) > MAX_GRID_CELLS:
@@ -1341,7 +1574,20 @@ def prepare_mixed_study(
 
     prepared_configurations = []
     for configuration, registry_selection in resolved:
-        app_start, app_end = _validate_applicability(configuration, start, end)
+        configuration_assumptions = _assumptions_for(
+            configuration.configuration_id, assumptions
+        )
+        _validate_assumption_extends(
+            configuration, configuration_assumptions, start, end
+        )
+        coverage = _coverage_for_configuration(
+            configuration, configuration_assumptions, start, end
+        )
+        _require_modeled_overlap(
+            coverage,
+            configuration_id=configuration.configuration_id,
+            mixed=True,
+        )
         satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
         try:
             snapshot = resolved_snapshot(configuration, satellite["omm_records"])
@@ -1365,11 +1611,15 @@ def prepare_mixed_study(
                 "configuration_digest": _sha256(snapshot),
                 "registry_selection": registry_selection,
                 "source_choices": source_choices_from_snapshot(snapshot),
-                "applicability": {
-                    "start_utc": iso_utc(app_start),
-                    "end_utc_exclusive": iso_utc(app_end),
-                },
-                "warnings": _warnings(configuration, registry_selection=registry_selection),
+                "applicability": coverage,
+                "applicability_assumptions": [
+                    assumption.public()
+                    for assumption in configuration_assumptions
+                ],
+                "warnings": _warnings(
+                    configuration, registry_selection=registry_selection
+                )
+                + _applicability_warnings(coverage),
             }
         )
 
@@ -1385,8 +1635,21 @@ def prepare_mixed_study(
         for item in prepared_omissions
         if item["status"] == "awaiting_clarification"
     ]
-    completeness = "partial" if prepared_omissions else "complete"
+    completeness = result_completeness(
+        combined_coverage_status(
+            [item["applicability"] for item in prepared_configurations]
+        ),
+        bool(prepared_omissions),
+    )
+    applicability_status = combined_coverage_status(
+        [item["applicability"] for item in prepared_configurations]
+    )
     omission_warnings = [_omission_warning(item) for item in prepared_omissions]
+    date_warnings = [
+        warning
+        for item in prepared_configurations
+        for warning in _applicability_warnings(item["applicability"])
+    ]
     limits = [
         *BASE_LIMITS,
         *(YEAR_LIMITS if long_window else []),
@@ -1428,6 +1691,27 @@ def prepare_mixed_study(
             ),
         },
         "completeness_status": completeness,
+        "applicability_status": applicability_status,
+        "applicability": {
+            "status": applicability_status,
+            "configurations": [
+                item["applicability"] for item in prepared_configurations
+            ],
+            "assumptions": [
+                assumption.public() for assumption in assumptions
+            ],
+        },
+        "applicability_assumptions": [
+            assumption.public() for assumption in assumptions
+        ],
+        "unresolved_dates": [
+            {
+                "configuration_id": item["configuration_id"],
+                **row,
+            }
+            for item in prepared_configurations
+            for row in item["applicability"].get("unresolved_intervals", [])
+        ],
         "evaluated_configuration_count": len(prepared_configurations),
         "requested_configuration_count": len(prepared_configurations)
         + len(prepared_omissions),
@@ -1446,6 +1730,7 @@ def prepare_mixed_study(
             for warning in item["warnings"]
         ]
         + omission_warnings
+        + date_warnings
         + ["No calculation has run; accept this exact setup revision to execute."],
         "limits": limits,
         "acceptance": {
@@ -1549,17 +1834,22 @@ def _mixed_tasks_for_cells(
     stage: Dict[str, Any],
     configurations: Sequence[Dict[str, Any]],
     cells: Sequence[Dict[str, Any]],
-    start: datetime,
-    end: datetime,
 ) -> List[Dict[str, Any]]:
     staged_by_id = {int(item["norad_id"]): item for item in stage["satellites"]}
     tasks = []
     for item in configurations:
         configuration = _configuration_from_mixed_snapshot(item["configuration"])
         satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
-        tasks.extend(
-            _cell_tasks(configuration, satellite["omm_records"], cells, start, end)
-        )
+        for row in item["applicability"]["modeled_intervals"]:
+            tasks.extend(
+                _cell_tasks(
+                    configuration,
+                    satellite["omm_records"],
+                    cells,
+                    parse_iso(row["start_utc"]),
+                    parse_iso(row["end_utc_exclusive"]),
+                )
+            )
     return tasks
 
 
@@ -1615,8 +1905,6 @@ def _mixed_result_payload(
             config_raw_events,
             start,
             end,
-            applicability_start=configuration.applicability.start_utc,
-            applicability_end=configuration.applicability.end_utc_exclusive,
         )
         contributor = {
             "configuration_id": configuration_id,
@@ -1643,6 +1931,8 @@ def _mixed_result_payload(
                 f"{EVENT_DEFINITION if isinstance(configuration, ConicalConfiguration) else POINTED_EVENT_DEFINITION} "
                 f"Configuration {configuration_id!r}, revision {configuration.revision}."
             ),
+            modeled_intervals=item["applicability"]["modeled_intervals"],
+            unresolved_intervals=item["applicability"]["unresolved_intervals"],
         )
         counts = _event_summary_counts(accounting)
         result = {
@@ -1692,6 +1982,14 @@ def _mixed_result_payload(
 
     all_warnings.extend(_omission_warning(item) for item in omitted_configurations)
 
+    modeled_by_configuration = {
+        item["configuration_id"]: item["applicability"]["modeled_intervals"]
+        for item in proposal["configurations"]
+    }
+    unresolved_by_configuration = {
+        item["configuration_id"]: item["applicability"]["unresolved_intervals"]
+        for item in proposal["configurations"]
+    }
     combined_events = normalize_mixed_events(raw_events, start, end)
     combined = summarize_events(
         cells,
@@ -1704,6 +2002,8 @@ def _mixed_result_payload(
             "at each cell center. Simultaneous contributors are retained together; "
             "nearby epochs remain distinct."
         ),
+        modeled_intervals_by_configuration=modeled_by_configuration,
+        unresolved_intervals_by_configuration=unresolved_by_configuration,
     )
     combined["definitions"]["combined_daily_area"] = (
         "For each half-open UTC day, count the WGS84 geodesic area of the set union "
@@ -1758,7 +2058,10 @@ def _mixed_result_payload(
                     "configuration": item["configuration"],
                     "registry_selection": item["registry_selection"],
                     "source_choices": item["source_choices"],
-                    "applicability": item["configuration"]["applicability"],
+                    "applicability": item["applicability"],
+                    "applicability_assumptions": item.get(
+                        "applicability_assumptions", []
+                    ),
                     "satellite": item["satellite"],
                 }
                 for item in proposal["configurations"]
@@ -1792,6 +2095,25 @@ def _mixed_result_payload(
         ),
         "spacecraft_count": len(stage["satellites"]),
     }
+    coverage_status = combined_coverage_status(
+        [item["applicability"] for item in proposal["configurations"]]
+    )
+    completeness = result_completeness(
+        coverage_status, bool(omitted_configurations)
+    )
+    applicable_dates = {
+        "start_utc": start_utc,
+        "end_utc_exclusive": end_utc,
+        "by_configuration": {
+            item["configuration_id"]: item["applicability"]
+            for item in proposal["configurations"]
+        },
+    }
+    unresolved_dates = [
+        {"configuration_id": item["configuration_id"], **row}
+        for item in proposal["configurations"]
+        for row in item["applicability"]["unresolved_intervals"]
+    ]
     return {
         "result_kind": "mixed_study",
         "accounting_method": MIXED_ACCOUNTING_METHOD,
@@ -1810,17 +2132,33 @@ def _mixed_result_payload(
         "grid_shape": [proposal["grid_rows"], proposal["grid_columns"]],
         "total_roi_area_km2": combined["total_roi_area_km2"],
         "summary_counts": summary_counts,
-        "completeness_status": (
-            "partial" if omitted_configurations else "complete"
-        ),
+        "completeness_status": completeness,
+        "applicability_status": coverage_status,
+        "applicability": {
+            "status": coverage_status,
+            "configurations": [
+                {
+                    "configuration_id": item["configuration_id"],
+                    **item["applicability"],
+                }
+                for item in proposal["configurations"]
+            ],
+            "assumptions": [
+                assumption
+                for item in proposal["configurations"]
+                for assumption in item["applicability"].get("assumptions", [])
+            ],
+        },
+        "applicability_assumptions": [
+            assumption
+            for item in proposal["configurations"]
+            for assumption in item["applicability"].get("assumptions", [])
+        ],
         "modeled_configurations": modeled_configurations,
         "omitted_configurations": omitted_configurations,
         "awaiting_clarification": awaiting_clarification,
-        "applicable_dates": {
-            "start_utc": start_utc,
-            "end_utc_exclusive": end_utc,
-        },
-        "unresolved_dates": [],
+        "applicable_dates": applicable_dates,
+        "unresolved_dates": unresolved_dates,
         "consequential_settings": proposal["consequential"],
         "provenance": provenance,
         "warnings": all_warnings,
@@ -1863,6 +2201,9 @@ def _compact_mixed_summary(full: Dict[str, Any], result_id: str) -> Dict[str, An
         "total_roi_area_km2": full["total_roi_area_km2"],
         "summary_counts": full["summary_counts"],
         "completeness_status": full["completeness_status"],
+        "applicability_status": full.get("applicability_status"),
+        "applicability": full.get("applicability"),
+        "applicability_assumptions": full.get("applicability_assumptions", []),
         "modeled_configurations": full["modeled_configurations"],
         "omitted_configurations": full["omitted_configurations"],
         "applicable_dates": full["applicable_dates"],
@@ -2004,8 +2345,25 @@ def finish_mixed_study(
         )
     if len(configurations) > MAX_MIXED_CONFIGURATIONS or len(staged_by_id) > MAX_MIXED_CONFIGURATIONS:
         raise ValueError("Mixed studies support at most six configurations and six spacecraft")
-    for configuration in configurations:
-        _validate_applicability(configuration, start, end)
+    for item, configuration in zip(proposal["configurations"], configurations):
+        recorded_assumptions = [
+            ApplicabilityAssumption.model_validate(raw)
+            for raw in item.get("applicability_assumptions", [])
+        ]
+        current_coverage = _coverage_for_configuration(
+            configuration, recorded_assumptions, start, end
+        )
+        if _canonical(current_coverage) != _canonical(item["applicability"]):
+            raise ValueError(
+                f"Configuration {item['configuration_id']!r} has changed "
+                "applicability coverage since preparation. Prepare again and "
+                "obtain a new acceptance. No calculation was run."
+            )
+        _require_modeled_overlap(
+            current_coverage,
+            configuration_id=item["configuration_id"],
+            mixed=True,
+        )
 
     for item in proposal["configurations"]:
         selected = item.get("registry_selection")
@@ -2049,9 +2407,16 @@ def finish_mixed_study(
         )
 
     tasks = _mixed_tasks_for_cells(
-        stage, proposal["configurations"], cells, start, end
+        stage, proposal["configurations"], cells
     )
-    work = len(tasks) * (end - start).total_seconds() / 86400
+    work = sum(
+        (
+            _parse_interval_utc(row["end_utc_exclusive"])
+            - _parse_interval_utc(row["start_utc"])
+        ).total_seconds()
+        for item in proposal["configurations"]
+        for row in item["applicability"]["modeled_intervals"]
+    ) * len(cells) / 86400
     try:
         raw_events = _collect_tasks(tasks, _max_workers, work)
     except Exception as exc:
@@ -2129,16 +2494,43 @@ def _result_payload(
     accepted_at_utc: datetime,
     study_kind: str,
     accounting_method: str,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     start, end = _parse_window(stage)
     snapshot = proposal["configuration"]
     long_window = end - start > SHORT_WINDOW_MAX
     public_events = _public_events(events)
     daily = accounting["daily"]
+    coverage = coverage or proposal.get("applicability") or {
+        "status": "complete",
+        "modeled_intervals": [
+            {
+                "start_utc": iso_utc(start),
+                "end_utc_exclusive": iso_utc(end),
+                "basis": "established",
+            }
+        ],
+        "unresolved_intervals": [],
+        "assumptions": [],
+    }
+    completeness = result_completeness(coverage.get("status", "complete"), False)
+    modeled_days = [
+        row for row in daily if row.get("coverage_status") != "unmodeled"
+    ]
     summary_counts = {
         "total_days": len(daily),
-        "days_with_events": sum(1 for row in daily if row["event_count"] > 0),
-        "gap_days": sum(1 for row in daily if row["event_count"] == 0),
+        "days_with_events": sum(
+            1 for row in modeled_days if (row["event_count"] or 0) > 0
+        ),
+        "gap_days": sum(
+            1 for row in modeled_days if (row["event_count"] or 0) == 0
+        ),
+        "unmodeled_days": len(daily) - len(modeled_days),
+        "partial_days": sum(
+            1 for row in daily if row.get("coverage_status") == "partial_day"
+        ),
+        "modeled_hours": accounting["metrics"].get("modeled_hours", 0),
+        "unresolved_hours": accounting["metrics"].get("unresolved_hours", 0),
         "grid_cell_count": accounting["metrics"]["grid_cell_count"],
         "observed_cell_count": accounting["metrics"]["observed_cell_count"],
         "never_observed_cell_count": accounting["metrics"][
@@ -2165,6 +2557,9 @@ def _result_payload(
             "registry_selection": proposal.get("registry_selection"),
             "approximation_ids": proposal["consequential"]["approximation_ids"],
             "applicability": proposal["consequential"]["applicability"],
+            "applicability_assumptions": proposal.get(
+                "applicability_assumptions", []
+            ),
             "consequential_settings": proposal["consequential_settings"],
         },
         "accepted_choices": proposal["consequential"]["source_choices"],
@@ -2199,22 +2594,37 @@ def _result_payload(
         "grid_shape": [proposal["grid_rows"], proposal["grid_columns"]],
         "total_roi_area_km2": accounting["total_roi_area_km2"],
         "summary_counts": summary_counts,
-        "completeness_status": "complete",
+        "completeness_status": completeness,
+        "applicability_status": coverage.get("status"),
+        "applicability": coverage,
+        "applicability_assumptions": coverage.get("assumptions", []),
         "modeled_configurations": [
             {
                 "configuration_id": configuration.configuration_id,
                 "configuration_revision": configuration.revision,
                 "status": "modeled",
                 "event_count": accounting["metrics"]["event_count"],
-                "applicability": proposal["consequential"]["applicability"],
+                "applicability": coverage,
             }
         ],
         "omitted_configurations": [],
         "applicable_dates": {
-            "start_utc": snapshot["applicability"]["start_utc"],
-            "end_utc_exclusive": snapshot["applicability"]["end_utc_exclusive"],
+            "start_utc": (
+                coverage["modeled_intervals"][0]["start_utc"]
+                if coverage.get("modeled_intervals")
+                else iso_utc(start)
+            ),
+            "end_utc_exclusive": (
+                coverage["modeled_intervals"][-1]["end_utc_exclusive"]
+                if coverage.get("modeled_intervals")
+                else iso_utc(end)
+            ),
+            "status": coverage.get("status"),
+            "modeled_intervals": coverage.get("modeled_intervals", []),
+            "established_intervals": coverage.get("established_intervals", []),
+            "unresolved_intervals": coverage.get("unresolved_intervals", []),
         },
-        "unresolved_dates": [],
+        "unresolved_dates": coverage.get("unresolved_intervals", []),
         "consequential_settings": proposal["consequential_settings"],
         "provenance": provenance,
         "evidence": snapshot["evidence"],
@@ -2226,8 +2636,9 @@ def _result_payload(
         "interpretation": snapshot["interpretation"],
         "warnings": _warnings(
             configuration, registry_selection=proposal.get("registry_selection")
-        ),
-        "limits": _limits(stage, configuration, long_window),
+        )
+        + _applicability_warnings(coverage),
+        "limits": _limits(stage, configuration, long_window, coverage),
         "definitions": accounting["definitions"],
         "metrics": accounting["metrics"],
         "daily": daily,
@@ -2298,6 +2709,9 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "total_roi_area_km2": full["total_roi_area_km2"],
         "summary_counts": full["summary_counts"],
         "completeness_status": full["completeness_status"],
+        "applicability_status": full.get("applicability_status"),
+        "applicability": full.get("applicability"),
+        "applicability_assumptions": full.get("applicability_assumptions", []),
         "modeled_configurations": full["modeled_configurations"],
         "omitted_configurations": full["omitted_configurations"],
         "applicable_dates": full["applicable_dates"],
@@ -2431,7 +2845,26 @@ def _finish_study(
     if stage.get("roi_bbox") is None:
         raise ValueError("This draft has no region; set the region before finishing")
     start, end = _parse_window(stage)
-    _validate_applicability(configuration, start, end)
+    assumptions = [
+        ApplicabilityAssumption.model_validate(raw)
+        for raw in proposal.get("applicability_assumptions", [])
+    ]
+    coverage = _coverage_for_configuration(
+        configuration, assumptions, start, end
+    )
+    recorded_coverage = proposal.get("applicability")
+    if recorded_coverage is not None and _canonical(coverage) != _canonical(
+        recorded_coverage
+    ):
+        raise ValueError(
+            f"The prepared {study_kind} applicability coverage has changed. "
+            "Prepare the study again and obtain a new acceptance. No calculation was run."
+        )
+    _require_modeled_overlap(
+        coverage,
+        configuration_id=configuration.configuration_id,
+        mixed=False,
+    )
     cells = _build_grid(
         stage["roi_bbox"], proposal["grid_rows"], proposal["grid_columns"]
     )
@@ -2444,6 +2877,7 @@ def _finish_study(
         proposal["grid_columns"],
         registry_selection,
         study_kind,
+        coverage,
     )
     if current_revision != proposed_revision:
         raise ValueError(
@@ -2452,19 +2886,29 @@ def _finish_study(
             "changed after preparation. Prepare the study again and obtain a new "
             "acceptance. No calculation was run."
         )
-    tasks = _tasks_for_cells(stage, configuration, cells, start, end)
-    work = len(tasks) * (end - start).total_seconds() / 86400
+    tasks = []
+    cited_windows = [
+        (
+            _parse_interval_utc(row["start_utc"]),
+            _parse_interval_utc(row["end_utc_exclusive"]),
+        )
+        for row in coverage["modeled_intervals"]
+    ]
+    for window_start, window_end in cited_windows:
+        tasks.extend(
+            _tasks_for_cells(
+                stage, configuration, cells, window_start, window_end
+            )
+        )
+    work = sum(
+        (window_end - window_start).total_seconds()
+        for window_start, window_end in cited_windows
+    ) * len(cells) / 86400
     raw_events = _collect_tasks(tasks, _max_workers, work)
     accounting_method = (
         POINTED_ACCOUNTING_METHOD if study_kind == "pointed" else ACCOUNTING_METHOD
     )
-    events = normalize_events(
-        raw_events,
-        start,
-        end,
-        applicability_start=configuration.applicability.start_utc,
-        applicability_end=configuration.applicability.end_utc_exclusive,
-    )
+    events = normalize_events(raw_events, start, end)
     accounting = summarize_events(
         cells,
         events,
@@ -2474,6 +2918,8 @@ def _finish_study(
         event_definition=(
             POINTED_EVENT_DEFINITION if study_kind == "pointed" else EVENT_DEFINITION
         ),
+        modeled_intervals=coverage["modeled_intervals"],
+        unresolved_intervals=coverage["unresolved_intervals"],
     )
     full = _result_payload(
         stage,
@@ -2486,6 +2932,7 @@ def _finish_study(
         _utcnow(),
         study_kind,
         accounting_method,
+        coverage,
     )
     result_id = _save_result(full)
     return _compact_summary(full, result_id)
@@ -2568,6 +3015,9 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "warnings": payload["warnings"],
         "limits": payload["limits"],
         "completeness_status": payload["completeness_status"],
+        "applicability_status": payload.get("applicability_status"),
+        "applicability": payload.get("applicability"),
+        "applicability_assumptions": payload.get("applicability_assumptions", []),
         "modeled_configurations": payload["modeled_configurations"],
         "omitted_configurations": payload["omitted_configurations"],
         "applicable_dates": payload["applicable_dates"],
@@ -2847,6 +3297,9 @@ def get_study_setup(
             "registry_selection": proposal.get("registry_selection"),
             "approximation_ids": consequential["approximation_ids"],
             "applicability": consequential["applicability"],
+            "applicability_assumptions": proposal.get(
+                "applicability_assumptions", []
+            ),
             "consequential_settings": proposal["consequential_settings"],
         }
         return {
@@ -3029,6 +3482,9 @@ def _mixed_fetch_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for choice in item["source_choices"]
                 ],
                 "applicability": item["applicability"],
+                "applicability_assumptions": item.get(
+                    "applicability_assumptions", []
+                ),
                 "geometry": {
                     "model_family": full_geometry["model_family"],
                     "illumination_requirement": full_geometry[
@@ -3099,6 +3555,9 @@ def _mixed_fetch_header(
         "warnings": warnings,
         "limits": payload["limits"],
         "completeness_status": payload["completeness_status"],
+        "applicability_status": payload.get("applicability_status"),
+        "applicability": payload.get("applicability"),
+        "applicability_assumptions": payload.get("applicability_assumptions", []),
         "modeled_configurations": payload["modeled_configurations"],
         "omitted_configurations": [
             _compact_omission(item)

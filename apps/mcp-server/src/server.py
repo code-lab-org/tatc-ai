@@ -21,6 +21,7 @@ from .configuration_registry import (
     record_instrument_configuration_refresh as _record_instrument_configuration_refresh,
 )
 from .conical_config import ConicalConfiguration, SourceEvidence
+from .applicability import ApplicabilityAssumption
 from .conical_study import OmissionRequest
 from .conical_study import finish_conical_study as _finish_conical
 from .conical_study import finish_mixed_study as _finish_mixed
@@ -179,8 +180,14 @@ SERVER_INSTRUCTIONS = (
     "geometry or applicability change creates a separate selectable immutable "
     "revision and a notice on the prior one. A failed check means the source "
     "status is unknown. The "
-    "established applicability interval must contain the full window. The "
-    "single-configuration conical and pointed workflows reject uncovered dates. "
+    "server intersects established applicability with the requested window. "
+    "Dates it cannot establish are unresolved, not zero access. The single-"
+    "configuration conical and pointed workflows prepare a partial-date proposal "
+    "when part of the window is unresolved, and require acceptance before running. "
+    "An explicit applicability_assumption may extend a configuration only when "
+    "the proposed setup records its rationale and the researcher accepts the "
+    "revised setup; a result modeled under assumptions is not independently "
+    "established. "
     "Conical results preserve each valid TAT-C viewing epoch. The broader "
     "field-of-regard period is envelope metadata only: never describe it as "
     "continuous viewing, access duration, or uncovered duration. Daily area "
@@ -210,8 +217,8 @@ SERVER_INSTRUCTIONS = (
     "tool and mixed study finish tool. It accepts one to six exact registry revisions or "
     "complete study-specific configurations, across at most six spacecraft. "
     "Every staged spacecraft must have a selected configuration or recorded "
-    "omission, and "
-    "every included configuration must cover the full UTC window. "
+    "omission. Established applicability is intersected with the window; "
+    "unresolved dates remain explicit and make the result partial. "
     "When a requested instrument cannot be modeled, prepare a partial proposal "
     "with omissions: name the instrument and spacecraft, choose a reason_code, "
     "give the reason, and attach evidence when a source conflict or missing "
@@ -1640,6 +1647,7 @@ def prepare_conical_study(
     configuration: Optional[ConicalConfiguration] = None,
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
+    applicability_assumptions: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Prepare one sourced conical-scanning study without calculating.
 
@@ -1675,11 +1683,16 @@ def prepare_conical_study(
             configuration_revision and instead of configuration.
         configuration_revision: Exact immutable shared registry revision. The
             latest revision is never selected implicitly.
+        applicability_assumptions: Optional JSON list of explicit
+            {configuration_id, start_utc, end_utc_exclusive, rationale}
+            extensions outside the established interval. They become part of
+            the accepted setup revision.
 
     Returns:
         Proposal with setup_revision, region, grid, window, configuration
-        snapshot, consequential settings, conflicts, approximations, warnings,
-        limits, and the explicit acceptance requirement. No result ID yet.
+        snapshot, modeled and unresolved intervals, consequential settings,
+        conflicts, approximations, warnings, limits, and the explicit
+        acceptance requirement. No result ID yet.
     """
     return _prepare_conical(
         draft_id,
@@ -1688,6 +1701,7 @@ def prepare_conical_study(
         configuration,
         configuration_id,
         configuration_revision,
+        applicability_assumptions,
     )
 
 
@@ -1730,6 +1744,7 @@ def prepare_pointed_study(
     configuration: Optional[PointedConfiguration] = None,
     configuration_id: Optional[str] = None,
     configuration_revision: Optional[str] = None,
+    applicability_assumptions: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Prepare one sourced pointed-instrument study without calculating.
 
@@ -1759,6 +1774,7 @@ def prepare_pointed_study(
         configuration,
         configuration_id,
         configuration_revision,
+        applicability_assumptions,
     )
 
 
@@ -1809,6 +1825,7 @@ def prepare_mixed_study(
     grid_columns: int,
     configurations: List[Dict[str, Any]],
     omissions: Optional[List[OmissionRequest]] = None,
+    applicability_assumptions: Optional[List[ApplicabilityAssumption]] = None,
 ) -> Dict[str, Any]:
     """Prepare one through six sourced conical or pointed configurations.
 
@@ -1817,8 +1834,11 @@ def prepare_mixed_study(
     or a complete study-specific configuration nested as an object under
     configuration; do not pass a JSON-encoded string. Every staged spacecraft
     must have a selected configuration or a recorded omission. Preparation
-    checks full-window applicability and workload limits but runs no
-    viewing-event calculation.
+    checks established applicability and workload limits but runs no
+    viewing-event calculation. applicability_assumptions is an optional JSON
+    list of {configuration_id, start_utc, end_utc_exclusive, rationale}
+    entries that extend a selected configuration only when the researcher
+    explicitly accepts them.
 
     omissions is an optional JSON list of requested instruments this study
     cannot calculate. Each item names instrument and spacecraft plus an
@@ -1836,7 +1856,12 @@ def prepare_mixed_study(
     scope.
     """
     return _prepare_mixed(
-        draft_id, grid_rows, grid_columns, configurations, omissions
+        draft_id,
+        grid_rows,
+        grid_columns,
+        configurations,
+        omissions,
+        applicability_assumptions,
     )
 
 

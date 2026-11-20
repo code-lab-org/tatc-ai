@@ -88,6 +88,7 @@ def _prepared_mixed_study(
     region=(-65.0, 0.0, -55.0, 10.0),
     configurations=None,
     omissions=None,
+    assumptions=None,
     satellites="GCOM-W1, SENTINEL-1C",
 ):
     error, text, draft = _call(
@@ -127,6 +128,8 @@ def _prepared_mixed_study(
     }
     if omissions is not None:
         arguments["omissions"] = omissions
+    if assumptions is not None:
+        arguments["applicability_assumptions"] = assumptions
     return _call("prepare_mixed_study", arguments)
 
 
@@ -906,7 +909,7 @@ def test_mixed_preparation_requires_full_window_applicability():
     amsr2["configuration_id"] = "amsr2-gcom-w1-limited-applicability"
     amsr2["revision"] = "fixture-applicability-1"
     amsr2["applicability"]["end_utc_exclusive"] = "2026-10-04T07:20:00Z"
-    error, text, _ = _prepared_mixed_study(
+    error, text, proposal = _prepared_mixed_study(
         configurations=[
             {"configuration": amsr2},
             {
@@ -915,8 +918,12 @@ def test_mixed_preparation_requires_full_window_applicability():
             },
         ],
     )
-    assert error
-    assert "not fully covered" in text.lower()
+    assert not error, text
+    assert proposal["completeness_status"] == "partial"
+    assert proposal["unresolved_dates"][0]["configuration_id"] == (
+        "amsr2-gcom-w1-limited-applicability"
+    )
+    assert proposal["unresolved_dates"][0]["start_utc"] == "2026-10-04T07:20:00Z"
 
 
 def test_mixed_and_single_configuration_workflows_cannot_share_a_draft():
@@ -1739,3 +1746,144 @@ def test_partial_failure_after_acceptance_requires_a_new_scope(monkeypatch):
         "sentinel-1c-c-sar-iw-fixed-view"
     ]
     assert len(saved) == 1
+
+
+def _limited_amsr2(end_utc):
+    configuration = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text(encoding="utf-8")
+    )
+    configuration["configuration_id"] = "amsr2-gcom-w1-limited-applicability"
+    configuration["revision"] = "fixture-applicability-1"
+    configuration["applicability"]["end_utc_exclusive"] = end_utc
+    return configuration
+
+
+def test_mixed_partial_dates_are_reported_and_never_become_zero_access():
+    error, text, proposal = _prepared_mixed_study(
+        configurations=[
+            {"configuration": _limited_amsr2("2026-10-04T07:20:00Z")},
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
+    )
+    assert not error, text
+    assert proposal["completeness_status"] == "partial"
+    assert proposal["applicability_status"] == "partial"
+    assert proposal["unresolved_dates"][0]["configuration_id"] == (
+        "amsr2-gcom-w1-limited-applicability"
+    )
+    assert proposal["unresolved_dates"][0]["start_utc"] == "2026-10-04T07:20:00Z"
+
+    error, text, summary = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    assert summary["completeness_status"] == "partial"
+    assert summary["unresolved_dates"] == proposal["unresolved_dates"]
+    error, text, daily = _call(
+        "get_mixed_daily",
+        {"result_id": summary["result_id"], "limit": 5, "offset": 0},
+    )
+    assert not error, text
+    row = daily["daily"][0]
+    assert row["coverage_status"] == "partial_day"
+    assert row["modeled_intervals"]
+    assert row["unresolved_intervals"] == [
+        {
+            "start_utc": "2026-10-04T07:20:00Z",
+            "end_utc_exclusive": "2026-10-04T07:37:22Z",
+            "reason": "no_modeled_interval",
+        }
+    ]
+    assert row["unresolved_hours"] > 0
+    assert daily["unresolved_dates"] == proposal["unresolved_dates"]
+
+
+def test_accepted_applicability_assumption_is_recorded_and_modeled():
+    assumption = {
+        "configuration_id": "amsr2-gcom-w1-limited-applicability",
+        "start_utc": "2026-10-04T07:20:00Z",
+        "end_utc_exclusive": "2026-10-04T07:37:22Z",
+        "rationale": "The researcher accepted extrapolating the established scan record for this half hour.",
+    }
+    error, text, proposal = _prepared_mixed_study(
+        configurations=[
+            {"configuration": _limited_amsr2("2026-10-04T07:20:00Z")},
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
+        assumptions=[assumption],
+    )
+    assert not error, text
+    assert proposal["completeness_status"] == "complete_under_assumptions"
+    assert proposal["applicability_status"] == "complete_under_assumptions"
+    assert proposal["applicability_assumptions"][0]["rationale"] == assumption["rationale"]
+    covered = proposal["configurations"][0]["applicability"]
+    assert [row["basis"] for row in covered["modeled_intervals"]] == [
+        "established",
+        "assumption",
+    ]
+
+    error, text, summary = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    assert summary["completeness_status"] == "complete_under_assumptions"
+    assert summary["applicability_assumptions"][0]["rationale"] == assumption["rationale"]
+
+
+def test_mixed_no_overlap_requires_an_omission_or_assumption():
+    error, text, _ = _prepared_mixed_study(
+        configurations=[
+            {"configuration": _limited_amsr2("2026-10-04T07:00:00Z")},
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
+    )
+    assert error
+    assert "no calculable overlap" in text
+    assert "omission" in text
+    assert "assumption" in text
+
+
+def test_applicability_assumption_must_extend_the_established_interval():
+    error, text, _ = _prepared_mixed_study(
+        configurations=[
+            {"configuration": _limited_amsr2("2026-10-04T07:30:00Z")},
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
+        assumptions=[
+            {
+                "configuration_id": "amsr2-gcom-w1-limited-applicability",
+                "start_utc": "2026-10-04T07:10:00Z",
+                "end_utc_exclusive": "2026-10-04T07:15:00Z",
+                "rationale": "Redundant assumption.",
+            }
+        ],
+    )
+    assert error
+    assert "adds no modeled time" in text

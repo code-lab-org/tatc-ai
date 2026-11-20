@@ -13,6 +13,13 @@ from datetime import datetime, timezone
 from statistics import mean, median
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .applicability import (
+    UNMODELED_REASON,
+    interval_rows_for_day,
+    iso,
+    iso_rows,
+    parse_iso,
+)
 from .coverage_core import _utc_days
 
 ACCOUNTING_METHOD = "conical_events_v1"
@@ -271,6 +278,66 @@ def normalize_mixed_events(
     )
 
 
+def _interval_rows(rows: Optional[Sequence[Any]]) -> List[Dict[str, str]]:
+    """Normalize interval rows, accepting datetimes or JSON dictionaries."""
+    normalized: List[Dict[str, str]] = []
+    for row in rows or ():
+        if isinstance(row, dict):
+            item = {
+                "start_utc": iso(parse_iso(row["start_utc"])),
+                "end_utc_exclusive": iso(parse_iso(row["end_utc_exclusive"])),
+            }
+            if row.get("basis"):
+                item["basis"] = str(row["basis"])
+            if row.get("reason"):
+                item["reason"] = str(row["reason"])
+        else:
+            start, end = row
+            item = {"start_utc": iso(start), "end_utc_exclusive": iso(end)}
+        normalized.append(item)
+    return normalized
+
+
+def _day_coverage_status(
+    modeled_by_configuration: Dict[str, Sequence[Dict[str, str]]],
+    day_start: datetime,
+    day_end: datetime,
+) -> str:
+    if not modeled_by_configuration:
+        return "unmodeled"
+    expected = (day_end - day_start).total_seconds()
+    saw_modeled = False
+    for rows in modeled_by_configuration.values():
+        clipped = interval_rows_for_day(rows, day_start, day_end)
+        if not clipped:
+            continue
+        saw_modeled = True
+        covered = sum(
+            (
+                parse_iso(row["end_utc_exclusive"])
+                - parse_iso(row["start_utc"])
+            ).total_seconds()
+            for row in clipped
+        )
+        if covered < expected:
+            return "partial_day"
+    return "full_day" if saw_modeled else "unmodeled"
+
+
+def _coverage_hours(rows: Iterable[Dict[str, str]]) -> float:
+    return round(
+        sum(
+            (
+                parse_iso(row["end_utc_exclusive"])
+                - parse_iso(row["start_utc"])
+            ).total_seconds()
+            for row in rows
+        )
+        / 3600,
+        6,
+    )
+
+
 def summarize_events(
     cells: Sequence[Dict[str, Any]],
     events: Sequence[Dict[str, Any]],
@@ -279,8 +346,22 @@ def summarize_events(
     *,
     accounting_method: str = ACCOUNTING_METHOD,
     event_definition: str = EVENT_DEFINITION,
+    modeled_intervals: Optional[Sequence[Any]] = None,
+    unresolved_intervals: Optional[Sequence[Any]] = None,
+    modeled_intervals_by_configuration: Optional[
+        Dict[str, Sequence[Any]]
+    ] = None,
+    unresolved_intervals_by_configuration: Optional[
+        Dict[str, Sequence[Any]]
+    ] = None,
 ) -> Dict[str, Any]:
-    """Build daily rows, cell rows, spacing rows, and compact metrics."""
+    """Build daily rows, cell rows, spacing rows, and compact metrics.
+
+    When applicability intervals are supplied, a UTC day outside them is not a
+    modeled zero.  Its area and event count are null, and its coverage status
+    is ``unmodeled``.  A partially modeled day reports the modeled and
+    unresolved portions separately.
+    """
     start, end = _as_utc(start), _as_utc(end)
     cells_by_id = {int(cell["id"]): cell for cell in cells}
     total_area = sum(cell["area_km2"] for cell in cells)
@@ -290,37 +371,120 @@ def summarize_events(
     for rows in by_cell.values():
         rows.sort(key=lambda event: event["_epoch"])
 
+    single_modeled = _interval_rows(modeled_intervals)
+    if (
+        modeled_intervals is None
+        and not modeled_intervals_by_configuration
+        and not unresolved_intervals
+    ):
+        single_modeled = _interval_rows([(start, end)])
+    single_unresolved = _interval_rows(unresolved_intervals)
+    by_configuration = {
+        configuration_id: _interval_rows(rows)
+        for configuration_id, rows in (
+            modeled_intervals_by_configuration or {}
+        ).items()
+    }
+    unresolved_by_configuration = {
+        configuration_id: _interval_rows(rows)
+        for configuration_id, rows in (
+            unresolved_intervals_by_configuration or {}
+        ).items()
+    }
+    if not by_configuration:
+        by_configuration = {"selected_configuration": single_modeled}
+    if not unresolved_by_configuration:
+        unresolved_by_configuration = {
+            "selected_configuration": single_unresolved
+        }
+
     daily: List[Dict[str, Any]] = []
     for day, day_start, day_end in _utc_days(start, end):
         day_events = [
             event for event in events if day_start <= event["_epoch"] < day_end
         ]
+        day_modeled = {
+            key: interval_rows_for_day(rows, day_start, day_end)
+            for key, rows in by_configuration.items()
+        }
+        day_unresolved = {
+            key: interval_rows_for_day(rows, day_start, day_end)
+            for key, rows in unresolved_by_configuration.items()
+        }
+        status = _day_coverage_status(day_modeled, day_start, day_end)
         observed_ids = sorted({event["cell_id"] for event in day_events})
         observed_area = sum(cells_by_id[cell]["area_km2"] for cell in observed_ids)
         gap_ids = sorted(set(cells_by_id) - set(observed_ids))
         envelope_periods = _envelope_periods(day_events)
-        daily.append(
-            {
-                "utc_date": day.isoformat(),
-                "window_start_utc": _iso(day_start),
-                "window_end_utc_exclusive": _iso(day_end),
-                "observed_area_km2": round(observed_area, 3),
-                "observed_fraction": (
-                    round(observed_area / total_area, 6) if total_area else 0.0
-                ),
-                "gap_area_km2": round(max(0.0, total_area - observed_area), 3),
-                "gap_fraction": (
+        modeled_union = [
+            row
+            for rows in day_modeled.values()
+            for row in rows
+        ]
+        unresolved_union = [
+            row
+            for rows in day_unresolved.values()
+            for row in rows
+        ]
+        row: Dict[str, Any] = {
+            "utc_date": day.isoformat(),
+            "window_start_utc": iso(day_start),
+            "window_end_utc_exclusive": iso(day_end),
+            "coverage_status": status,
+            "modeled_intervals": modeled_union,
+            "unresolved_intervals": unresolved_union,
+            "modeled_hours": _coverage_hours(modeled_union),
+            "unresolved_hours": _coverage_hours(unresolved_union),
+            "observed_area_km2": (
+                None if status == "unmodeled" else round(observed_area, 3)
+            ),
+            "observed_fraction": (
+                None
+                if status == "unmodeled"
+                else (round(observed_area / total_area, 6) if total_area else 0.0)
+            ),
+            "gap_area_km2": (
+                None
+                if status == "unmodeled"
+                else round(max(0.0, total_area - observed_area), 3)
+            ),
+            "gap_fraction": (
+                None
+                if status == "unmodeled"
+                else (
                     round(max(0.0, total_area - observed_area) / total_area, 6)
                     if total_area
                     else 0.0
-                ),
-                "observed_cell_ids": observed_ids,
-                "gap_cell_ids": gap_ids,
-                "event_count": len(day_events),
-                "envelope_period_count": len(envelope_periods),
-                "membership": "epoch in half-open UTC day [start, end)",
-            }
-        )
+                )
+            ),
+            "observed_cell_ids": [] if status == "unmodeled" else observed_ids,
+            "gap_cell_ids": [] if status == "unmodeled" else gap_ids,
+            "event_count": None if status == "unmodeled" else len(day_events),
+            "envelope_period_count": (
+                None if status == "unmodeled" else len(envelope_periods)
+            ),
+            "membership": (
+                "unresolved: no modeled applicability interval; not a "
+                "zero-access row"
+                if status == "unmodeled"
+                else (
+                    "epoch in half-open UTC day [start, end) and modeled "
+                    "applicability interval; unresolved time is not access"
+                )
+            ),
+        }
+        if modeled_intervals_by_configuration:
+            row["modeled_intervals_by_configuration"] = day_modeled
+            row["unresolved_intervals_by_configuration"] = day_unresolved
+            row["partial_coverage_configuration_ids"] = sorted(
+                configuration_id
+                for configuration_id, rows in day_modeled.items()
+                if _day_coverage_status(
+                    {configuration_id: rows}, day_start, day_end
+                )
+                == "partial_day"
+            )
+        daily.append(row)
 
     cell_rows: List[Dict[str, Any]] = []
     spacing_rows: List[Dict[str, Any]] = []
@@ -408,13 +572,42 @@ def summarize_events(
         ),
         "event_spacing_sample_count": len(all_spacings),
         **spacing_stats,
+        "modeled_days": sum(
+            1 for row in daily if row["coverage_status"] != "unmodeled"
+        ),
+        "partial_days": sum(
+            1 for row in daily if row["coverage_status"] == "partial_day"
+        ),
+        "unmodeled_days": sum(
+            1 for row in daily if row["coverage_status"] == "unmodeled"
+        ),
+        "unmodeled_day_count": sum(
+            1 for row in daily if row["coverage_status"] == "unmodeled"
+        ),
+        "partial_day_count": sum(
+            1 for row in daily if row["coverage_status"] == "partial_day"
+        ),
+        "modeled_day_count": sum(
+            1 for row in daily if row["coverage_status"] != "unmodeled"
+        ),
+        "modeled_hours": round(
+            sum(row["modeled_hours"] for row in daily), 6
+        ),
+        "unresolved_hours": round(
+            sum(row["unresolved_hours"] for row in daily), 6
+        ),
         "continuous_viewing_duration_available": False,
         "continuous_uncovered_duration_available": False,
         "accounting_method": accounting_method,
     }
     definitions = {
         "event": event_definition,
-        "daily_cell": DAILY_DEFINITION,
+        "daily_cell": (
+            f"{DAILY_DEFINITION} A UTC day with no accepted applicability "
+            "interval is unmodeled: its event count and area are null, not "
+            "zero. A partially modeled day reports its modeled and unresolved "
+            "intervals separately, and its area covers only modeled time."
+        ),
         "event_spacing": SPACING_DEFINITION,
         "event_spacing_metrics": (
             "mean, median, min, and max over all per-cell spacing samples in "
@@ -428,6 +621,12 @@ def summarize_events(
         ),
         "unavailable_metrics": UNAVAILABLE_DEFINITION,
         "cell_center_sampling": CELL_CENTER_DEFINITION,
+        "applicability_coverage": (
+            "Established applicability and accepted study assumptions are "
+            "half-open UTC intervals. Only their intersection with the study "
+            "window is modeled. Unresolved time is reported, never counted as "
+            "zero events or as a full-day gap."
+        ),
         "time_semantics": "Half-open UTC intervals [start, end); an epoch exactly at a boundary belongs only to the interval starting there.",
     }
     return {

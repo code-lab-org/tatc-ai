@@ -82,6 +82,9 @@ _PRESETS = [
 ]
 MODELS = [preset["model"] for preset in _PRESETS]
 DEFAULT_MODELS = ["deepseek-v4-1-flash"]
+OPENCODE_GO_BASE_URL = "https://opencode.ai/inference/go/v1"
+OPENCODE_GO_DEFAULT_MODEL = "deepseek-v4.1-flash"
+OPENCODE_GO_USER_AGENT = "opencode/1.18.25"
 # Models LibreChat is told not to stream; the probe reports them without failing.
 NO_STREAMING = {preset["model"] for preset in _PRESETS if preset.get("disableStreaming")}
 STREAM_PROMPT = "Look up the ISS with the satellite search tool."
@@ -203,6 +206,8 @@ def request_completion(
     request_timeout: float,
     conversation_deadline: float,
     record: Any = None,
+    user_agent: str = "tatc-ai-eval/1.0",
+    session_id: str = "",
 ) -> Dict[str, Any]:
     """Post one completion request with bounded reads and one retry.
 
@@ -228,6 +233,8 @@ def request_completion(
                 headers={
                     "Authorization": "Bearer " + api_key,
                     "Content-Type": "application/json",
+                    "User-Agent": user_agent,
+                    **({"x-opencode-session": session_id} if session_id else {}),
                 },
             )
             with urllib.request.urlopen(
@@ -319,6 +326,8 @@ class Harness:
         *,
         request_timeout: float = REQUEST_TIMEOUT,
         conversation_timeout: float = CONVERSATION_TIMEOUT,
+        user_agent: str = "tatc-ai-eval/1.0",
+        session_id: str = "",
     ):
         import src.generic_coverage as gc
         import src.server as server
@@ -332,6 +341,8 @@ class Harness:
         self.clock = clock
         self.request_timeout = request_timeout
         self.conversation_timeout = conversation_timeout
+        self.user_agent = user_agent
+        self.session_id = session_id
         tools = asyncio.run(self._list_tools())
         self.tool_names = [t.name for t in tools if t.name not in hide]
         self.tools = [
@@ -414,6 +425,8 @@ class Harness:
             request_timeout=self.request_timeout,
             conversation_deadline=deadline,
             record=record,
+            user_agent=self.user_agent,
+            session_id=self.session_id,
         )
 
     def probe_stream(self, model: str) -> str:
@@ -424,8 +437,15 @@ class Harness:
                          {"role": "user", "content": STREAM_PROMPT}],
         }).encode()
         request = urllib.request.Request(
-            self.base_url + "/chat/completions", data=body,
-            headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"})
+            self.base_url + "/chat/completions",
+            data=body,
+            headers={
+                "Authorization": "Bearer " + self.api_key,
+                "Content-Type": "application/json",
+                "User-Agent": self.user_agent,
+                **({"x-opencode-session": self.session_id} if self.session_id else {}),
+            },
+        )
         deadline = time.monotonic() + self.request_timeout
         try:
             with urllib.request.urlopen(
@@ -564,6 +584,21 @@ def _converse_with_case_state(
         )
 
 
+def _provider_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    """Return the base URL and API key for the selected eval provider."""
+    if getattr(args, "provider", "voyager") == "opencode-go":
+        env_name = args.api_key_env or "OPENCODE_GO_API_KEY"
+        key = os.environ.get(env_name, "").strip()
+        if not key:
+            raise ValueError(
+                f"{env_name} is not set. Export the OpenCode Go key before running "
+                "with --provider opencode-go."
+            )
+        return (args.base_url or OPENCODE_GO_BASE_URL), key
+    env = load_env(ENV_FILE)
+    return env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"]
+
+
 def _selected_models(args: argparse.Namespace) -> List[str]:
     """Resolve the routine model by default and fail on catalog drift.
 
@@ -572,7 +607,13 @@ def _selected_models(args: argparse.Namespace) -> List[str]:
     LibreChat catalog, so a typo cannot silently fall back to another model.
     """
     explicit = bool(args.models)
-    if args.all_models:
+    if getattr(args, "provider", "voyager") == "opencode-go":
+        models = (
+            [model.strip() for model in args.models]
+            if explicit
+            else [OPENCODE_GO_DEFAULT_MODEL]
+        )
+    elif args.all_models:
         models = list(MODELS)
     elif explicit:
         models = [model.strip() for model in args.models]
@@ -584,7 +625,11 @@ def _selected_models(args: argparse.Namespace) -> List[str]:
         )
     if any(not model for model in models):
         raise ValueError("Model IDs must be non-empty strings")
-    if not explicit and not args.all_models:
+    if (
+        not explicit
+        and not args.all_models
+        and getattr(args, "provider", "voyager") == "voyager"
+    ):
         unknown = [model for model in models if model not in MODELS]
         if unknown:
             raise ValueError(
@@ -596,18 +641,28 @@ def _selected_models(args: argparse.Namespace) -> List[str]:
 
 
 def run(args: argparse.Namespace) -> None:
-    env = load_env(ENV_FILE)
     replay = HttpReplay(offline=args.offline)
     replay.install()
-    clock = Clock(replay.recorded_at)
+    clock = Clock(
+        datetime.fromisoformat(args.now) if getattr(args, "now", None) else replay.recorded_at
+    )
     models = _selected_models(args)
+    base_url, api_key = _provider_credentials(args)
+    if getattr(args, "provider", "voyager") == "opencode-go":
+        user_agent = OPENCODE_GO_USER_AGENT
+        session_id = str(uuid.uuid4())
+    else:
+        user_agent = "tatc-ai-eval/1.0"
+        session_id = ""
     harness = Harness(
-        env["VOYAGER_BASE_URL"],
-        env["VOYAGER_API_KEY"],
+        base_url,
+        api_key,
         args.hide,
         clock,
         request_timeout=args.request_timeout,
         conversation_timeout=args.conversation_timeout,
+        user_agent=user_agent,
+        session_id=session_id,
     )
     cases = [c for c in build_cases(clock) if not args.cases or c.id in args.cases]
     streams = probe_streams(harness, models)
@@ -784,7 +839,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="run", help="name for this tool set in the results")
     model_selection = parser.add_mutually_exclusive_group()
-    model_selection.add_argument("--models", nargs="+", help="model IDs, default deepseek-v4-1-flash")
+    parser.add_argument(
+        "--provider",
+        choices=("voyager", "opencode-go"),
+        default="voyager",
+        help="model provider; default ASU Voyager",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="override the provider base URL",
+    )
+    parser.add_argument(
+        "--api-key-env",
+        help="environment variable holding the API key (default OPENCODE_GO_API_KEY)",
+    )
+    model_selection.add_argument("--models", nargs="+", help="model IDs, default deepseek-v4-1-flash or deepseek-v4.1-flash for OpenCode Go")
     model_selection.add_argument("--all-models", action="store_true", help="run every Voyager model in LibreChat")
     parser.add_argument("--cases", nargs="+", help="case IDs to run, default all")
     parser.add_argument("--repeats", type=int, default=1)
@@ -809,6 +878,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--hide", nargs="+", default=[], help="server tools to leave out")
     parser.add_argument("--stream-only", action="store_true", help="only run the streaming probe")
     parser.add_argument("--offline", action="store_true", help="fail on HTTP responses not in the cache")
+    parser.add_argument("--now", help="freeze the eval clock at this ISO UTC time")
     parser.add_argument("--compare", nargs="+", type=Path, help="summarize saved result files and exit")
     parser.add_argument("--rescore", action="store_true", help="with --compare, recheck traces first")
     args = parser.parse_args(argv)

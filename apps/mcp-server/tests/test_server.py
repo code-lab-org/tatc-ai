@@ -817,6 +817,7 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("swath_width_km", properties)
         self.assertIn("configuration_id", properties)
         self.assertIn("configuration_revision", properties)
+        self.assertIn("applicability_assumptions", properties)
         configuration = properties["configuration"]
         configuration_model = configuration["anyOf"][0]
         self.assertEqual(configuration_model["type"], "object")
@@ -839,7 +840,9 @@ class ServerTests(unittest.TestCase):
             )
         self.assertFalse(result.is_error)
         self.assertEqual(json.loads(result.content[0].text), expected)
-        prepare.assert_called_once_with("draft_abc", 2, 2, mock.ANY, None, None)
+        prepare.assert_called_once_with(
+            "draft_abc", 2, 2, mock.ANY, None, None, None
+        )
 
     def test_registry_tools_expose_revision_and_source_check_fields(self):
         tools = {tool.name: tool for tool in self.list_tools()}
