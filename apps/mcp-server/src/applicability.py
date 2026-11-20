@@ -174,7 +174,9 @@ def compute_coverage(
         raise ValueError("requested window start must precede its end")
     established_inside = clip_intervals(established, start, end)
     assumed_inside = clip_intervals(
-        [assumption.interval() for assumption in assumptions], start, end
+        merge_intervals([assumption.interval() for assumption in assumptions]),
+        start,
+        end,
     )
     accepted = merge_intervals([*established_inside, *assumed_inside])
     unresolved = subtract_intervals([(start, end)], accepted)

@@ -32,18 +32,8 @@ from .applicability import (
     combined_coverage_status,
     compute_coverage,
     configuration_established_intervals,
-    modeled_windows,
-    parse_iso,
-    result_completeness,
-)
-from .applicability import (
-    ApplicabilityAssumption,
-    combined_coverage_status,
-    compute_coverage,
-    configuration_established_intervals,
-    iso as _iso,
     merge_intervals,
-    parse_iso as _parse_interval_utc,
+    parse_iso,
     result_completeness,
     subtract_intervals,
 )
@@ -150,6 +140,7 @@ class OmissionRequest(BaseModel):
         "unsupported_instrument",
         "unsupported_mode",
         "unresolved_source_conflict",
+        "outside_applicability",
         "other",
     ]
     reason: str = Field(min_length=1, max_length=4000)
@@ -868,10 +859,7 @@ def _proposal_payload(
         "approximation_status": snapshot["approximation_status"],
         "geometry_checks": snapshot["geometry_checks"],
         "interpretation": snapshot["interpretation"],
-        "warnings": _warnings(
-            configuration, proposal=True, registry_selection=registry_selection
-        )
-        + _applicability_warnings(coverage),
+        "warnings": warnings,
         "limits": limits,
         "evidence_note": EVIDENCE_NOTE,
         "acceptance": {
@@ -1840,26 +1828,57 @@ def _mixed_tasks_for_cells(
     for item in configurations:
         configuration = _configuration_from_mixed_snapshot(item["configuration"])
         satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
-        for row in item["applicability"]["modeled_intervals"]:
+        for window_start, window_end in merge_intervals(
+            [
+                (parse_iso(row["start_utc"]), parse_iso(row["end_utc_exclusive"]))
+                for row in item["applicability"]["modeled_intervals"]
+            ]
+        ):
             tasks.extend(
                 _cell_tasks(
                     configuration,
                     satellite["omm_records"],
                     cells,
-                    parse_iso(row["start_utc"]),
-                    parse_iso(row["end_utc_exclusive"]),
+                    window_start,
+                    window_end,
                 )
             )
     return tasks
 
 
-def _event_summary_counts(accounting: Dict[str, Any]) -> Dict[str, int]:
+def _event_in_modeled_intervals(
+    epoch: Any, modeled_intervals: Sequence[Dict[str, Any]]
+) -> bool:
+    when = epoch if isinstance(epoch, datetime) else _parse_utc(str(epoch), "epoch")
+    return any(
+        parse_iso(row["start_utc"]) <= when < parse_iso(row["end_utc_exclusive"])
+        for row in modeled_intervals
+    )
+
+
+def _event_summary_counts(accounting: Dict[str, Any]) -> Dict[str, Any]:
     daily = accounting["daily"]
     metrics = accounting["metrics"]
+    modeled_days = [
+        row for row in daily if row.get("coverage_status") != "unmodeled"
+    ]
+    full_days = [
+        row for row in modeled_days if row.get("coverage_status") == "full_day"
+    ]
     return {
         "total_days": len(daily),
-        "days_with_events": sum(row["event_count"] > 0 for row in daily),
-        "gap_days": sum(row["event_count"] == 0 for row in daily),
+        "days_with_events": sum(
+            1 for row in modeled_days if (row["event_count"] or 0) > 0
+        ),
+        "gap_days": sum(
+            1 for row in full_days if (row["event_count"] or 0) == 0
+        ),
+        "partial_days": sum(
+            1 for row in daily if row.get("coverage_status") == "partial_day"
+        ),
+        "unmodeled_days": len(daily) - len(modeled_days),
+        "modeled_hours": metrics.get("modeled_hours", 0),
+        "unresolved_hours": metrics.get("unresolved_hours", 0),
         "grid_cell_count": metrics["grid_cell_count"],
         "observed_cell_count": metrics["observed_cell_count"],
         "never_observed_cell_count": metrics["never_observed_cell_count"],
@@ -1900,6 +1919,9 @@ def _mixed_result_payload(
             event
             for event in raw_events
             if event["configuration_id"] == configuration_id
+            and _event_in_modeled_intervals(
+                event["epoch"], item["applicability"]["modeled_intervals"]
+            )
         ]
         normalized = normalize_events(
             config_raw_events,
@@ -1990,7 +2012,18 @@ def _mixed_result_payload(
         item["configuration_id"]: item["applicability"]["unresolved_intervals"]
         for item in proposal["configurations"]
     }
-    combined_events = normalize_mixed_events(raw_events, start, end)
+    combined_raw_events = [
+        event
+        for event in raw_events
+        if any(
+            event["configuration_id"] == item["configuration_id"]
+            and _event_in_modeled_intervals(
+                event["epoch"], item["applicability"]["modeled_intervals"]
+            )
+            for item in proposal["configurations"]
+        )
+    ]
+    combined_events = normalize_mixed_events(combined_raw_events, start, end)
     combined = summarize_events(
         cells,
         combined_events,
@@ -2411,8 +2444,8 @@ def finish_mixed_study(
     )
     work = sum(
         (
-            _parse_interval_utc(row["end_utc_exclusive"])
-            - _parse_interval_utc(row["start_utc"])
+            parse_iso(row["end_utc_exclusive"])
+            - parse_iso(row["start_utc"])
         ).total_seconds()
         for item in proposal["configurations"]
         for row in item["applicability"]["modeled_intervals"]
@@ -2523,7 +2556,10 @@ def _result_payload(
             1 for row in modeled_days if (row["event_count"] or 0) > 0
         ),
         "gap_days": sum(
-            1 for row in modeled_days if (row["event_count"] or 0) == 0
+            1
+            for row in modeled_days
+            if row.get("coverage_status") == "full_day"
+            and (row["event_count"] or 0) == 0
         ),
         "unmodeled_days": len(daily) - len(modeled_days),
         "partial_days": sum(
@@ -2609,15 +2645,17 @@ def _result_payload(
         ],
         "omitted_configurations": [],
         "applicable_dates": {
-            "start_utc": (
+            "start_utc": iso_utc(start),
+            "end_utc_exclusive": iso_utc(end),
+            "modeled_start_utc": (
                 coverage["modeled_intervals"][0]["start_utc"]
                 if coverage.get("modeled_intervals")
-                else iso_utc(start)
+                else None
             ),
-            "end_utc_exclusive": (
+            "modeled_end_utc_exclusive": (
                 coverage["modeled_intervals"][-1]["end_utc_exclusive"]
                 if coverage.get("modeled_intervals")
-                else iso_utc(end)
+                else None
             ),
             "status": coverage.get("status"),
             "modeled_intervals": coverage.get("modeled_intervals", []),
@@ -2887,13 +2925,15 @@ def _finish_study(
             "acceptance. No calculation was run."
         )
     tasks = []
-    cited_windows = [
-        (
-            _parse_interval_utc(row["start_utc"]),
-            _parse_interval_utc(row["end_utc_exclusive"]),
-        )
-        for row in coverage["modeled_intervals"]
-    ]
+    cited_windows = merge_intervals(
+        [
+            (
+                parse_iso(row["start_utc"]),
+                parse_iso(row["end_utc_exclusive"]),
+            )
+            for row in coverage["modeled_intervals"]
+        ]
+    )
     for window_start, window_end in cited_windows:
         tasks.extend(
             _tasks_for_cells(
@@ -2908,7 +2948,17 @@ def _finish_study(
     accounting_method = (
         POINTED_ACCOUNTING_METHOD if study_kind == "pointed" else ACCOUNTING_METHOD
     )
-    events = normalize_events(raw_events, start, end)
+    events = normalize_events(
+        [
+            event
+            for event in raw_events
+            if _event_in_modeled_intervals(
+                event["epoch"], coverage["modeled_intervals"]
+            )
+        ],
+        start,
+        end,
+    )
     accounting = summarize_events(
         cells,
         events,

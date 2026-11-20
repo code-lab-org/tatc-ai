@@ -184,3 +184,119 @@ def test_unmodeled_day_has_null_area_and_is_not_a_gap():
     assert second["gap_cell_ids"] == []
     assert summary["metrics"]["unmodeled_day_count"] == 1
     assert summary["metrics"]["partial_day_count"] == 1
+
+
+def test_overlapping_assumptions_are_merged_before_counting_hours():
+    coverage = compute_coverage(
+        configuration_id="instrument-a",
+        established=[(_dt(hour=0), _dt(hour=2))],
+        assumptions=[
+            _assumption("instrument-a", _dt(hour=2), _dt(hour=4)),
+            _assumption("instrument-a", _dt(hour=3), _dt(hour=5)),
+        ],
+        start=_dt(hour=0),
+        end=_dt(hour=5),
+    )
+    assert coverage["status"] == "complete_under_assumptions"
+    assert coverage["assumed_hours"] == 3
+    assert coverage["modeled_hours"] == 5
+    assert coverage["modeled_intervals"][-1]["end_utc_exclusive"] == (
+        "2026-10-04T05:00:00Z"
+    )
+
+
+def test_summary_counts_ignore_unmodeled_days_and_partial_day_gaps():
+    from src.conical_study import _event_summary_counts
+
+    accounting = {
+        "daily": [
+            {"coverage_status": "full_day", "event_count": 0},
+            {"coverage_status": "partial_day", "event_count": 0},
+            {"coverage_status": "unmodeled", "event_count": None},
+        ],
+        "metrics": {
+            "grid_cell_count": 1,
+            "observed_cell_count": 0,
+            "never_observed_cell_count": 1,
+            "event_count": 0,
+            "envelope_period_count": 0,
+            "modeled_hours": 24,
+            "unresolved_hours": 24,
+        },
+    }
+    counts = _event_summary_counts(accounting)
+    assert counts["gap_days"] == 1
+    assert counts["partial_days"] == 1
+    assert counts["unmodeled_days"] == 1
+    assert counts["days_with_events"] == 0
+
+
+def test_combined_day_is_partial_when_another_configuration_is_unmodeled():
+    start = _dt(hour=0)
+    end = _dt(day=6, hour=0)
+    summary = summarize_events(
+        [_cell()],
+        [],
+        start,
+        end,
+        modeled_intervals_by_configuration={
+            "instrument-a": [
+                {"start_utc": "2026-10-04T00:00:00Z", "end_utc_exclusive": "2026-10-05T00:00:00Z"}
+            ],
+            "instrument-b": [],
+        },
+        unresolved_intervals_by_configuration={
+            "instrument-a": [],
+            "instrument-b": [
+                {"start_utc": "2026-10-04T00:00:00Z", "end_utc_exclusive": "2026-10-05T00:00:00Z"}
+            ],
+        },
+    )
+    row = summary["daily"][0]
+    assert row["coverage_status"] == "partial_day"
+    assert row["partial_coverage_configuration_ids"] == ["instrument-b"]
+    assert row["modeled_hours"] == 24
+    assert summary["daily"][1]["coverage_status"] == "unmodeled"
+
+
+def test_spacing_across_unresolved_time_is_not_reported_as_observed():
+    start = _dt(hour=0)
+    end = _dt(hour=14)
+    events = [
+        {
+            "cell_id": 0,
+            "target_longitude_deg": 0.0,
+            "target_latitude_deg": 0.0,
+            "_epoch": _dt(hour=0),
+            "envelope_start_utc": "2026-10-04T00:00:00Z",
+            "envelope_end_utc": "2026-10-04T00:00:00Z",
+            "contributors": set(),
+        },
+        {
+            "cell_id": 0,
+            "target_longitude_deg": 0.0,
+            "target_latitude_deg": 0.0,
+            "_epoch": _dt(hour=12),
+            "envelope_start_utc": "2026-10-04T12:00:00Z",
+            "envelope_end_utc": "2026-10-04T12:00:00Z",
+            "contributors": set(),
+        },
+    ]
+    summary = summarize_events(
+        [_cell()],
+        events,
+        start,
+        end,
+        modeled_intervals=[
+            {"start_utc": "2026-10-04T00:00:00Z", "end_utc_exclusive": "2026-10-04T06:00:00Z"},
+            {"start_utc": "2026-10-04T12:00:00Z", "end_utc_exclusive": "2026-10-04T14:00:00Z"},
+        ],
+        unresolved_intervals=[
+            {"start_utc": "2026-10-04T06:00:00Z", "end_utc_exclusive": "2026-10-04T12:00:00Z"}
+        ],
+    )
+    row = summary["event_spacing"][0]
+    assert row["event_spacing_sample_count"] == 0
+    assert row["unresolved_spacing_sample_count"] == 1
+    assert row["spacing_status"] == "null_spacing_crosses_unresolved_applicability"
+    assert summary["metrics"]["max_event_spacing_hours"] is None
