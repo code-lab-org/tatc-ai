@@ -1908,4 +1908,32 @@ def build_cases(clock: Clock) -> List[Case]:
                 "SeaWiFS",
             ),
         ),
+        Case(
+            "mixed_partial_s1c_amsr2_omitted",
+            ("mixed", "partial", "omission", "staged_spacecraft"),
+            "Run one partial mixed access study over west=-65, south=0, east=-55, "
+            "north=10 with a 1x1 grid starting at 2026-10-04T00:00:00Z and ending "
+            "at the exclusive timestamp 2026-10-05T00:00:00Z. Copy the exact ISO "
+            "timestamps unchanged. Stage both GCOM-W1 and Sentinel-1C. I select the "
+            "reviewed Sentinel-1C C-SAR IW configuration "
+            "sentinel-1c-c-sar-iw-fixed-view revision 2026-10-30.1. I also "
+            "requested AMSR2 on GCOM-W1 but exclude it from this study. Build the "
+            "omission yourself from the prepare_mixed_study schema: use reason code "
+            "other, a clear reason, and status omitted. Show the partial status, the "
+            "omission reason, and the modeled Sentinel-1C setup. I accept that exact "
+            "partial proposal and omission scope. Run with the returned setup "
+            "revision and accepted_omissions set to exactly the omission IDs "
+            "returned. Then fetch the combined events, daily area, and cells, and "
+            "fetch Sentinel-1C events for its own contribution. Keep event and cell "
+            "pages small. Report partial completeness, name AMSR2 and its reason, "
+            "say its access is unknown, and state that the totals describe only the "
+            "modeled Sentinel-1C subset. These are modeled opportunities, not "
+            "confirmed acquisitions; cells use cell-center samples and "
+            "field-of-regard envelopes are not continuous viewing time.",
+            _mixed_partial(
+                "sentinel-1c-c-sar-iw-fixed-view",
+                "2026-10-30.1",
+                "AMSR2",
+            ),
+        ),
     ]

@@ -1082,14 +1082,24 @@ def test_partial_proposal_requires_exact_omission_acceptance_and_reports_unknown
 
 
 def test_partial_combined_totals_match_the_modeled_subset():
+    window = {
+        "start": "2026-10-04T05:30:00Z",
+        "end": "2026-10-04T11:30:00Z",
+        "grid_rows": 2,
+        "grid_columns": 2,
+    }
+    amsr2 = {
+        "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+        "configuration_revision": "2026-10-27.1",
+    }
+    s1c = {
+        "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+        "configuration_revision": "2026-10-30.1",
+    }
+
     error, text, complete_proposal = _prepared_mixed_study(
-        satellites="GCOM-W1",
-        configurations=[
-            {
-                "configuration_id": "amsr2-gcom-w1-conical-product-sector",
-                "configuration_revision": "2026-10-27.1",
-            }
-        ],
+        configurations=[amsr2, s1c],
+        **window,
     )
     assert not error, text
     error, text, complete = _call(
@@ -1102,13 +1112,24 @@ def test_partial_combined_totals_match_the_modeled_subset():
     )
     assert not error, text
 
+    error, text, amsr2_proposal = _prepared_mixed_study(
+        satellites="GCOM-W1",
+        configurations=[amsr2],
+        **window,
+    )
+    assert not error, text
+    error, text, amsr2_only = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": amsr2_proposal["draft_id"],
+            "accepted_setup_revision": amsr2_proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+
     error, text, partial_proposal = _prepared_mixed_study(
-        configurations=[
-            {
-                "configuration_id": "amsr2-gcom-w1-conical-product-sector",
-                "configuration_revision": "2026-10-27.1",
-            }
-        ],
+        configurations=[amsr2],
         omissions=[
             {
                 "instrument": "C-SAR",
@@ -1119,6 +1140,7 @@ def test_partial_combined_totals_match_the_modeled_subset():
                 "reason": "The Sentinel-1C IW configuration is omitted from this comparison.",
             }
         ],
+        **window,
     )
     assert not error, text
     assert partial_proposal["completeness_status"] == "partial"
@@ -1129,18 +1151,24 @@ def test_partial_combined_totals_match_the_modeled_subset():
     error, text, partial = _finish_partial(partial_proposal, [omission_id])
     assert not error, text
 
-    assert partial["total_roi_area_km2"] == complete["total_roi_area_km2"]
-    assert partial["summary_counts"]["event_count"] == complete["summary_counts"]["event_count"]
-    assert partial["summary_counts"]["observed_cell_count"] == complete["summary_counts"]["observed_cell_count"]
-    assert partial["summary_counts"]["gap_days"] == complete["summary_counts"]["gap_days"]
-    assert partial["metrics"] == complete["metrics"]
-    for summary in (complete, partial):
+    assert complete["summary_counts"]["event_count"] > partial["summary_counts"]["event_count"]
+    assert partial["summary_counts"]["event_count"] > 0
+    for key in ("event_count", "observed_cell_count", "gap_days"):
+        assert (
+            partial["summary_counts"][key] == amsr2_only["summary_counts"][key]
+        ), (key, partial["summary_counts"][key], amsr2_only["summary_counts"][key])
+    assert partial["total_roi_area_km2"] == amsr2_only["total_roi_area_km2"]
+    assert partial["metrics"] == amsr2_only["metrics"]
+    for summary in (complete, partial, amsr2_only):
         error, text, daily = _call(
             "get_mixed_daily", {"result_id": summary["result_id"]}
         )
         assert not error, text
         summary["_daily"] = daily["daily"]
-    assert partial["_daily"] == complete["_daily"]
+    assert partial["_daily"] == amsr2_only["_daily"]
+    assert sum(row["event_count"] for row in complete["_daily"]) > sum(
+        row["event_count"] for row in partial["_daily"]
+    )
 
 
 def test_zero_event_modeled_configuration_is_not_an_omission(monkeypatch):
@@ -1338,8 +1366,8 @@ def test_omission_entries_are_validated_and_cannot_repeat_a_modeled_configuratio
     assert "both a modeled configuration and an omission" in text
 
 
-def test_omission_identity_must_agree_with_the_staged_spacecraft():
-    error, text, _ = _prepared_mixed_study(
+def test_staged_norad_id_is_the_authoritative_omission_identity():
+    error, text, proposal = _prepared_mixed_study(
         omissions=[
             {
                 "instrument": "AMSR-E",
@@ -1351,8 +1379,8 @@ def test_omission_identity_must_agree_with_the_staged_spacecraft():
             }
         ]
     )
-    assert error
-    assert "Correct the omission identity" in text
+    assert not error, text
+    assert proposal["omitted_configurations"][0]["norad_id"] == 62261
 
     error, text, _ = _prepared_mixed_study(
         omissions=[
@@ -1394,12 +1422,125 @@ def test_omission_names_must_match_a_staged_spacecraft_exactly():
     assert "62261" in text
 
 
+def test_omission_identity_accepts_real_celestraknames(monkeypatch):
+    original = _sat_info
+
+    def display_names(identifier):
+        info = copy.deepcopy(original(identifier))
+        if int(info["norad_id"]) == 38337:
+            info["name"] = "GCOM-W1 (SHIZUKU)"
+        return info
+
+    monkeypatch.setattr(
+        generic_coverage.celestrak_client, "get_satellite_info", display_names
+    )
+    s1c = {
+        "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+        "configuration_revision": "2026-10-30.1",
+    }
+    base_omission = {
+        "instrument": "AMSR2",
+        "spacecraft": "GCOM-W1",
+        "status": "omitted",
+        "reason_code": "other",
+        "reason": "The researcher excluded AMSR2 from this study.",
+    }
+    error, text, proposal = _prepared_mixed_study(
+        configurations=[s1c], omissions=[base_omission]
+    )
+    assert not error, text
+    assert proposal["completeness_status"] == "partial"
+    assert proposal["omitted_configurations"][0]["instrument"] == "AMSR2"
+
+    error, text, proposal = _prepared_mixed_study(
+        configurations=[s1c],
+        omissions=[{**base_omission, "spacecraft": "SHIZUKU", "norad_id": 38337}],
+    )
+    assert not error, text
+    assert proposal["omitted_configurations"][0]["norad_id"] == 38337
+
+    error, text, _ = _prepared_mixed_study(
+        configurations=[
+            {
+                "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+                "configuration_revision": "2026-10-27.1",
+            },
+            s1c,
+        ],
+        omissions=[{**base_omission, "norad_id": 99999}],
+    )
+    assert error
+    assert "both a modeled configuration and an omission" in text
+
+
 def test_omission_entries_cannot_repeat():
     error, text, _ = _prepared_mixed_study(
         omissions=[OMITTED_NISAR, copy.deepcopy(OMITTED_NISAR)]
     )
     assert error
     assert "repeats the requested instrument" in text
+
+
+def test_fetch_scope_uses_omission_id_or_instrument_not_shared_spacecraft():
+    error, text, proposal = _prepared_mixed_study(
+        satellites="GCOM-W1",
+        configurations=[
+            {
+                "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+                "configuration_revision": "2026-10-27.1",
+            }
+        ],
+        omissions=[
+            {
+                "instrument": "SGLI",
+                "spacecraft": "GCOM-W1",
+                "status": "omitted",
+                "reason_code": "unsupported_instrument",
+                "reason": "No reviewed SGLI configuration exists in this increment.",
+            }
+        ],
+    )
+    assert not error, text
+    omission_id = proposal["omitted_configurations"][0]["omission_id"]
+    error, text, summary = _finish_partial(proposal, [omission_id])
+    assert not error, text
+
+    error, text, _ = _call(
+        "get_mixed_events",
+        {"result_id": summary["result_id"], "configuration_id": "GCOM-W1"},
+    )
+    assert error
+    assert "was omitted" not in text
+    assert "not in this result" in text
+
+    error, text, _ = _call(
+        "get_mixed_events",
+        {"result_id": summary["result_id"], "configuration_id": "SGLI"},
+    )
+    assert error
+    assert "was omitted" in text
+    assert "access is unknown" in text
+
+
+def test_result_assembly_failure_says_the_setup_can_be_retried(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("snapshot serialization failure")
+
+    monkeypatch.setattr(conical_study, "_mixed_result_payload", fail)
+    error, text, proposal = _prepared_mixed_study()
+    assert not error, text
+    error, text, _ = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert error
+    assert "result assembly failed" in text
+    assert "No result was saved" in text
+    assert "retry the same finish call" in text
 
 
 def test_unsupported_mode_omission_runs_as_a_partial_study():

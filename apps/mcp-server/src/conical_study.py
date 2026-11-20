@@ -992,8 +992,7 @@ def _resolve_omissions(
             instrument == request.instrument.strip().lower()
             and (
                 request.norad_id == norad_id
-                if request.norad_id is not None
-                else _normalized_name(request.spacecraft) in names
+                or _normalized_name(request.spacecraft) in names
             )
             and (not requested_mode or requested_mode == mode)
             for instrument, names, mode, norad_id in modeled
@@ -1013,9 +1012,15 @@ def _normalized_name(value: str) -> str:
     return " ".join(str(value).strip().casefold().split())
 
 
-def _staged_name_matches(requested: str, staged: str) -> bool:
-    requested = _normalized_name(requested)
-    return bool(requested) and requested == _normalized_name(staged)
+def _staged_aliases(name: str) -> set[str]:
+    """Return a CelesTrak display name and its parenthetical aliases."""
+    normalized = _normalized_name(name)
+    aliases = {normalized}
+    base, separator, qualifier = normalized.partition(" (")
+    if separator and qualifier.endswith(")"):
+        aliases.add(base)
+        aliases.add(qualifier[:-1])
+    return aliases
 
 
 def _check_mixed_spacecraft(
@@ -1024,6 +1029,21 @@ def _check_mixed_spacecraft(
     omissions: Sequence[Dict[str, Any]] = (),
 ) -> Dict[int, Dict[str, Any]]:
     staged_by_id = {int(item["norad_id"]): item for item in stage["satellites"]}
+    staged_names = {
+        norad_id: _staged_aliases(str(satellite["satellite"]))
+        for norad_id, satellite in staged_by_id.items()
+    }
+    for configuration in configurations:
+        norad_id = int(configuration.spacecraft.norad_id)
+        if norad_id in staged_names:
+            staged_names[norad_id].update(
+                _normalized_name(name)
+                for name in (
+                    configuration.spacecraft.name,
+                    *configuration.spacecraft.aliases,
+                )
+                if name
+            )
     configured_ids = {int(item.spacecraft.norad_id) for item in configurations}
     if len(configured_ids) > MAX_MIXED_CONFIGURATIONS:
         raise ValueError(
@@ -1032,10 +1052,11 @@ def _check_mixed_spacecraft(
     missing = sorted(configured_ids - set(staged_by_id))
     covered_ids = set(configured_ids)
     for omission in omissions:
+        requested_name = _normalized_name(omission["spacecraft"])
         matched_ids = {
             norad_id
-            for norad_id, satellite in staged_by_id.items()
-            if _staged_name_matches(omission["spacecraft"], str(satellite["satellite"]))
+            for norad_id, names in staged_names.items()
+            if requested_name in names
         }
         if len(matched_ids) > 1:
             raise ValueError(
@@ -1046,14 +1067,7 @@ def _check_mixed_spacecraft(
         omitted_norad = omission.get("norad_id")
         if omitted_norad is not None:
             if omitted_norad in staged_by_id:
-                if omitted_norad not in matched_ids:
-                    raise ValueError(
-                        f"Omission {omission['omission_id']!r} names spacecraft "
-                        f"{omission['spacecraft']!r} with NORAD {omitted_norad}, "
-                        f"but that staged spacecraft is "
-                        f"{staged_by_id[omitted_norad]['satellite']!r}. Correct "
-                        "the omission identity."
-                    )
+                # A staged NORAD ID is the authoritative identity.
                 covered_ids.add(omitted_norad)
                 continue
             if matched_ids:
@@ -1061,7 +1075,8 @@ def _check_mixed_spacecraft(
                     f"Omission {omission['omission_id']!r} names NORAD "
                     f"{omitted_norad}, but staged spacecraft "
                     f"{', '.join(map(str, sorted(matched_ids)))} resolves from "
-                    f"{omission['spacecraft']!r}. Correct the omission identity."
+                    f"{omission['spacecraft']!r}. Correct the omission identity "
+                    "or use the staged NORAD ID."
                 )
         covered_ids.update(matched_ids)
     uncovered = sorted(set(staged_by_id) - covered_ids)
@@ -1072,14 +1087,20 @@ def _check_mixed_spacecraft(
         if uncovered:
             details.append(
                 "staged spacecraft without a selected configuration or recorded "
-                "omission " + ", ".join(map(str, uncovered))
+                "omission: "
+                + ", ".join(
+                    f"{staged_by_id[norad_id]['satellite']!r} (NORAD {norad_id})"
+                    for norad_id in uncovered
+                )
             )
         raise ValueError(
             "Every staged spacecraft must match a selected configuration or a "
             "recorded omission, and every selected configuration must match a "
             "staged spacecraft: "
             + "; ".join(details)
-            + ". Begin a new draft with the exact spacecraft set."
+            + ". Use the exact staged name, a configuration alias on the same "
+            "NORAD, or the omission norad_id. Begin a new draft with the exact "
+            "spacecraft set."
         )
     for configuration in configurations:
         satellite = staged_by_id[int(configuration.spacecraft.norad_id)]
@@ -1999,8 +2020,8 @@ def finish_mixed_study(
     except Exception as exc:
         raise ValueError(
             f"Mixed result assembly failed after calculation: {exc} No result was "
-            "saved. Prepare an updated proposal and obtain a new acceptance before "
-            "running again."
+            "saved. The accepted setup is unchanged, so retry the same finish call; "
+            "if it fails again, report a server error."
         ) from exc
     return _compact_mixed_summary(full, result_id)
 
@@ -2850,11 +2871,7 @@ def _mixed_scope(
                 item
                 for item in payload.get("omitted_configurations", [])
                 if item["omission_id"] == configuration_id
-                or normalized
-                in {
-                    _normalized_name(item["instrument"]),
-                    _normalized_name(item["spacecraft"]),
-                }
+                or normalized == _normalized_name(item["instrument"])
             ),
             None,
         )
