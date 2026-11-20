@@ -1367,11 +1367,27 @@ def test_omission_entries_are_validated_and_cannot_repeat_a_modeled_configuratio
 
 
 def test_staged_norad_id_is_the_authoritative_omission_identity():
-    error, text, proposal = _prepared_mixed_study(
+    error, text, _ = _prepared_mixed_study(
         omissions=[
             {
                 "instrument": "AMSR-E",
                 "spacecraft": "GCOM-W1",
+                "norad_id": 62261,
+                "status": "omitted",
+                "reason_code": "unsupported_instrument",
+                "reason": "No reviewed configuration exists.",
+            }
+        ]
+    )
+    assert error
+    assert "resolves to NORAD 38337" in text
+    assert "norad_id is 62261" in text
+
+    error, text, proposal = _prepared_mixed_study(
+        omissions=[
+            {
+                "instrument": "AMSR-E",
+                "spacecraft": "SENTINEL 1C",
                 "norad_id": 62261,
                 "status": "omitted",
                 "reason_code": "unsupported_instrument",
@@ -1468,6 +1484,44 @@ def test_omission_identity_accepts_real_celestraknames(monkeypatch):
             s1c,
         ],
         omissions=[{**base_omission, "norad_id": 99999}],
+    )
+    assert error
+    assert "both a modeled configuration and an omission" in text
+
+
+def test_omission_duplicate_is_rechecked_after_staged_name_resolution(monkeypatch):
+    original = _sat_info
+
+    def display_names(identifier):
+        info = copy.deepcopy(original(identifier))
+        if int(info["norad_id"]) == 38337:
+            info["name"] = "GCOM-W1 (SHIZUKU)"
+        return info
+
+    monkeypatch.setattr(
+        generic_coverage.celestrak_client, "get_satellite_info", display_names
+    )
+    inline = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text(encoding="utf-8")
+    )
+    inline["spacecraft"]["aliases"] = ["GCOM-W"]
+    error, text, _ = _prepared_mixed_study(
+        satellites="GCOM-W1",
+        configurations=[{"configuration": inline}],
+        omissions=[
+            {
+                "instrument": "AMSR2",
+                "spacecraft": "SHIZUKU",
+                "status": "omitted",
+                "reason_code": "other",
+                "reason": "This duplicates the modeled AMSR2 configuration.",
+            }
+        ],
     )
     assert error
     assert "both a modeled configuration and an omission" in text

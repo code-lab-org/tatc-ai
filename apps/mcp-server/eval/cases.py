@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 FINISH_TOOLS = {
     "finish_access_run",
@@ -1204,13 +1204,24 @@ def _mixed_partial(
     expected_config_id: str,
     expected_revision: str,
     omitted_instrument: str,
+    required_staged_norads: Sequence[int] = (),
 ):
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         del clock
         finish = successful_mixed_finish(trace)
+        staged_norads = set()
+        for call in trace.calls:
+            if call.name == "begin_access_run" and not call.error and call.parsed:
+                staged_norads = {
+                    int(item["norad_id"])
+                    for item in call.parsed.get("satellites", [])
+                    if item.get("norad_id") is not None
+                }
+        staged_ok = set(required_staged_norads).issubset(staged_norads)
         if finish is None or not finish.parsed:
             return {
                 "completed": False,
+                "staged_expected_spacecraft": staged_ok,
                 "omission_recorded": False,
                 "accepted_exact_omission_scope": False,
                 "fetch_headers": False,
@@ -1311,6 +1322,7 @@ def _mixed_partial(
         )
         return {
             "completed": completed,
+            "staged_expected_spacecraft": staged_ok,
             "omission_recorded": omission_recorded,
             "accepted_exact_omission_scope": accepted_scope,
             "fetch_headers": scopes_ok and headers_ok,
@@ -1935,6 +1947,7 @@ def build_cases(clock: Clock) -> List[Case]:
                 "sentinel-1c-c-sar-iw-fixed-view",
                 "2026-10-30.1",
                 "AMSR2",
+                required_staged_norads=(38337, 62261),
             ),
         ),
     ]

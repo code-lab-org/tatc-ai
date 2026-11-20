@@ -1049,6 +1049,15 @@ def _check_mixed_spacecraft(
         raise ValueError(
             f"A mixed study may use at most {MAX_MIXED_CONFIGURATIONS} spacecraft."
         )
+    modeled_identities = [
+        (
+            configuration.instrument.strip().lower(),
+            int(configuration.spacecraft.norad_id),
+            getattr(configuration, "operating_mode", "").strip().lower(),
+        )
+        for configuration in configurations
+    ]
+    resolved_omissions: List[Tuple[Dict[str, Any], set[int]]] = []
     missing = sorted(configured_ids - set(staged_by_id))
     covered_ids = set(configured_ids)
     for omission in omissions:
@@ -1067,8 +1076,17 @@ def _check_mixed_spacecraft(
         omitted_norad = omission.get("norad_id")
         if omitted_norad is not None:
             if omitted_norad in staged_by_id:
+                if matched_ids and omitted_norad not in matched_ids:
+                    raise ValueError(
+                        f"Omission {omission['omission_id']!r} names spacecraft "
+                        f"{omission['spacecraft']!r}, which resolves to NORAD "
+                        f"{', '.join(map(str, sorted(matched_ids)))}, but norad_id "
+                        f"is {omitted_norad}. Correct the omission identity or use "
+                        "a name that matches the staged NORAD."
+                    )
                 # A staged NORAD ID is the authoritative identity.
                 covered_ids.add(omitted_norad)
+                resolved_omissions.append((omission, {omitted_norad}))
                 continue
             if matched_ids:
                 raise ValueError(
@@ -1079,6 +1097,23 @@ def _check_mixed_spacecraft(
                     "or use the staged NORAD ID."
                 )
         covered_ids.update(matched_ids)
+        resolved_omissions.append((omission, set(matched_ids)))
+    for omission, resolved_ids in resolved_omissions:
+        instrument = omission["instrument"].strip().lower()
+        mode = (omission.get("mode") or "").strip().lower()
+        for norad_id in resolved_ids:
+            if any(
+                instrument == modeled_instrument
+                and norad_id == modeled_norad
+                and (not mode or mode == modeled_mode)
+                for modeled_instrument, modeled_norad, modeled_mode in modeled_identities
+            ):
+                raise ValueError(
+                    f"{omission['instrument']!r} on {omission['spacecraft']!r} is "
+                    "both a modeled configuration and an omission after resolving "
+                    "its spacecraft. Choose one status for each requested "
+                    "instrument and mode."
+                )
     uncovered = sorted(set(staged_by_id) - covered_ids)
     if missing or uncovered:
         details = []

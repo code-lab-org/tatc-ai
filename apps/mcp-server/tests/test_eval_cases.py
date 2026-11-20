@@ -1495,3 +1495,29 @@ def test_partial_mixed_eval_checker_requires_omission_scope_and_unknown_access()
     trace.final = "SeaWiFS had zero access; the study is complete."
     checks = case.checks(trace, _clock())
     assert not checks["reported_partial_limits"]
+
+
+def test_partial_staged_case_requires_both_spacecraft():
+    clock = _clock()
+    case = next(
+        case
+        for case in build_cases(clock)
+        if case.id == "mixed_partial_s1c_amsr2_omitted"
+    )
+    trace = Trace(
+        prompt="partial staged omission",
+        calls=[
+            Call(
+                "begin_access_run",
+                {},
+                False,
+                "{}",
+                parsed={"satellites": [{"norad_id": 62261}]},
+            )
+        ],
+        final="",
+    )
+    assert not case.checks(trace, clock)["staged_expected_spacecraft"]
+
+    trace.calls[0].parsed["satellites"].append({"norad_id": 38337})
+    assert case.checks(trace, clock)["staged_expected_spacecraft"]
