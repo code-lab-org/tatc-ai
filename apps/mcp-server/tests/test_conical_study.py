@@ -1349,7 +1349,7 @@ def test_finish_freezes_accepted_stage_before_concurrent_edit(monkeypatch):
 
 
 
-def test_uncovered_applicability_fails_before_calculation(monkeypatch):
+def test_partial_applicability_is_proposed_without_calculation():
     configuration = copy.deepcopy(_config())
     configuration["applicability"]["end_utc_exclusive"] = "2026-10-05T00:30:00Z"
     draft = _begin()
@@ -1357,7 +1357,7 @@ def test_uncovered_applicability_fails_before_calculation(monkeypatch):
     with mock.patch.object(
         conical_study, "collect_cell_events", side_effect=AssertionError("calculated")
     ):
-        error, text, _ = _call(
+        error, text, proposal = _call(
             "prepare_conical_study",
             {
                 "draft_id": draft["draft_id"],
@@ -1366,13 +1366,22 @@ def test_uncovered_applicability_fails_before_calculation(monkeypatch):
                 "configuration": configuration,
             },
         )
-    assert error
-    assert "not fully covered" in text
-    assert "after applicability" in text
-    assert "partial-study" in text
+    assert not error, text
+    assert proposal["completeness_status"] == "partial"
+    assert proposal["applicability_status"] == "partial"
+    assert proposal["unresolved_dates"] == [
+        {
+            "start_utc": "2026-10-05T00:30:00Z",
+            "end_utc_exclusive": "2026-10-05T01:00:00Z",
+            "reason": "no_modeled_interval",
+        }
+    ]
+    assert proposal["applicability"]["modeled_intervals"][0][
+        "start_utc"
+    ] == "2026-10-05T00:00:00Z"
 
     early = copy.deepcopy(_config())
-    early["applicability"]["start_utc"] = "2026-10-05T00:30:00Z"
+    early["applicability"]["start_utc"] = "2026-10-05T02:00:00Z"
     error, text, _ = _call(
         "prepare_conical_study",
         {
@@ -1383,7 +1392,7 @@ def test_uncovered_applicability_fails_before_calculation(monkeypatch):
         },
     )
     assert error
-    assert "before applicability" in text
+    assert "no calculable overlap" in text
 
 
 def test_configuration_mismatch_and_missing_region_fail_before_calculation():

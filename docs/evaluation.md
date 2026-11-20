@@ -12,6 +12,7 @@ timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label routine
 timeout -k 10 1800 .venv312/bin/python -m eval.run_eval --label affected --repeats 3 --cases conical_amsr2_complete pointed_s1c_iw_complete point_study_explicit
 timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label second-model --models glm-5-3 --cases conical_amsr2_complete pointed_s1c_iw_complete
 timeout -k 10 1800 .venv312/bin/python -m eval.run_eval --label issue52-mixed-coverage --workers 4 --repeats 1
+OPENCODE_GO_API_KEY=... timeout -k 10 900 .venv312/bin/python -m eval.run_eval --provider opencode-go --models deepseek-v4.1-flash --label opencode-go
 .venv312/bin/python -m eval.run_eval --compare /path/to/baseline.jsonl /path/to/current-run.jsonl
 ```
 
@@ -21,6 +22,8 @@ The eval reads the proxy key from `apps/librechat/.env` and sends prompts and to
 
 The run writes a timestamped JSONL file under `eval/results/` and prints its summary. The default file keeps scores, counts, and small partial failure progress, not prompts, replies, or full tool text. A companion `-requests.jsonl` file records model, case, turn, attempt, request and response bytes, duration, token usage, request ID, and error category. Pass `--save-traces` only when full traces are needed for diagnosis. `--rescore` needs saved traces, so use `--save-traces` on runs you expect to rescore. Results and request records are ignored local artifacts. Replace the two comparison paths with existing result files; `--compare` summarizes saved runs and does not start a new model evaluation.
 
+The routine provider is ASU Voyager. Use `--provider opencode-go` to send the same OpenAI-compatible requests to OpenCode Go instead; export `OPENCODE_GO_API_KEY`, do not commit it. The OpenCode Go model ID is `deepseek-v4.1-flash`. The runner sends `x-opencode-session` and the OpenCode user agent, as the provider requires. A provider failure is recorded as infrastructure failure, not a model score.
+
 Use the Python 3.12 environment that matches the server Dockerfile, for example `apps/mcp-server/.venv312` if you created one. Token usage plus total duration is all the record keeps; it cannot separate queue time, prefill, and decode time.
 
 The coverage cases include the legacy single-geometry workflow, the conical-scanning cases below, a complete pointed Sentinel-1 IW case, and two mixed-study cases. `short_given` accepts either the legacy regional result or an equivalent named-point result, because the explorer now handles a 24-hour single-city request. `point_study_explicit` requires `analyze_coverage` with two catalog satellites and three named points.
@@ -28,7 +31,8 @@ The coverage cases include the legacy single-geometry workflow, the conical-scan
 - `conical_amsr2_complete`: a study-specific sourced AMSR2 configuration with conflicting nominal/product sector choices and declared approximations. The model must prepare, accept the current revision, run, fetch viewing events, and preserve cell-center and envelope limits. It uses the study-specific fixture with its own ID and revision; the reviewed shared entry is the independent TAT-C reference target.
 - `conical_amsr2_registry_selection`: the model must look up the reviewed shared configuration, leave lookup unselected, prepare with the exact configuration ID and revision the researcher chose, and retain that revision in the result.
 - `conical_amsr2_failed_refresh`: the model records a reported failed source check, uses the researcher's exact prior revision, and carries source uncertainty into the result and reply.
-- `conical_applicability_rejected`: a window outside the established applicability interval. The model must stop before calculation and identify the uncovered dates.
+- `conical_applicability_rejected`: a window entirely outside the established applicability interval. The model must stop before calculation and identify that no part is covered.
+- `conical_applicability_partial`: a window partly outside the established interval. The model must prepare a temporal partial proposal, name the modeled and unresolved intervals, accept it only after the researcher's acceptance, run it, fetch daily rows, and report `partial` without calling unresolved time zero access.
 - `conical_unresolved_sector`: a configuration with no recorded choice between the nominal and product scan sectors. The model must ask for the choice and must not prepare or run.
 - `conical_missing_evidence`: a configuration missing the measured cone/sector evidence. The model must not invent evidence or substitute a nominal swath.
 - `pointed_s1c_iw_complete`: the model must look up and explicitly select Sentinel-1C C-SAR IW revision `2026-10-30.1`, use `prepare_pointed_study` and `finish_pointed_study`, retrieve event, daily, cell, revisit, and per-cell event-spacing views, and carry fixed-roll, source-reference, off-nadir/incidence, cell-center, and acquisition-schedule limits into its reply.
@@ -79,3 +83,9 @@ Run only this check with:
 cd apps/mcp-server
 .venv312/bin/python -m eval.run_eval --stream-only
 ```
+
+## Issue #54 applicability evaluation
+
+The temporal-partial path was checked against OpenCode Go with `deepseek-v4.1-flash`, one repeat per case. The model prepared the partial proposal, named the modeled and unresolved intervals, accepted the exact setup revision, ran the study, fetched daily rows, and reported `partial` without calling unresolved time zero access. `conical_applicability_partial` passed in `eval/results/20261120T082405Z-go-partial5.jsonl`; `conical_applicability_rejected` passed in the combined `20261120T082537Z-issue54-opencode-go` run. The combined run's `mixed_amsr2_s1c_complete` row is an infrastructure failure because the recorded cache clock and the live CelesTrak OMM epoch are outside the 14-day window; no mixed conclusion should be drawn from that row. The focused unit and integration suite covers mixed partial dates separately.
+
+The OpenCode Go key was not committed. The runner reads `OPENCODE_GO_API_KEY`, sends `x-opencode-session` and an `opencode/` user agent, and uses `https://opencode.ai/inference/go/v1`. A missing key fails before any model request. This run used an explicit `--now` aligned with the live OMM fixture; replay-only runs continue to use the cache's recorded time.

@@ -358,6 +358,15 @@ class ConicalConfiguration(_StrictModel):
     operating_mode: str = Field(min_length=1)
     channel: ChannelIdentity
     applicability: ApplicabilityInterval
+    additional_applicability: List[ApplicabilityInterval] = Field(
+        default_factory=list,
+        max_length=12,
+        description=(
+            "Additional established UTC validity intervals for the same "
+            "configuration revision. Keep disjoint intervals as separate "
+            "records instead of filling the gaps between them."
+        ),
+    )
     geometry: ConicalGeometry
     evidence: List[SourceEvidence] = Field(min_length=1)
     source_revision: SourceRevision
@@ -386,6 +395,8 @@ class ConicalConfiguration(_StrictModel):
         known = set(evidence_ids)
 
         referenced: List[str] = list(self.applicability.evidence_ids)
+        for interval in self.additional_applicability:
+            referenced += list(interval.evidence_ids)
         referenced += list(self.source_revision.evidence_ids)
         for collection in (
             self.approximations,
@@ -429,6 +440,22 @@ class ConicalConfiguration(_StrictModel):
             raise ValueError(
                 "missing source evidence for: " + ", ".join(missing_support)
             )
+
+        intervals = [
+            (self.applicability.start_utc, self.applicability.end_utc_exclusive),
+            *(
+                (interval.start_utc, interval.end_utc_exclusive)
+                for interval in self.additional_applicability
+            ),
+        ]
+        ordered = sorted(intervals, key=lambda row: _utc(row[0]))
+        for previous, current in zip(ordered, ordered[1:]):
+            if _utc(current[0]) < _utc(previous[1]):
+                raise ValueError(
+                    "applicability intervals must not overlap; keep disjoint "
+                    "intervals as separate records instead of filling or "
+                    "duplicating established time"
+                )
 
         _illumination_warning(
             self.geometry.illumination_requirement,

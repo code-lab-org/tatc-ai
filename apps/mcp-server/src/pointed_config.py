@@ -18,6 +18,7 @@ from .conical_config import (
     SourceRevision,
     SpacecraftIdentity,
     _illumination_warning,
+    _utc,
     iso_utc,
 )
 
@@ -386,6 +387,15 @@ class PointedConfiguration(_StrictModel):
     operating_mode: Literal["IW"]
     channel: ChannelIdentity
     applicability: ApplicabilityInterval
+    additional_applicability: List[ApplicabilityInterval] = Field(
+        default_factory=list,
+        max_length=12,
+        description=(
+            "Additional established UTC validity intervals for the same "
+            "configuration revision. Keep disjoint intervals as separate "
+            "records instead of filling the gaps between them."
+        ),
+    )
     geometry: PointedGeometry
     evidence: List[SourceEvidence] = Field(min_length=1)
     source_revision: SourceRevision
@@ -434,6 +444,8 @@ class PointedConfiguration(_StrictModel):
             *self.source_revision.evidence_ids,
             *self.geometry.geometry_evidence_ids,
         ]
+        for interval in self.additional_applicability:
+            referenced.extend(interval.evidence_ids)
         for row in self.geometry.source_subswath_angles:
             referenced.extend(row.evidence_ids)
         for item in self.approximations:
@@ -452,6 +464,22 @@ class PointedConfiguration(_StrictModel):
                 "configuration references unknown evidence_id values: "
                 + ", ".join(missing)
             )
+
+        intervals = [
+            (self.applicability.start_utc, self.applicability.end_utc_exclusive),
+            *(
+                (interval.start_utc, interval.end_utc_exclusive)
+                for interval in self.additional_applicability
+            ),
+        ]
+        ordered = sorted(intervals, key=lambda row: _utc(row[0]))
+        for previous, current in zip(ordered, ordered[1:]):
+            if _utc(current[0]) < _utc(previous[1]):
+                raise ValueError(
+                    "applicability intervals must not overlap; keep disjoint "
+                    "intervals as separate records instead of filling or "
+                    "duplicating established time"
+                )
 
         if self.interpretation.selected_mode != self.operating_mode:
             raise ValueError("interpretation.selected_mode must match operating_mode 'IW'")
