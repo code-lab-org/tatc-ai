@@ -113,17 +113,22 @@ def _set_region(draft_id, longitude, latitude):
     return payload
 
 
-def _prepare(draft_id, configuration_id=CONFIGURATION_ID, revision=CONFIGURATION_REVISION):
-    return _call(
-        "prepare_pointed_study",
-        {
-            "draft_id": draft_id,
-            "grid_rows": 1,
-            "grid_columns": 1,
-            "configuration_id": configuration_id,
-            "configuration_revision": revision,
-        },
-    )
+def _prepare(
+    draft_id,
+    configuration_id=CONFIGURATION_ID,
+    revision=CONFIGURATION_REVISION,
+    orbit_direction=None,
+):
+    arguments = {
+        "draft_id": draft_id,
+        "grid_rows": 1,
+        "grid_columns": 1,
+        "configuration_id": configuration_id,
+        "configuration_revision": revision,
+    }
+    if orbit_direction is not None:
+        arguments["orbit_direction"] = orbit_direction
+    return _call("prepare_pointed_study", arguments)
 
 
 def _direct_pointed_observations(case, roll_angle_deg=None):
@@ -790,3 +795,49 @@ def test_reference_fixture_has_both_sides_and_broad_envelope_nonviews():
             }
         )
         assert len(adapted) == envelope_case["expected_view_event_count"]
+
+
+def test_pointed_pass_direction_filter_keeps_only_the_matching_pass():
+    case = next(
+        item
+        for item in _reference()["cases"]
+        if item["case_id"] == "ascending-right-looking"
+    )
+
+    def run(direction):
+        draft = _begin(case["window_start_utc"], case["window_end_utc_exclusive"])
+        _set_region(
+            draft["draft_id"],
+            case["target"]["longitude_deg"],
+            case["target"]["latitude_deg"],
+        )
+        error, text, proposal = _prepare(
+            draft["draft_id"], orbit_direction=direction
+        )
+        assert not error, text
+        assert proposal["orbit_direction_filter"] == direction
+        error, text, summary = _call(
+            "finish_pointed_study",
+            {
+                "draft_id": draft["draft_id"],
+                "accepted_setup_revision": proposal["setup_revision"],
+                "accept_setup": True,
+            },
+        )
+        assert not error, text
+        assert summary["event_filter"]["orbit_direction"] == direction
+        return summary
+
+    ascending = run("ascending")
+    assert ascending["summary_counts"]["event_count"] == 1
+    error, text, page = _call(
+        "get_pointed_events",
+        {"result_id": ascending["result_id"], "limit": 5},
+    )
+    assert not error, text
+    assert all(
+        event["orbit_direction"] == "ascending" for event in page["events"]
+    )
+
+    descending = run("descending")
+    assert descending["summary_counts"]["event_count"] == 0

@@ -1200,6 +1200,79 @@ def _mixed_complete(
     return checks
 
 
+def _mixed_follow_up_grid():
+    """Require a second accepted run after changing only the grid."""
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        prepares = [
+            call
+            for call in trace.calls
+            if call.name == "prepare_mixed_study"
+            and not call.error
+            and call.parsed
+        ]
+        finishes = [
+            call
+            for call in trace.calls
+            if call.name == "finish_mixed_study"
+            and not call.error
+            and call.parsed
+        ]
+        grids = [
+            (call.args.get("grid_rows"), call.args.get("grid_columns"))
+            for call in prepares
+        ]
+        changed_grid = grids[:2] == [(2, 2), (3, 3)]
+        begins = [
+            call
+            for call in trace.calls
+            if call.name == "begin_access_run" and not call.error
+        ]
+        regions = [
+            call
+            for call in trace.calls
+            if call.name == "set_access_region" and not call.error
+        ]
+        same_scope = (
+            len(prepares) >= 2
+            and all(
+                prepares[0].args.get(key) == prepares[1].args.get(key)
+                for key in (
+                    "configurations",
+                    "omissions",
+                    "applicability_assumptions",
+                )
+            )
+            and (len(begins) < 2 or begins[0].args == begins[1].args)
+            and (len(regions) < 2 or regions[0].args == regions[1].args)
+        )
+        revisions = {
+            summary.get("setup_revision")
+            for call in finishes
+            for summary in [call.parsed]
+            if summary.get("setup_revision")
+        }
+        result_ids = {
+            summary.get("result_id")
+            for call in finishes
+            for summary in [call.parsed]
+            if summary.get("result_id")
+        }
+        return {
+            "two_runs": len(finishes) >= 2,
+            "grid_changed": changed_grid,
+            "same_scope": same_scope,
+            "new_revision": len(revisions) >= 2,
+            "accepted_both": all(
+                call.args.get("accept_setup") is True for call in finishes
+            ),
+            "two_results": len(result_ids) >= 2,
+        }
+
+    return checks
+
+
 def _mixed_partial(
     expected_config_id: str,
     expected_revision: str,
@@ -1931,6 +2004,22 @@ def build_cases(clock: Clock) -> List[Case]:
                     "sentinel-1c-c-sar-iw-fixed-view": {"get_mixed_events"},
                 },
             ),
+        ),
+        Case(
+            "mixed_follow_up_grid",
+            ("mixed", "follow_up", "changed_grid"),
+            "Run one mixed access study over west=-65, south=0, east=-55, north=10 "
+            "starting at 2026-10-04T00:00:00Z and ending at the exclusive timestamp "
+            "2026-10-05T00:00:00Z. Use a 2x2 grid and these exact reviewed "
+            "configurations: AMSR2 on GCOM-W1, "
+            "amsr2-gcom-w1-conical-product-sector revision 2026-10-27.1, and "
+            "Sentinel-1C C-SAR IW, sentinel-1c-c-sar-iw-fixed-view revision "
+            "2026-10-30.1. Look up both revisions, stage both spacecraft, prepare, "
+            "and run only after accepting the proposal. After the first result, "
+            "change only the grid to 3x3 and run the updated study. Do not reuse "
+            "the first setup revision for the second run. Report both result IDs "
+            "and state that only the grid changed.",
+            _mixed_follow_up_grid(),
         ),
         Case(
             "mixed_shared_spacecraft_daylight",

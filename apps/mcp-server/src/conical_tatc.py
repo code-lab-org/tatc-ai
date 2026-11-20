@@ -8,10 +8,8 @@ mission-specific defaults.
 
 from __future__ import annotations
 
-import importlib.metadata
-import platform
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Sequence
 
 from tatc.analysis import collect_observations
@@ -24,6 +22,7 @@ from tatc.schemas import (
 from tatc.utils import NadirReference, VelocityFrame
 
 from .conical_config import ConicalConfiguration
+from .software import software_versions
 from .tatc_integration import create_orbit_from_omm
 
 
@@ -38,8 +37,38 @@ class MappedConical:
     swath_width_km: float
 
 
-def tatc_version() -> str:
-    return importlib.metadata.version("tatc")
+def orbit_directions_at(orbit: Any, epochs: Sequence[datetime]) -> List[str]:
+    """Classify events by the latitude change around each epoch.
+
+    TAT-C does not expose a pass-direction field, so this uses the propagated
+    geodetic latitude. The before and after times are propagated in one call
+    per cell. A zero latitude change is unclassified; a filter excludes it.
+    """
+    if not epochs:
+        return []
+    normalized = [
+        epoch if epoch.tzinfo is not None else epoch.replace(tzinfo=timezone.utc)
+        for epoch in epochs
+    ]
+    times = [epoch - timedelta(seconds=1) for epoch in normalized] + [
+        epoch + timedelta(seconds=1) for epoch in normalized
+    ]
+    try:
+        positions = orbit.get_geographic_position(times)
+        latitudes = positions.latitude.degrees
+    except (ValueError, TypeError, AttributeError, KeyError, IndexError) as exc:
+        raise ValueError(f"Could not classify pass direction: {exc}") from exc
+    count = len(normalized)
+    return [
+        (
+            "ascending"
+            if latitudes[count + index] > latitudes[index]
+            else "descending"
+            if latitudes[count + index] < latitudes[index]
+            else "unknown"
+        )
+        for index in range(count)
+    ]
 
 
 def build_conical_satellite(
@@ -98,7 +127,7 @@ def resolved_snapshot(
     snapshot = configuration.portable()
     altitude_km = round(mapped.mean_altitude_m / 1000.0, 3)
     snapshot["tatc_mapping"] = {
-        "tatc_version": tatc_version(),
+        "tatc_version": software_versions()["tatc"],
         "instrument_class": "tatc.schemas.ConicalInstrument",
         "velocity_frame_source": (
             "tatc.schemas.Attitude(velocity_frame=...) on the satellite; the "
@@ -124,11 +153,7 @@ def resolved_snapshot(
             "sample-size and sample-spacing helpers, not cone-crossing epochs.",
         ],
     }
-    snapshot["software"] = {
-        "tatc": tatc_version(),
-        "python": platform.python_version(),
-        "server": "tatc-ai-mcp-server",
-    }
+    snapshot["software"] = software_versions()
     return snapshot
 
 
@@ -161,11 +186,13 @@ def collect_cell_events(task: Dict[str, Any]) -> List[Dict[str, Any]]:
         raise ValueError(
             f"TAT-C conical analysis failed for cell {task['cell_id']}: {exc}"
         ) from exc
-    return event_rows_from_observations(observations, configuration, int(task["cell_id"]))
+    return event_rows_from_observations(
+        observations, configuration, int(task["cell_id"]), mapped.satellite.orbit
+    )
 
 
 def event_rows_from_observations(
-    observations: Any, configuration: Any, cell_id: int
+    observations: Any, configuration: Any, cell_id: int, orbit: Any
 ) -> List[Dict[str, Any]]:
     """Normalize TAT-C observation rows shared by pointed and conical adapters."""
     events: List[Dict[str, Any]] = []
@@ -187,4 +214,7 @@ def event_rows_from_observations(
                 "configuration_revision": configuration.revision,
             }
         )
+    directions = orbit_directions_at(orbit, [event["epoch"] for event in events])
+    for event, direction in zip(events, directions):
+        event["orbit_direction"] = direction
     return events

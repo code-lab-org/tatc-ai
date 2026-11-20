@@ -16,7 +16,8 @@ VIEWER_PATH = "/visualization/v1/"
 CESIUM_PATH = "/visualization/cesium/1.146/"
 
 
-def build_viewer_url(result: dict) -> str:
+def public_base_url() -> str:
+    """Return the browser-facing server URL without a trailing slash."""
     base = os.environ.get("TATC_VIEWER_BASE_URL") or os.environ.get(
         "MCP_BASE_URL", "http://localhost:8000"
     )
@@ -32,6 +33,10 @@ def build_viewer_url(result: dict) -> str:
         raise ValueError(
             "TATC_VIEWER_BASE_URL must be a browser-accessible HTTP(S) server URL"
         )
+    return base.rstrip("/")
+
+
+def build_viewer_url(result: dict) -> str:
     payload = json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
     if len(payload) > 8_000_000:
         raise ValueError("Visualization scene exceeds the supported size")
@@ -40,7 +45,7 @@ def build_viewer_url(result: dict) -> str:
     )
     if len(encoded) > 2_000_000:
         raise ValueError("Visualization scene exceeds the supported size")
-    return base.rstrip("/") + VIEWER_PATH + "launch#v1." + encoded
+    return public_base_url() + VIEWER_PATH + "launch#v1." + encoded
 
 
 def register_viewer_routes(mcp):

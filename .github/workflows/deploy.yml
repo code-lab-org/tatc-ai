@@ -73,6 +73,8 @@ jobs:
         with:
           context: .
           file: apps/mcp-server/Dockerfile
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}

@@ -18,6 +18,9 @@ COPY --from=viewer-assets /assets/node_modules/cesium/Build/Cesium /app/viewer-a
 COPY --from=viewer-assets /assets/node_modules/cesium/LICENSE.md /app/viewer-assets/CESIUM-LICENSE.md
 COPY apps/mcp-server/data /app/data
 
+ARG GIT_SHA=dev
+ENV TATC_AI_SERVER_VERSION=${GIT_SHA}
+
 EXPOSE 8000
 
 CMD ["python", "-m", "src.server"]

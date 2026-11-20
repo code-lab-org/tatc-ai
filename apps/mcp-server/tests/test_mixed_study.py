@@ -4,11 +4,14 @@ import asyncio
 import copy
 import hashlib
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from fastmcp import Client
+from starlette.testclient import TestClient
 from pyproj import Geod
 
 from src import (
@@ -17,6 +20,7 @@ from src import (
     coverage_core,
     generic_coverage,
     result_store,
+    study_export,
 )
 from src import server as server_module
 
@@ -257,7 +261,8 @@ def test_mixed_finish_and_fetch_support_combined_and_configuration_scopes():
             assert len(provenance_bytes) < 10_000, (
                 f"repeated provenance header is {len(provenance_bytes)} characters"
             )
-            assert len(response_bytes) < 25_000, (
+            # The pass-direction filter adds a small per-fetch record.
+            assert len(response_bytes) < 26_000, (
                 f"sample fetch response is {len(response_bytes)} characters"
             )
             compact_snapshots = fetched["provenance"]["setup_snapshot"]["configurations"]
@@ -1915,3 +1920,226 @@ def test_multi_day_mixed_study_handles_unmodeled_days(monkeypatch):
     assert not error, text
     assert summary["completeness_status"] == "partial"
     assert summary["summary_counts"]["unmodeled_days"] >= 0
+
+
+def test_mixed_pass_direction_filter_keeps_only_matching_events():
+    config = {
+        "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+        "configuration_revision": "2026-10-27.1",
+    }
+    scenarios = [
+        {
+            "direction": "descending",
+            "region": (0.0, -65.0, 10.0, -55.0),
+            "start": "2026-10-05T00:00:00Z",
+            "end": "2026-10-05T01:00:00Z",
+            "expected": 4,
+        },
+        {
+            "direction": "ascending",
+            "region": (-172.0, 0.0, -158.0, 10.0),
+            "start": "2026-10-05T00:40:00Z",
+            "end": "2026-10-05T01:00:00Z",
+            "expected": 4,
+        },
+    ]
+    for scenario in scenarios:
+        for direction in ("descending", "ascending"):
+            selected = {**config, "orbit_direction": direction}
+            error, text, proposal = _prepared_mixed_study(
+                start=scenario["start"],
+                end=scenario["end"],
+                grid_rows=2,
+                grid_columns=2,
+                region=scenario["region"],
+                configurations=[selected],
+                satellites="GCOM-W1",
+            )
+            assert not error, text
+            assert (
+                proposal["configurations"][0]["orbit_direction_filter"]
+                == direction
+            )
+            assert proposal["configurations"][0]["warnings"]
+            error, text, summary = _call(
+                "finish_mixed_study",
+                {
+                    "draft_id": proposal["draft_id"],
+                    "accepted_setup_revision": proposal["setup_revision"],
+                    "accept_setup": True,
+                },
+            )
+            assert not error, text
+            assert summary["event_filter"]["orbit_direction"] == "per_configuration"
+            assert summary["event_filter"]["by_configuration"][
+                "amsr2-gcom-w1-conical-product-sector"
+            ]["orbit_direction"] == direction
+            count = summary["configuration_summaries"][0]["summary_counts"][
+                "event_count"
+            ]
+            expected = scenario["expected"] if direction == scenario["direction"] else 0
+            assert count == expected
+            error, text, page = _call(
+                "get_mixed_events",
+                {
+                    "result_id": summary["result_id"],
+                    "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+                    "limit": 20,
+                },
+            )
+            assert not error, text
+            assert page["total_events"] == count
+            assert all(
+                event["orbit_direction"] == direction for event in page["events"]
+            )
+
+
+def test_export_study_returns_a_downloadable_file_with_exact_orbits():
+    error, text, proposal = _prepared_mixed_study(
+        start="2026-10-04T00:00:00Z",
+        end="2026-10-05T00:00:00Z",
+        grid_rows=2,
+        grid_columns=2,
+        configurations=[
+            {
+                "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+                "configuration_revision": "2026-10-27.1",
+                "orbit_direction": "descending",
+            },
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
+    )
+    assert not error, text
+    error, text, summary = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+
+    error, text, link = _call("export_study", {"result_id": summary["result_id"]})
+    assert not error, text
+    assert link["file_name"].endswith(".json")
+    parts = urlsplit(link["download_url"])
+    assert parts.path.startswith("/study-export/")
+
+    with TestClient(server_module.mcp.http_app()) as client:
+        response = client.get(parts.path)
+    assert response.status_code == 200
+    assert "attachment" in response.headers["content-disposition"]
+    document = response.json()
+    assert document["schema_version"] == "tatc-study-export-v1"
+    assert document["study"]["result_id"] == summary["result_id"]
+    assert len(document["configurations"]) == 2
+    assert len(document["orbits"]) == 2
+    assert all(orbit["omm_records"] for orbit in document["orbits"])
+    assert document["software"]
+    assert document["results"]["combined"]["events"]
+    assert (
+        document["results"]["by_configuration"][
+            "amsr2-gcom-w1-conical-product-sector"
+        ]["events"]
+    )
+    assert document["replay"]["prepare"]["configurations"]
+    assert document["replay"]["prepare"]["configurations"][0][
+        "orbit_direction"
+    ] == "descending"
+    assert document["configurations"][0]["orbit_direction_filter"] == "descending"
+    assert document["replay"]["begin"]["satellite_identifier"] == (
+        "GCOM-W1, SENTINEL-1C"
+    )
+
+    replay = document["replay"]
+    error, text, replay_draft = _call(
+        "begin_access_run",
+        {
+            "satellite_identifier": replay["begin"]["satellite_identifier"],
+            "start_time": replay["begin"]["start_time"],
+            "end_time": replay["begin"]["end_time"],
+        },
+    )
+    assert not error, text
+    error, text, _ = _call(
+        "set_access_region",
+        {
+            "draft_id": replay_draft["draft_id"],
+            "west_lon": replay["region"]["west"],
+            "south_lat": replay["region"]["south"],
+            "east_lon": replay["region"]["east"],
+            "north_lat": replay["region"]["north"],
+        },
+    )
+    assert not error, text
+    error, text, replayed = _call(
+        "prepare_mixed_study",
+        {"draft_id": replay_draft["draft_id"], **replay["prepare"]},
+    )
+    assert not error, text
+    assert replayed["setup_revision"] == summary["setup_revision"]
+
+    with TestClient(server_module.mcp.http_app()) as client:
+        tampered = client.get(parts.path[:-1] + "0")
+        expired = client.get(
+            "/study-export/"
+            + study_export._token(summary["result_id"], time.time() - 1)
+        )
+    assert tampered.status_code == 404
+    assert expired.status_code == 410
+
+    result_store.clear()
+    with TestClient(server_module.mcp.http_app()) as client:
+        missing = client.get(
+            "/study-export/"
+            + study_export._token(summary["result_id"], time.time() + 60)
+        )
+    assert missing.status_code == 404
+
+
+def test_mixed_setup_getter_returns_the_full_accepted_snapshot():
+    error, text, proposal = _prepared_mixed_study(
+        start="2026-10-04T00:00:00Z",
+        end="2026-10-05T00:00:00Z",
+        grid_rows=2,
+        grid_columns=2,
+    )
+    assert not error, text
+    error, text, draft_setup = _call(
+        "get_study_setup",
+        {
+            "draft_id": proposal["draft_id"],
+            "setup_revision": proposal["setup_revision"],
+        },
+    )
+    assert not error, text
+    assert draft_setup["study_kind"] == "mixed"
+    assert len(draft_setup["setup_snapshot"]["configurations"]) == 2
+
+    error, text, summary = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    error, text, setup = _call(
+        "get_study_setup",
+        {"result_id": summary["result_id"], "study_kind": "mixed"},
+    )
+    assert not error, text
+    assert setup["status"] == "accepted"
+    assert setup["setup_revision"] == proposal["setup_revision"]
+    assert [
+        item["configuration_id"]
+        for item in setup["setup_snapshot"]["configurations"]
+    ] == [
+        "amsr2-gcom-w1-conical-product-sector",
+        "sentinel-1c-c-sar-iw-fixed-view",
+    ]

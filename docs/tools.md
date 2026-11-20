@@ -28,7 +28,7 @@ A legacy run takes three calls:
 
 `resolve_instrument_geometry` returns instrument context and extracted numeric candidates for the assistant to assess before running coverage. `convert_swath_to_field_of_regard` converts a swath width at an altitude with the same TAT-C math used by a run.
 
-Windows of three days or less allow 144 cells. Longer windows allow 36 cells and 72 cells times the number of satellites, and can take minutes. Legacy response fields and interval definitions are unchanged; their saved results carry `accounting_method: "legacy_intervals_v1"`.
+Windows of three days or less allow 144 cells. Longer windows allow 36 cells and 72 cells times the number of satellites, and can take minutes. Legacy response fields and interval definitions are unchanged; their saved results carry `accounting_method: "legacy_intervals_v1"`. The legacy interval workflow does not support an ascending or descending pass filter. Use a conical, pointed, or mixed event study for that.
 
 `get_access_daily` pages through daily observed and gap areas. `get_access_cells` returns the grid as GeoJSON with per-cell access counts and revisit, filtered to all, observed, or gaps. `get_access_revisit` returns revisit numbers. Results and drafts expire after 24 hours. Coverage estimates model satellite access. They do not include actual acquisitions or cloud cover.
 
@@ -71,7 +71,7 @@ A study takes four calls:
 3. `prepare_conical_study` with draft ID and grid rows and columns, plus either one complete conical configuration or an exact registry `configuration_id` and `configuration_revision`. It validates and resolves the configuration but runs no calculation. It returns the region, grid, window, chosen source options, approximations, warnings, limits, a `setup_revision`, a `configuration_digest`, and a compact `snapshot` reference. The full configuration, evidence excerpts, and rationales stay in the temporary store.
 4. `finish_conical_study` with the draft ID, the exact `setup_revision`, and `accept_setup=true` only after the researcher accepts the proposal. Its compact result carries the same acceptance identity and snapshot reference.
 
-Use `get_study_setup` with the draft or result ID and optional exact `setup_revision` to retrieve the full immutable setup on demand. It validates the ID's expiry, study kind, and revision and never re-resolves the latest registry revision. A result keeps the accepted configuration and evidence even after a later registry change.
+Use `get_study_setup` with the draft or result ID and optional exact `setup_revision` to retrieve the full immutable setup on demand. It supports conical, pointed, and mixed studies, validates the ID's expiry, study kind, and revision, and never re-resolves the latest registry revision. A result keeps the accepted configuration and evidence even after a later registry change.
 
 The preparation step is a separate request form from legacy geometry. Do not pass `field_of_regard_deg` or `swath_width_km` to a conical study; do not pass a conical configuration to the legacy finish tool. A stale revision, changed region, changed grid, changed orbit, changed configuration, changed source choice, changed approximation, or changed software version fails before calculation. Preparing the same draft again replaces its proposal, so an older acceptance no longer applies.
 
@@ -134,6 +134,22 @@ The result uses `accounting_method: "conical_events_v1"`:
 - A saved result with zero events is a modeled zero over the accepted window. An unresolved or rejected setup produces no result and must not be described as zero access.
 - The compact result states `completeness_status: complete` only when established applicability covers the whole requested window. `complete_under_assumptions` means the window is fully modeled but part of it relies on an accepted applicability assumption rather than independent source establishment. `partial` means at least one requested interval or configuration remains unresolved. `modeled_configurations`, `omitted_configurations`, `applicable_dates`, and `unresolved_dates` make that scope explicit.
 
+### Pass direction
+
+A satellite travels north on an ascending pass and south on a descending pass. Some sensors collect only on one side, and some studies only use one side. Pass `orbit_direction` as `ascending` or `descending` to `prepare_conical_study` or `prepare_pointed_study`, or add it to one mixed selection. Omit it to count both directions.
+
+TAT-C does not expose a pass-direction field. The server computes the sign of the propagated geodetic latitude change around each event epoch. A zero change is unclassified; when a filter is set, unclassified events are excluded. The setup, result, and every fetch carry an `event_filter` record with the direction, excluded event count, and unclassified event count. The filter is a study setting, not an instrument property, so it does not change the shared configuration revision.
+
+```json
+{
+  "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+  "configuration_revision": "2026-10-27.1",
+  "orbit_direction": "descending"
+}
+```
+
+The same filter works for a single study by passing `orbit_direction` beside the configuration selection. A changed direction changes the setup revision and requires a new acceptance.
+
 ### Examples: complete, instrument-partial, and date-partial
 
 - Complete: a window fully inside both selected configurations' established intervals returns `completeness_status: complete`, with no `omitted_configurations` and no `unresolved_dates`.
@@ -143,7 +159,7 @@ The result uses `accounting_method: "conical_events_v1"`:
 
 ### Result fetches
 
-All conical fetches return the same acceptance identity: `setup_revision`, `configuration_digest`, a `snapshot` reference, selected registry ID and revision when applicable, source-change records, compact provenance, warnings, limits, and accounting definitions, plus `accounting_method`. They do not repeat the full configuration or evidence on every page. Retrieve those with `get_study_setup` using the `result_id` and exact `setup_revision`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
+All conical fetches return the same acceptance identity: `setup_revision`, `configuration_digest`, a `snapshot` reference, selected registry ID and revision when applicable, source-change records, compact provenance, `event_filter`, warnings, limits, and accounting definitions, plus `accounting_method`. They do not repeat the full configuration or evidence on every page. Retrieve those with `get_study_setup` using the `result_id` and exact `setup_revision`. Results and drafts expire 24 hours after saving; an earlier restart clears them and capacity eviction can remove older entries. There is no durable archive.
 
 Cell replies carry provenance, warnings, and definitions once at the response level. Their GeoJSON metadata keeps the configuration and setup identity without repeating those records.
 
@@ -152,6 +168,33 @@ Cell replies carry provenance, warnings, and definitions once at the response le
 - `get_access_cells` returns paged GeoJSON grid cells with event count, observed days, and per-cell spacing. Offset and limit apply to matching cells.
 - `get_access_revisit` returns event-spacing metrics and explicitly lists continuous metrics as unavailable for conical results.
 - `get_access_event_spacing` pages per-cell spacing values and summary statistics.
+
+### Study export
+
+Call `export_study` with a saved `result_id` to get a short-lived download link. The link serves one JSON file named `tatc-study-<result-id>.json`. It is valid for 15 minutes and also stops if the result disappears. The tool returns metadata, not the whole study:
+
+```json
+{
+  "result_id": "…",
+  "file_name": "tatc-study-….json",
+  "download_url": "https://mcp.example.org/study-export/…",
+  "expires_at_utc": "…"
+}
+```
+
+The file is UTF-8 JSON with `schema_version: "tatc-study-export-v1"` and these sections:
+
+| Section | Contents |
+| --- | --- |
+| `study` | Result ID, kind, status, window, region, grid, applicability, event filter definition, warnings, limits, definitions, storage note |
+| `configurations` | One block per configuration with the full geometry, source evidence, source choices, applicability, approximations, and warnings |
+| `omissions` | Each omitted instrument, reason code, reason, and evidence reference |
+| `orbits` | Exact OMM records for every satellite, plus epoch, age, mean altitude, and hash |
+| `software` | Server version, TAT-C, Python, skyfield, and sgp4 versions |
+| `results` | Combined and per-configuration summaries, daily rows, cells, events, event spacing, and event filters |
+| `replay` | The exact `begin`, `region`, and `prepare` inputs needed to re-check the setup and orbit hash |
+
+The export is a record, not an import tool. Re-running it means feeding the replay block back through the normal begin, region, and prepare calls. `begin_access_run` fetches current CelesTrak elements, so a new run can use different orbit data; compare the new `omm_hash` with the recorded orbit before treating it as the same run. The server still keeps no durable archive; the downloaded file is the durable copy. The `export_study` link is signed, valid for 15 minutes, and stops working after the result expires or the server restarts. Anyone with the link can download the file; it is not protected by the OIDC login. It is not a general file server and cannot list or read other results.
 
 ### Verification limits
 
@@ -168,7 +211,7 @@ When a requested instrument cannot be modeled, pass an `omissions` list. Each en
 The workflow uses the same draft and acceptance boundary as the single-instrument studies:
 
 1. `begin_access_run` stages the exact spacecraft set and a UTC window; `set_access_region` records the study region.
-2. `prepare_mixed_study` takes a list of exact registry selectors or complete study-specific configurations plus any recorded omissions. It intersects each established applicability interval with the window, checks the spacecraft identities and workload limits, then returns a proposal with each configuration's evidence, revision, orbit, geometry, illumination setting, warnings, and setup revision. It does not resolve an awaiting-clarification item automatically. Preparation runs no viewing-event calculation.
+2. `prepare_mixed_study` takes a list of exact registry selectors or complete study-specific configurations plus any recorded omissions. Add `orbit_direction` to one selection to keep only its ascending or descending passes. It intersects each established applicability interval with the window, checks the spacecraft identities and workload limits, then returns a proposal with each configuration's evidence, revision, orbit, geometry, illumination setting, direction filter, warnings, and setup revision. It does not resolve an awaiting-clarification item automatically. Preparation runs no viewing-event calculation.
 3. Present every configuration, every omission and reason, every open question, and the limits. Run `finish_mixed_study` only after the researcher accepts that exact setup revision. A partial proposal also requires `accepted_omissions` set to exactly the returned omission IDs. An awaiting-clarification item must be resolved or re-prepared as an explicit omission before running. A changed orbit, region, window, grid, source notice, configuration, omission status, or setting requires a new proposal and acceptance.
 4. Fetch `get_mixed_events`, `get_mixed_daily`, `get_mixed_cells`, `get_mixed_revisit`, or `get_mixed_event_spacing`. Omit `configuration_id` for the combined result over included configurations. Pass one exact ID from the result to retrieve that configuration's contribution.
 
@@ -178,6 +221,38 @@ TAT-C supplies each instrument's viewing epochs using that configuration's geome
 
 Illumination is configured per instrument. A `target_sunlit` requirement must identify its basis as source evidence or as a study assumption. Source evidence must support a source-based setting. A study assumption needs an explanatory note, cannot claim source support for that requirement, and stays labeled as a sensitivity choice. Relevant source excerpts may remain in the evidence list as background with no `supports` claims. This does not add illumination science to TAT-C or the configuration.
 
-All mixed fetch responses include the scope, accounting method, `completeness_status`, `applicability_status`, modeled and unresolved dates, `modeled_configurations`, `omitted_configurations`, scope-specific warnings, limits, definitions, and compact provenance. A partial result reports `completeness_status: partial`; every fetch names each omitted instrument, its spacecraft, reason code, reason, and compact evidence references, with `access_status: unknown`. Combined totals and event rows describe only the included configurations. Combined fetches return warnings for every configuration and omission; a configuration-scoped fetch returns that configuration's warnings. `get_mixed_revisit` returns its spacing summary once under `metrics`. Event and spacing pages default to five rows and cap at 20; cell pages default to two features and cap at 10. Use `offset` to retrieve later pages. The repeated provenance header contains the accepted setup revision, each configuration's SHA-256 snapshot digest, source revision and evidence IDs/URLs, selected conflict and option IDs, applicability interval, TAT-C geometry mapping and illumination setting, and spacecraft OMM identity/hash. It also retains the accepted omission records with compact evidence references. Cell GeoJSON metadata repeats only result, scope, setup, and window identity. The accepted finish summary retains the complete configuration snapshots, including full geometry, evidence excerpts, interpretations, and source-choice rationales. It is the only full accepted-snapshot view; if a client truncates the finish response, no separate tool retrieves those full snapshots. `mixed_events_union_v1` identifies the combined exact-epoch union; `mixed_configuration_events_v1` identifies one configuration's accounting. A zero-event modeled configuration is a modeled zero for the accepted window; it is not an omission, and an omitted configuration has unknown access instead. An unaccepted or rejected study has no result. If a calculation fails after acceptance, the finish call names the failed configuration, saves nothing, and requires an updated proposal and new acceptance before the study can drop it. Existing legacy and single-instrument workflows remain available on drafts without a mixed proposal.
+All mixed fetch responses include the scope, accounting method, `event_filter`, `completeness_status`, `applicability_status`, modeled and unresolved dates, `modeled_configurations`, `omitted_configurations`, scope-specific warnings, limits, definitions, and compact provenance. A partial result reports `completeness_status: partial`; every fetch names each omitted instrument, its spacecraft, reason code, reason, and compact evidence references, with `access_status: unknown`. Combined totals and event rows describe only the included configurations. Combined fetches return warnings for every configuration and omission; a configuration-scoped fetch returns that configuration's warnings. `get_mixed_revisit` returns its spacing summary once under `metrics`. Event and spacing pages default to five rows and cap at 20; cell pages default to two features and cap at 10. Use `offset` to retrieve later pages. The repeated provenance header contains the accepted setup revision, each configuration's SHA-256 snapshot digest, source revision and evidence IDs/URLs, selected conflict and option IDs, applicability interval, TAT-C geometry mapping and illumination setting, and spacecraft OMM identity/hash. It also retains the accepted omission records with compact evidence references. Cell GeoJSON metadata repeats only result, scope, setup, and window identity. The accepted finish summary retains the complete configuration snapshots, including full geometry, evidence excerpts, interpretations, and source-choice rationales. If a client truncates the finish response, call `get_study_setup` with the result ID and `study_kind: "mixed"` to retrieve the full snapshot. `mixed_events_union_v1` identifies the combined exact-epoch union; `mixed_configuration_events_v1` identifies one configuration's accounting. A zero-event modeled configuration is a modeled zero for the accepted window; it is not an omission, and an omitted configuration has unknown access instead. An unaccepted or rejected study has no result. If a calculation fails after acceptance, the finish call names the failed configuration, saves nothing, and requires an updated proposal and new acceptance before the study can drop it. Existing legacy and single-instrument workflows remain available on drafts without a mixed proposal.
 
 The reviewed registry currently contains the AMSR2 conical and Sentinel-1C IW pointed configurations; it does not include other instrument families, acquisition schedules, clouds, terrain, or retrieval quality. Instrument-level omissions, date-partial studies, additional disjoint established intervals, and explicitly accepted applicability assumptions are supported. Study acceptance does not promote a configuration or assumption into the shared registry. Source-document search, downloading, and monitoring remain outside the MCP server. Study-specific settings are not promoted into the shared registry.
+
+## Units and common errors
+
+### Units
+
+| Value | Unit |
+| --- | --- |
+| Angles, including cone, off-nadir, incidence, scan, and field of view | degrees |
+| Orbit altitude in satellite JSON | meters |
+| Configured source altitude ranges and mean altitude | kilometers |
+| Swath width and area | kilometers and square kilometers |
+| Ground-track altitude | meters |
+| Time | UTC ISO 8601 with `Z` or an explicit offset |
+| Study windows | half-open `[start, end)` |
+| Event spacing | hours |
+| Grid rows and columns | integer counts |
+
+Cone angle, off-nadir angle, and ground incidence are different values. Do not convert one into another without a recorded source and rationale.
+
+### Common errors
+
+| Error | What to do |
+| --- | --- |
+| `Unknown result_id … expired after 24 hours` | Re-run the study or use the export file. |
+| `Accepted setup revision … does not match` | Prepare again, present the new proposal, and accept its exact revision. |
+| `This draft has no region` | Call `set_access_region` before preparation. |
+| `… has no calculable overlap` | Record the instrument as an omission or add an accepted applicability assumption. |
+| `… was selected more than once` | Remove the duplicate configuration selection. |
+| `orbit_direction must be None, 'ascending', or 'descending'` | Use one of those exact strings. |
+| `This result is not a … study` | Use the fetch tool for the result's actual kind. |
+| `This export link has expired` or `This study result is no longer available` | Call `export_study` again before the result expires, or use the saved file. |
+| `Unknown tool` | Check the tool name in the current server schema; fetch tools differ by study kind. |

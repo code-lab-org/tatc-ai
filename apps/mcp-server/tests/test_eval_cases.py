@@ -1562,3 +1562,55 @@ def test_partial_staged_case_requires_both_spacecraft():
         final="",
     )
     assert case.checks(trace, clock)["staged_expected_spacecraft"]
+
+
+def test_mixed_follow_up_grid_checker_requires_two_runs_and_a_new_revision():
+    case = next(
+        item for item in build_cases(_clock()) if item.id == "mixed_follow_up_grid"
+    )
+    trace = Trace(prompt=case.prompt)
+    trace.calls = [
+        Call(
+            "prepare_mixed_study",
+            {"grid_rows": 2, "grid_columns": 2},
+            False,
+            "",
+            {"setup_revision": "sha256:first"},
+        ),
+        Call(
+            "finish_mixed_study",
+            {"accept_setup": True},
+            False,
+            "",
+            {"result_id": "result-one", "setup_revision": "sha256:first"},
+        ),
+        Call(
+            "prepare_mixed_study",
+            {"grid_rows": 3, "grid_columns": 3},
+            False,
+            "",
+            {"setup_revision": "sha256:second"},
+        ),
+        Call(
+            "finish_mixed_study",
+            {"accept_setup": True},
+            False,
+            "",
+            {"result_id": "result-two", "setup_revision": "sha256:second"},
+        ),
+    ]
+    checks = case.checks(trace, _clock())
+    assert all(checks.values()), checks
+
+    trace.calls[3].parsed["setup_revision"] = "sha256:first"
+    trace.calls[3].parsed["result_id"] = "result-one"
+    checks = case.checks(trace, _clock())
+    assert not checks["new_revision"]
+    assert not checks["two_results"]
+
+    trace.calls[2].args["configurations"] = [
+        {"configuration_id": "different-configuration"}
+    ]
+    checks = case.checks(trace, _clock())
+    assert not checks["same_scope"]
+

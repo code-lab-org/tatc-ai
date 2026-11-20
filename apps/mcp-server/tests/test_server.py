@@ -78,6 +78,7 @@ class ServerTests(unittest.TestCase):
                 "prepare_pointed_study",
                 "finish_pointed_study",
                 "get_study_setup",
+                "export_study",
                 "get_pointed_events",
                 "get_pointed_daily",
                 "get_pointed_cells",
@@ -841,7 +842,7 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         self.assertEqual(json.loads(result.content[0].text), expected)
         prepare.assert_called_once_with(
-            "draft_abc", 2, 2, mock.ANY, None, None, None
+            "draft_abc", 2, 2, mock.ANY, None, None, None, None
         )
 
     def test_registry_tools_expose_revision_and_source_check_fields(self):

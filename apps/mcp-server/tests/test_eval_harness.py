@@ -357,3 +357,80 @@ def test_hanging_tool_call_cannot_outlive_the_conversation_budget(monkeypatch):
             "hang", {}, deadline=time.monotonic() + 0.1
         )
     assert time.monotonic() - started < 0.8
+
+
+def test_env_value_reads_a_private_env_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENCODE_GO_API_KEY=from-file\n")
+    assert (
+        run_eval._env_value("OPENCODE_GO_API_KEY", [env_file])
+        == "from-file"
+    )
+
+
+def test_chat_sends_the_requested_reasoning_effort(monkeypatch):
+    captured = {}
+
+    def fake_completion(base_url, api_key, body, **_kwargs):
+        captured["body"] = json.loads(body)
+        return {"content": "ok"}
+
+    monkeypatch.setattr(run_eval, "request_completion", fake_completion)
+    harness = object.__new__(run_eval.Harness)
+    harness.base_url = "http://example.invalid"
+    harness.api_key = "key"
+    harness.tools = []
+    harness.conversation_timeout = 1
+    harness.request_timeout = 1
+    harness.user_agent = "test"
+    harness.session_id = ""
+    harness.reasoning_effort = "max"
+
+    message = harness.chat("deepseek-v4.1-flash", [])
+
+    assert message == {"content": "ok"}
+    assert captured["body"]["reasoning_effort"] == "max"
+
+
+def test_run_rejects_now_for_mixed_cases_before_any_model_work(monkeypatch):
+    class FakeReplay:
+        recorded_at = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def install(self):
+            pass
+
+    class FakeCase:
+        id = "mixed_case"
+        tags = ("mixed",)
+
+    monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
+    monkeypatch.setattr(
+        run_eval, "_provider_credentials", lambda _args: ("http://example", "key")
+    )
+    monkeypatch.setattr(run_eval, "_selected_models", lambda _args: ["model"])
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("model work started before the clock guard")
+
+    monkeypatch.setattr(run_eval, "Harness", unexpected)
+    monkeypatch.setattr(run_eval, "probe_streams", unexpected)
+
+    args = SimpleNamespace(
+        now="2026-11-20T00:00:00+00:00",
+        provider="opencode-go",
+        reasoning_effort="max",
+        cases=None,
+        models=["model"],
+        all_models=False,
+        api_key_env=None,
+        base_url=None,
+        hide=[],
+        offline=True,
+    )
+    with pytest.raises(ValueError, match="Mixed cases use the recorded"):
+        run_eval.run(args)
