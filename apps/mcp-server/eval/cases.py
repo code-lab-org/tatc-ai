@@ -644,7 +644,8 @@ def _conical_reporting_is_limited(final: str) -> bool:
         + negation + r".{0,80}" + viewing + r".{0,40}" + continuous + "|"
         + viewing + r".{0,40}" + negation + r".{0,40}" + continuous + "|"
         + r"(?:" + continuous_claim + r")"
-        + r".{0,120}\b(?:unavailable|not available|not provided|not computed|"
+        + r".{0,120}\b(?:unavailable|unreported|not available|not provided|"
+        + r"not computed|not reported|not shown|not included|"
         + r"(?:isn't|aren't|wasn't|weren't)\s+available)\b"
     )
     for clause in re.split(r"[.!?;\n]|\b(?:but|however|yet|although|whereas)\b", final):

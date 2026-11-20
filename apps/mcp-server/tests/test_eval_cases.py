@@ -739,6 +739,10 @@ def test_mixed_eval_checker_requires_exact_acceptance_and_each_fetch_scope():
         "There are 3 modelled opportunities; no acquisition was confirmed. "
         "Cell-centre samples are not whole-cell coverage, and envelope periods "
         "aren't continuous viewing time.",
+        "There are 3 modeled opportunities, not confirmed acquisitions. "
+        "Cell-center samples are not whole-cell coverage, and envelope periods "
+        "are metadata only. Time covered and revisit are unavailable, and "
+        "continuous viewing is not reported.",
         "There are 3 modeled opportunities, not confirmed acquisitions. One "
         "continuous rectangular view is a geometry approximation. Cell-center "
         "samples and envelopes do not establish continuous viewing time or "
