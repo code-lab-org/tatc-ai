@@ -93,7 +93,7 @@ Download it without an extra login:
 curl -L -o study.json "http://localhost:8000/study-export/…"
 ```
 
-The link works only for that result and expires with it. The server keeps no archive after the result expires.
+The link is valid for 15 minutes and works only for that result. Anyone with the link can download the file. The server keeps no archive after the result expires.
 
 ## Runnable example
 

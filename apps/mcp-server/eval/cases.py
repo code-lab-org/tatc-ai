@@ -110,7 +110,6 @@ class Case:
     tags: Tuple[str, ...]
     prompt: str
     checks: Callable[[Trace, "Clock"], Dict[str, bool]]
-    clock_override: Optional[datetime] = None
 
 
 @dataclass
@@ -1224,8 +1223,10 @@ def _mixed_follow_up_grid():
             (call.args.get("grid_rows"), call.args.get("grid_columns"))
             for call in prepares
         ]
-        changed_grid = grids[:2] == [(2, 2), (3, 3)] or (
-            (2, 2) in grids and (3, 3) in grids
+        changed_grid = grids[:2] == [(2, 2), (3, 3)]
+        same_scope = len(prepares) >= 2 and all(
+            prepares[0].args.get(key) == prepares[1].args.get(key)
+            for key in ("configurations", "omissions", "applicability_assumptions")
         )
         revisions = {
             summary.get("setup_revision")
@@ -1242,6 +1243,7 @@ def _mixed_follow_up_grid():
         return {
             "two_runs": len(finishes) >= 2,
             "grid_changed": changed_grid,
+            "same_scope": same_scope,
             "new_revision": len(revisions) >= 2,
             "accepted_both": all(
                 call.args.get("accept_setup") is True for call in finishes
@@ -1720,7 +1722,7 @@ def build_cases(clock: Clock) -> List[Case]:
         "documented overall swath span of 6.6 km.' This is synthetic fixture "
         "text for the study, not an official instrument-source claim."
     )
-    cases = [
+    return [
         Case(
             "short_given", ("short", "geometry_given", "point_or_region"),
             f"Estimate Terra access over Phoenix, Arizona for 24 hours starting {d0}. {modis}",
@@ -2138,12 +2140,3 @@ def build_cases(clock: Clock) -> List[Case]:
             ),
         ),
     ]
-    # Mixed cases depend on the recorded OMM epoch and the reviewed Sentinel-1C
-    # applicability window. Keep their clock inside both even when the operator
-    # passes --now for a live-provider run.
-    for case in cases:
-        if "mixed" in case.tags:
-            case.clock_override = datetime(
-                2026, 10, 5, 0, 0, tzinfo=timezone.utc
-            )
-    return cases

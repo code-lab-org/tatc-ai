@@ -53,9 +53,9 @@ The assistant calls `export_study` with the result ID and gives you a short-live
 - Applicability intervals, assumptions, approximations, and warnings.
 - Software versions.
 - Combined and per-sensor results.
-- A replay block with the inputs needed to run the study again.
+- A replay block with the setup inputs and recorded orbit hash.
 
-The link expires with the saved result, normally within 24 hours. Save the file if you need it later. The server has no durable archive.
+The link is valid for 15 minutes. Save the file if you need it later. The server has no durable archive. The replay block records the setup choices; a new run fetches current orbit elements, so compare the orbit hash with the recorded one.
 
 ## Change one thing and run again
 

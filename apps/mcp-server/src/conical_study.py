@@ -176,8 +176,8 @@ EVIDENCE_NOTE = (
 
 EVENT_FILTER_DEFINITION = (
     "Pass direction is the sign of the TAT-C propagated geodetic latitude change "
-    "around the event epoch. An event at a turning point can be unclassified; when "
-    "a filter is set, unclassified events are excluded."
+    "around the event epoch. A zero change is unclassified; when a filter is set, "
+    "unclassified events are excluded."
 )
 
 BASE_LIMITS = [
@@ -2047,7 +2047,6 @@ def _mixed_result_payload(
             "instrument": configuration.instrument,
             "satellite": item["satellite"]["satellite"],
             "warnings": item["warnings"],
-            "orbit_direction_filter": item.get("orbit_direction_filter"),
             "event_filter": _event_filter_payload(
                 item.get("orbit_direction_filter"), direction_counts
             ),
@@ -2064,7 +2063,6 @@ def _mixed_result_payload(
                 "satellite": item["satellite"]["satellite"],
                 "summary_counts": counts,
                 "metrics": accounting["metrics"],
-                "orbit_direction_filter": item.get("orbit_direction_filter"),
                 "event_filter": _event_filter_payload(
                     item.get("orbit_direction_filter"), direction_counts
                 ),
@@ -2155,8 +2153,13 @@ def _mixed_result_payload(
             for counts in direction_counts_by_configuration.values()
         ),
     }
+    combined_direction = (
+        "per_configuration"
+        if any(item.get("orbit_direction_filter") for item in proposal["configurations"])
+        else None
+    )
     combined["event_filter"] = _event_filter_payload(
-        None, combined_direction_counts
+        combined_direction, combined_direction_counts
     )
     combined["event_filter"]["by_configuration"] = {
         item["configuration_id"]: _event_filter_payload(
@@ -2202,6 +2205,7 @@ def _mixed_result_payload(
                     "applicability_assumptions": item.get(
                         "applicability_assumptions", []
                     ),
+                    "orbit_direction_filter": item.get("orbit_direction_filter"),
                     "satellite": item["satellite"],
                 }
                 for item in proposal["configurations"]
@@ -2616,17 +2620,6 @@ def _event_filter_payload(
     }
 
 
-def _compact_event_filter(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Keep the per-fetch filter small; the full breakdown stays in the export."""
-    if not value:
-        return None
-    return {
-        key: item
-        for key, item in value.items()
-        if key != "by_configuration"
-    }
-
-
 def _tasks_for_cells(
     stage: Dict[str, Any],
     configuration: InstrumentConfiguration,
@@ -2751,6 +2744,7 @@ def _result_payload(
             "applicability_assumptions": proposal.get(
                 "applicability_assumptions", []
             ),
+            "orbit_direction_filter": proposal.get("orbit_direction_filter"),
             "consequential_settings": proposal["consequential_settings"],
         },
         "accepted_choices": proposal["consequential"]["source_choices"],
@@ -2834,7 +2828,8 @@ def _result_payload(
         "warnings": _warnings(
             configuration, registry_selection=proposal.get("registry_selection")
         )
-        + _applicability_warnings(coverage),
+        + _applicability_warnings(coverage)
+        + _direction_warning(proposal.get("orbit_direction_filter")),
         "limits": _limits(stage, configuration, long_window, coverage),
         "definitions": accounting["definitions"],
         "metrics": accounting["metrics"],
@@ -2923,7 +2918,6 @@ def _compact_summary(full: Dict[str, Any], result_id: str) -> Dict[str, Any]:
         "interpretation": full["interpretation"],
         "warnings": full["warnings"],
         "limits": full["limits"],
-        "orbit_direction_filter": full.get("event_filter", {}).get("orbit_direction"),
         "provenance": _summary_provenance(full),
         "accepted_choices": full["provenance"]["accepted_choices"],
         "storage": full["storage"],
@@ -3232,7 +3226,7 @@ def _header(result_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "applicability_status": payload.get("applicability_status"),
         "applicability": payload.get("applicability"),
         "applicability_assumptions": payload.get("applicability_assumptions", []),
-        "event_filter": _compact_event_filter(payload.get("event_filter")),
+        "event_filter": payload.get("event_filter"),
         "modeled_configurations": payload["modeled_configurations"],
         "omitted_configurations": payload["omitted_configurations"],
         "applicable_dates": payload["applicable_dates"],
@@ -3496,7 +3490,6 @@ def get_study_setup(
                 "status": "awaiting_acceptance",
                 "setup_revision": revision,
                 "setup_snapshot": setup_snapshot,
-                "orbits": _stage_orbits(stage),
                 "warnings": proposal.get("warnings", []),
                 "limits": proposal.get("limits", []),
                 "evidence_note": proposal.get("evidence_note", EVIDENCE_NOTE),
@@ -3553,6 +3546,7 @@ def get_study_setup(
             "applicability_assumptions": proposal.get(
                 "applicability_assumptions", []
             ),
+            "orbit_direction_filter": proposal.get("orbit_direction_filter"),
             "consequential_settings": proposal["consequential_settings"],
         }
         return {
@@ -3563,7 +3557,6 @@ def get_study_setup(
             "setup_revision": revision,
             "configuration_digest": digest,
             "setup_snapshot": setup_snapshot,
-            "orbits": _stage_orbits(stage),
             "warnings": proposal.get("warnings", []),
             "limits": proposal.get("limits", []),
             "evidence_note": proposal.get("evidence_note", EVIDENCE_NOTE),
@@ -3591,7 +3584,6 @@ def get_study_setup(
             "setup_snapshot": copy.deepcopy(
                 payload["provenance"]["setup_snapshot"]
             ),
-            "orbits": copy.deepcopy(payload.get("orbits", [])),
             "warnings": payload["warnings"],
             "limits": payload["limits"],
             "evidence_note": payload["evidence_note"],
@@ -3625,7 +3617,6 @@ def get_study_setup(
         "setup_revision": revision,
         "configuration_digest": digest,
         "setup_snapshot": setup_snapshot,
-        "orbits": copy.deepcopy(payload.get("orbits", [])),
         "warnings": payload["warnings"],
         "limits": payload["limits"],
         "evidence_note": payload["evidence_note"],
@@ -3839,7 +3830,7 @@ def _mixed_fetch_header(
         "applicability": payload.get("applicability"),
         "applicability_assumptions": payload.get("applicability_assumptions", []),
         "event_filter": (
-            _compact_event_filter(payload.get("event_filter"))
+            payload.get("event_filter")
             if is_combined
             else selected.get("event_filter")
         ),

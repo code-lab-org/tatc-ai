@@ -206,7 +206,7 @@ SERVER_INSTRUCTIONS = (
     "the filter keeps only events whose TAT-C propagated latitude is increasing or "
     "decreasing at the event epoch. State that filter and its events excluded. "
     "Use the study export tool with a saved result ID when the researcher wants a "
-    "durable file. The download link expires with the result and the JSON file "
+    "durable file. The download link is valid for 15 minutes and the JSON file "
     "contains the exact orbit records, accepted setup, software versions, "
     "assumptions, results, and a replay block. "
     "Results and drafts expire after 24 hours and can be lost earlier on restart "
@@ -1846,14 +1846,15 @@ def export_study(result_id: str) -> Dict[str, Any]:
 
     The downloaded JSON file contains the exact orbit records, the accepted
     configuration and source snapshots, software versions, assumptions,
-    combined and per-configuration results, and a replay block. The link
-    expires with the saved result. It does not import or rerun the study.
+    combined and per-configuration results, and a replay block. The link is
+    valid for 15 minutes and also stops if the result disappears. It does not
+    import or rerun the study.
 
     Args:
         result_id: Result ID from a conical, pointed, or mixed study.
 
     Returns:
-        Download URL, file name, expiry time, and file size.
+        Download URL, file name, and expiry time.
     """
     return _export_link(result_id)
 

@@ -1787,3 +1787,82 @@ def test_single_conical_pass_direction_filter_is_recorded_and_applied():
     assert len(document["orbits"]) == 1
     assert document["configurations"][0]["orbit_direction_filter"] == "descending"
     assert document["replay"]["prepare"]["orbit_direction"] == "descending"
+
+
+def test_study_specific_replay_block_recreates_the_same_setup():
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration": _config(),
+            "orbit_direction": "descending",
+        },
+    )
+    assert not error, text
+    error, text, summary = _call(
+        "finish_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    error, text, link = _call("export_study", {"result_id": summary["result_id"]})
+    assert not error, text
+    with TestClient(server_module.mcp.http_app()) as client:
+        document = client.get(urlsplit(link["download_url"]).path).json()
+    replay = document["replay"]
+    assert replay["prepare"]["configuration"]["configuration_id"] == _config()[
+        "configuration_id"
+    ]
+    assert replay["prepare"]["orbit_direction"] == "descending"
+
+    error, text, replay_draft = _call(
+        "begin_access_run",
+        {
+            "satellite_identifier": replay["begin"]["satellite_identifier"],
+            "start_time": replay["begin"]["start_time"],
+            "end_time": replay["begin"]["end_time"],
+        },
+    )
+    assert not error, text
+    error, text, _ = _call(
+        "set_access_region",
+        {
+            "draft_id": replay_draft["draft_id"],
+            "west_lon": replay["region"]["west"],
+            "south_lat": replay["region"]["south"],
+            "east_lon": replay["region"]["east"],
+            "north_lat": replay["region"]["north"],
+        },
+    )
+    assert not error, text
+    error, text, replayed = _call(
+        "prepare_conical_study",
+        {"draft_id": replay_draft["draft_id"], **replay["prepare"]},
+    )
+    assert not error, text
+    assert replayed["setup_revision"] == proposal["setup_revision"]
+
+
+def test_direction_only_change_invalidates_the_setup_revision():
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    first = _prepare(draft["draft_id"])
+    error, text, second = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration": _config(),
+            "orbit_direction": "descending",
+        },
+    )
+    assert not error, text
+    assert first["setup_revision"] != second["setup_revision"]

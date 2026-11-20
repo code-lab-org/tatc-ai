@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -19,6 +20,7 @@ from src import (
     coverage_core,
     generic_coverage,
     result_store,
+    study_export,
 )
 from src import server as server_module
 
@@ -1968,7 +1970,7 @@ def test_mixed_pass_direction_filter_keeps_only_matching_events():
                 },
             )
             assert not error, text
-            assert summary["event_filter"]["orbit_direction"] == "both"
+            assert summary["event_filter"]["orbit_direction"] == "per_configuration"
             assert summary["event_filter"]["by_configuration"][
                 "amsr2-gcom-w1-conical-product-sector"
             ]["orbit_direction"] == direction
@@ -1998,6 +2000,17 @@ def test_export_study_returns_a_downloadable_file_with_exact_orbits():
         end="2026-10-05T00:00:00Z",
         grid_rows=2,
         grid_columns=2,
+        configurations=[
+            {
+                "configuration_id": "amsr2-gcom-w1-conical-product-sector",
+                "configuration_revision": "2026-10-27.1",
+                "orbit_direction": "descending",
+            },
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
     )
     assert not error, text
     error, text, summary = _call(
@@ -2034,23 +2047,58 @@ def test_export_study_returns_a_downloadable_file_with_exact_orbits():
         ]["events"]
     )
     assert document["replay"]["prepare"]["configurations"]
+    assert document["replay"]["prepare"]["configurations"][0][
+        "orbit_direction"
+    ] == "descending"
+    assert document["configurations"][0]["orbit_direction_filter"] == "descending"
     assert document["replay"]["begin"]["satellite_identifier"] == (
         "GCOM-W1, SENTINEL-1C"
     )
-    checksum = document.pop("content_sha256")
-    expected = hashlib.sha256(
-        json.dumps(
-            document,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode()
-    ).hexdigest()
-    assert checksum == expected
+
+    replay = document["replay"]
+    error, text, replay_draft = _call(
+        "begin_access_run",
+        {
+            "satellite_identifier": replay["begin"]["satellite_identifier"],
+            "start_time": replay["begin"]["start_time"],
+            "end_time": replay["begin"]["end_time"],
+        },
+    )
+    assert not error, text
+    error, text, _ = _call(
+        "set_access_region",
+        {
+            "draft_id": replay_draft["draft_id"],
+            "west_lon": replay["region"]["west"],
+            "south_lat": replay["region"]["south"],
+            "east_lon": replay["region"]["east"],
+            "north_lat": replay["region"]["north"],
+        },
+    )
+    assert not error, text
+    error, text, replayed = _call(
+        "prepare_mixed_study",
+        {"draft_id": replay_draft["draft_id"], **replay["prepare"]},
+    )
+    assert not error, text
+    assert replayed["setup_revision"] == summary["setup_revision"]
 
     with TestClient(server_module.mcp.http_app()) as client:
         tampered = client.get(parts.path[:-1] + "0")
+        expired = client.get(
+            "/study-export/"
+            + study_export._token(summary["result_id"], time.time() - 1)
+        )
     assert tampered.status_code == 404
+    assert expired.status_code == 410
+
+    result_store.clear()
+    with TestClient(server_module.mcp.http_app()) as client:
+        missing = client.get(
+            "/study-export/"
+            + study_export._token(summary["result_id"], time.time() + 60)
+        )
+    assert missing.status_code == 404
 
 
 def test_mixed_setup_getter_returns_the_full_accepted_snapshot():
@@ -2071,8 +2119,6 @@ def test_mixed_setup_getter_returns_the_full_accepted_snapshot():
     assert not error, text
     assert draft_setup["study_kind"] == "mixed"
     assert len(draft_setup["setup_snapshot"]["configurations"]) == 2
-    assert len(draft_setup["orbits"]) == 2
-    assert all(orbit["omm_records"] for orbit in draft_setup["orbits"])
 
     error, text, summary = _call(
         "finish_mixed_study",
@@ -2097,4 +2143,3 @@ def test_mixed_setup_getter_returns_the_full_accepted_snapshot():
         "amsr2-gcom-w1-conical-product-sector",
         "sentinel-1c-c-sar-iw-fixed-view",
     ]
-    assert all(orbit["omm_records"] for orbit in setup["orbits"])

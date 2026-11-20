@@ -89,14 +89,6 @@ def get_result(result_id: Any) -> Dict[str, Any]:
         return _lookup_locked(_results, _RESULT, result_id)
 
 
-def result_ttl_seconds(result_id: Any) -> float:
-    """Return the remaining lifetime of a saved result in seconds."""
-    with _lock:
-        _lookup_locked(_results, _RESULT, result_id)
-        entry = _results[str(result_id).strip()]
-        return max(0.0, TTL_SECONDS - (time.time() - entry["saved_at"]))
-
-
 def get_draft(draft_id: Any) -> Dict[str, Any]:
     """Return the staged payload for a draft ID."""
     with _lock:

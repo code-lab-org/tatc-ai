@@ -1608,12 +1608,3 @@ def test_mixed_follow_up_grid_checker_requires_two_runs_and_a_new_revision():
     assert not checks["new_revision"]
     assert not checks["two_results"]
 
-
-def test_mixed_eval_cases_pin_a_clock_inside_the_recorded_fixture_window():
-    cases = build_cases(Clock(datetime(2026, 11, 20, tzinfo=timezone.utc)))
-    mixed = [case for case in cases if "mixed" in case.tags]
-    assert mixed
-    assert all(
-        case.clock_override == datetime(2026, 10, 5, tzinfo=timezone.utc)
-        for case in mixed
-    )

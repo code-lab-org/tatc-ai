@@ -37,25 +37,38 @@ class MappedConical:
     swath_width_km: float
 
 
-def orbit_direction_at(orbit: Any, epoch: datetime) -> str:
-    """Classify an event by the latitude change around its epoch.
+def orbit_directions_at(orbit: Any, epochs: Sequence[datetime]) -> List[str]:
+    """Classify events by the latitude change around each epoch.
 
     TAT-C does not expose a pass-direction field, so this uses the propagated
-    geodetic latitude. A one-second window is small enough to stay inside one
-    pass and large enough to resolve the sign. An event at a turning point can
-    return "unknown"; callers must not silently count it as either direction.
+    geodetic latitude. The before and after times are propagated in one call
+    per cell. A zero latitude change is unclassified; a filter excludes it.
     """
-    when = epoch if epoch.tzinfo is not None else epoch.replace(tzinfo=timezone.utc)
+    if not epochs:
+        return []
+    normalized = [
+        epoch if epoch.tzinfo is not None else epoch.replace(tzinfo=timezone.utc)
+        for epoch in epochs
+    ]
+    times = [epoch - timedelta(seconds=1) for epoch in normalized] + [
+        epoch + timedelta(seconds=1) for epoch in normalized
+    ]
     try:
-        positions = orbit.get_geographic_position(
-            [when - timedelta(seconds=1), when + timedelta(seconds=1)]
+        positions = orbit.get_geographic_position(times)
+        latitudes = positions.latitude.degrees
+    except (ValueError, TypeError, AttributeError, KeyError, IndexError) as exc:
+        raise ValueError(f"Could not classify pass direction: {exc}") from exc
+    count = len(normalized)
+    return [
+        (
+            "ascending"
+            if latitudes[count + index] > latitudes[index]
+            else "descending"
+            if latitudes[count + index] < latitudes[index]
+            else "unknown"
         )
-        delta = float(positions.latitude.degrees[1] - positions.latitude.degrees[0])
-    except Exception:
-        return "unknown"
-    if abs(delta) < 1e-9:
-        return "unknown"
-    return "ascending" if delta > 0 else "descending"
+        for index in range(count)
+    ]
 
 
 def build_conical_satellite(
@@ -179,7 +192,7 @@ def collect_cell_events(task: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def event_rows_from_observations(
-    observations: Any, configuration: Any, cell_id: int, orbit: Any = None
+    observations: Any, configuration: Any, cell_id: int, orbit: Any
 ) -> List[Dict[str, Any]]:
     """Normalize TAT-C observation rows shared by pointed and conical adapters."""
     events: List[Dict[str, Any]] = []
@@ -187,22 +200,21 @@ def event_rows_from_observations(
         epoch = row.epoch
         if epoch is None or epoch != epoch:  # pandas NaT
             continue
-        event_epoch = epoch.to_pydatetime(warn=False)
         events.append(
             {
                 "cell_id": cell_id,
                 "target_longitude_deg": float(row.geometry.x),
                 "target_latitude_deg": float(row.geometry.y),
-                "epoch": event_epoch,
+                "epoch": epoch.to_pydatetime(warn=False),
                 "envelope_start": row.start.to_pydatetime(warn=False),
                 "envelope_end": row.end.to_pydatetime(warn=False),
                 "satellite": str(row.satellite),
                 "instrument": str(row.instrument),
                 "configuration_id": configuration.configuration_id,
                 "configuration_revision": configuration.revision,
-                "orbit_direction": (
-                    orbit_direction_at(orbit, event_epoch) if orbit is not None else "unknown"
-                ),
             }
         )
+    directions = orbit_directions_at(orbit, [event["epoch"] for event in events])
+    for event, direction in zip(events, directions):
+        event["orbit_direction"] = direction
     return events

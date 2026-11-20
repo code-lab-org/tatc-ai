@@ -2,9 +2,11 @@
 
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from importlib.metadata import version
 from itertools import pairwise
 import json
 import math
+import platform
 from typing import Annotated, Any
 
 from pydantic import (
@@ -18,7 +20,6 @@ from pydantic import (
 )
 
 from .conical_accounting import ACCOUNTING_METHOD, POINTED_ACCOUNTING_METHOD, _stats
-from .software import software_versions
 from .tatc_integration import create_orbit_from_omm
 
 # SGP4 error grows with time from the TLE epoch (for LEO roughly 1–3 km/day,
@@ -570,7 +571,10 @@ def analyze(request: CoverageRequest, include_tracks=False) -> dict:
     scenario["orbit_epochs"] = {
         s.name: timestamp(s.orbit.get_epoch()) for s in satellites
     }
-    software = software_versions()
+    software = {
+        **{name: version(name) for name in ("tatc", "skyfield", "sgp4")},
+        "python": platform.python_version(),
+    }
     identity = json.dumps(
         {"scenario": scenario, "software": software}, sort_keys=True, allow_nan=False
     )

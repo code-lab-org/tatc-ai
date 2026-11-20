@@ -138,7 +138,7 @@ The result uses `accounting_method: "conical_events_v1"`:
 
 A satellite travels north on an ascending pass and south on a descending pass. Some sensors collect only on one side, and some studies only use one side. Pass `orbit_direction` as `ascending` or `descending` to `prepare_conical_study` or `prepare_pointed_study`, or add it to one mixed selection. Omit it to count both directions.
 
-TAT-C does not expose a pass-direction field. The server computes the sign of the propagated geodetic latitude change around each event epoch. An event at a turning point can be unclassified; when a filter is set, unclassified events are excluded. The setup, result, and every fetch carry an `event_filter` record with the direction, excluded event count, and unclassified event count. The filter is a study setting, not an instrument property, so it does not change the shared configuration revision.
+TAT-C does not expose a pass-direction field. The server computes the sign of the propagated geodetic latitude change around each event epoch. A zero change is unclassified; when a filter is set, unclassified events are excluded. The setup, result, and every fetch carry an `event_filter` record with the direction, excluded event count, and unclassified event count. The filter is a study setting, not an instrument property, so it does not change the shared configuration revision.
 
 ```json
 {
@@ -171,7 +171,7 @@ Cell replies carry provenance, warnings, and definitions once at the response le
 
 ### Study export
 
-Call `export_study` with a saved `result_id` to get a short-lived download link. The link serves one JSON file named `tatc-study-<result-id>.json`. It expires with the saved result. The tool returns metadata, not the whole study:
+Call `export_study` with a saved `result_id` to get a short-lived download link. The link serves one JSON file named `tatc-study-<result-id>.json`. It is valid for 15 minutes and also stops if the result disappears. The tool returns metadata, not the whole study:
 
 ```json
 {
@@ -192,9 +192,9 @@ The file is UTF-8 JSON with `schema_version: "tatc-study-export-v1"` and these s
 | `orbits` | Exact OMM records for every satellite, plus epoch, age, mean altitude, and hash |
 | `software` | Server version, TAT-C, Python, skyfield, and sgp4 versions |
 | `results` | Combined and per-configuration summaries, daily rows, cells, events, event spacing, and event filters |
-| `replay` | The exact `begin`, `region`, and `prepare` inputs needed to run the same study again |
+| `replay` | The exact `begin`, `region`, and `prepare` inputs needed to re-check the setup and orbit hash |
 
-`content_sha256` is a SHA-256 over the document without that field, serialized with sorted keys and compact separators, so a reader can detect edits. The export is a record, not an import tool. Re-running it means feeding the replay block back through the normal begin, region, and prepare calls. The server still keeps no durable archive; the downloaded file is the durable copy. The `export_study` link is signed and short-lived. It stops working after the result expires or the server restarts. It is not a general file server and cannot list or read other results.
+The export is a record, not an import tool. Re-running it means feeding the replay block back through the normal begin, region, and prepare calls. `begin_access_run` fetches current CelesTrak elements, so a new run can use different orbit data; compare the new `omm_hash` with the recorded orbit before treating it as the same run. The server still keeps no durable archive; the downloaded file is the durable copy. The `export_study` link is signed, valid for 15 minutes, and stops working after the result expires or the server restarts. Anyone with the link can download the file; it is not protected by the OIDC login. It is not a general file server and cannot list or read other results.
 
 ### Verification limits
 
@@ -221,11 +221,11 @@ TAT-C supplies each instrument's viewing epochs using that configuration's geome
 
 Illumination is configured per instrument. A `target_sunlit` requirement must identify its basis as source evidence or as a study assumption. Source evidence must support a source-based setting. A study assumption needs an explanatory note, cannot claim source support for that requirement, and stays labeled as a sensitivity choice. Relevant source excerpts may remain in the evidence list as background with no `supports` claims. This does not add illumination science to TAT-C or the configuration.
 
-All mixed fetch responses include the scope, accounting method, `event_filter`, `completeness_status`, `applicability_status`, modeled and unresolved dates, `modeled_configurations`, `omitted_configurations`, scope-specific warnings, limits, definitions, and compact provenance. A partial result reports `completeness_status: partial`; every fetch names each omitted instrument, its spacecraft, reason code, reason, and compact evidence references, with `access_status: unknown`. Combined totals and event rows describe only the included configurations. Combined fetches return warnings for every configuration and omission; a configuration-scoped fetch returns that configuration's warnings. `get_mixed_revisit` returns its spacing summary once under `metrics`. Event and spacing pages default to five rows and cap at 20; cell pages default to two features and cap at 10. Use `offset` to retrieve later pages. The repeated provenance header contains the accepted setup revision, each configuration's SHA-256 snapshot digest, source revision and evidence IDs/URLs, selected conflict and option IDs, applicability interval, TAT-C geometry mapping and illumination setting, and spacecraft OMM identity/hash. It also retains the accepted omission records with compact evidence references. Cell GeoJSON metadata repeats only result, scope, setup, and window identity. The accepted finish summary retains the complete configuration snapshots, including full geometry, evidence excerpts, interpretations, and source-choice rationales. If a client truncates the finish response, call `get_study_setup` with the result ID and `study_kind: "mixed"` to retrieve the full snapshot and exact orbit records. `mixed_events_union_v1` identifies the combined exact-epoch union; `mixed_configuration_events_v1` identifies one configuration's accounting. A zero-event modeled configuration is a modeled zero for the accepted window; it is not an omission, and an omitted configuration has unknown access instead. An unaccepted or rejected study has no result. If a calculation fails after acceptance, the finish call names the failed configuration, saves nothing, and requires an updated proposal and new acceptance before the study can drop it. Existing legacy and single-instrument workflows remain available on drafts without a mixed proposal.
+All mixed fetch responses include the scope, accounting method, `event_filter`, `completeness_status`, `applicability_status`, modeled and unresolved dates, `modeled_configurations`, `omitted_configurations`, scope-specific warnings, limits, definitions, and compact provenance. A partial result reports `completeness_status: partial`; every fetch names each omitted instrument, its spacecraft, reason code, reason, and compact evidence references, with `access_status: unknown`. Combined totals and event rows describe only the included configurations. Combined fetches return warnings for every configuration and omission; a configuration-scoped fetch returns that configuration's warnings. `get_mixed_revisit` returns its spacing summary once under `metrics`. Event and spacing pages default to five rows and cap at 20; cell pages default to two features and cap at 10. Use `offset` to retrieve later pages. The repeated provenance header contains the accepted setup revision, each configuration's SHA-256 snapshot digest, source revision and evidence IDs/URLs, selected conflict and option IDs, applicability interval, TAT-C geometry mapping and illumination setting, and spacecraft OMM identity/hash. It also retains the accepted omission records with compact evidence references. Cell GeoJSON metadata repeats only result, scope, setup, and window identity. The accepted finish summary retains the complete configuration snapshots, including full geometry, evidence excerpts, interpretations, and source-choice rationales. If a client truncates the finish response, call `get_study_setup` with the result ID and `study_kind: "mixed"` to retrieve the full snapshot. `mixed_events_union_v1` identifies the combined exact-epoch union; `mixed_configuration_events_v1` identifies one configuration's accounting. A zero-event modeled configuration is a modeled zero for the accepted window; it is not an omission, and an omitted configuration has unknown access instead. An unaccepted or rejected study has no result. If a calculation fails after acceptance, the finish call names the failed configuration, saves nothing, and requires an updated proposal and new acceptance before the study can drop it. Existing legacy and single-instrument workflows remain available on drafts without a mixed proposal.
 
 The reviewed registry currently contains the AMSR2 conical and Sentinel-1C IW pointed configurations; it does not include other instrument families, acquisition schedules, clouds, terrain, or retrieval quality. Instrument-level omissions, date-partial studies, additional disjoint established intervals, and explicitly accepted applicability assumptions are supported. Study acceptance does not promote a configuration or assumption into the shared registry. Source-document search, downloading, and monitoring remain outside the MCP server. Study-specific settings are not promoted into the shared registry.
 
-## Units, input examples, and common errors
+## Units and common errors
 
 ### Units
 
@@ -242,30 +242,6 @@ The reviewed registry currently contains the AMSR2 conical and Sentinel-1C IW po
 | Grid rows and columns | integer counts |
 
 Cone angle, off-nadir angle, and ground incidence are different values. Do not convert one into another without a recorded source and rationale.
-
-### Mixed preparation example
-
-```json
-{
-  "draft_id": "draft_…",
-  "grid_rows": 2,
-  "grid_columns": 2,
-  "configurations": [
-    {
-      "configuration_id": "amsr2-gcom-w1-conical-product-sector",
-      "configuration_revision": "2026-10-27.1",
-      "orbit_direction": "descending"
-    },
-    {
-      "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
-      "configuration_revision": "2026-10-30.1",
-      "orbit_direction": "ascending"
-    }
-  ]
-}
-```
-
-For a study-specific configuration, replace the registry keys with `{"configuration": {…}}`. Do not pass a JSON-encoded string.
 
 ### Common errors
 
