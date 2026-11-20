@@ -1365,3 +1365,129 @@ def test_pointed_eval_requires_choices_before_any_study_setup():
     assert checks["identified_spacecraft_and_mode"]
     assert checks["presented_modeling_choices"]
     assert not checks["asked_before_study_setup"]
+
+
+def test_partial_mixed_eval_checker_requires_omission_scope_and_unknown_access():
+    configuration_id = "amsr2-gcom-w1-conical-product-sector"
+    revision = "2026-10-27.1"
+    omission_id = "omission:partial-eval"
+    setup_revision = "sha256:mixed-partial-eval"
+    summary = {
+        "result_id": "mixed-partial-result",
+        "result_kind": "mixed_study",
+        "accounting_method": "mixed_events_union_v1",
+        "completeness_status": "partial",
+        "setup_revision": setup_revision,
+        "summary_counts": {"event_count": 2},
+        "modeled_configurations": [
+            {
+                "configuration_id": configuration_id,
+                "configuration_revision": revision,
+                "access_status": "modeled",
+            }
+        ],
+        "omitted_configurations": [
+            {
+                "omission_id": omission_id,
+                "instrument": "SeaWiFS",
+                "spacecraft": "OrbView-2",
+                "access_status": "unknown",
+                "reason_code": "unsupported_instrument",
+            }
+        ],
+        "provenance": {
+            "setup_revision": setup_revision,
+            "setup_snapshot": {
+                "configurations": [
+                    {
+                        "configuration_id": configuration_id,
+                        "configuration_revision": revision,
+                        "configuration": {"evidence": [{}]},
+                    }
+                ]
+            },
+        },
+    }
+    omission_args = [
+        {
+            "instrument": "SeaWiFS",
+            "spacecraft": "OrbView-2",
+            "status": "omitted",
+            "reason_code": "unsupported_instrument",
+            "reason": "No reviewed configuration exists.",
+        }
+    ]
+    calls = [
+        Call(
+            "prepare_mixed_study",
+            {
+                "configurations": [
+                    {
+                        "configuration_id": configuration_id,
+                        "configuration_revision": revision,
+                    }
+                ],
+                "omissions": omission_args,
+            },
+            False,
+            "{}",
+            parsed={"status": "awaiting_acceptance"},
+        ),
+        Call(
+            "finish_mixed_study",
+            {
+                "accepted_setup_revision": setup_revision,
+                "accept_setup": True,
+                "accepted_omissions": [omission_id],
+            },
+            False,
+            "{}",
+            parsed=summary,
+        ),
+    ]
+    header = {
+        "completeness_status": "partial",
+        "omitted_configurations": summary["omitted_configurations"],
+        "provenance": {"setup_revision": setup_revision},
+        "definitions": {"omitted_access": "unknown access is not zero"},
+    }
+    for name, scope in (
+        ("get_mixed_events", None),
+        ("get_mixed_daily", None),
+        ("get_mixed_cells", None),
+        ("get_mixed_events", configuration_id),
+    ):
+        arguments = {"result_id": "mixed-partial-result"}
+        if scope is not None:
+            arguments["configuration_id"] = scope
+        calls.append(Call(name, arguments, False, "{}", parsed=dict(header)))
+    final = (
+        "This partial study reports 2 modeled AMSR2 events. SeaWiFS was omitted "
+        "because no reviewed configuration exists, so its access is unknown. The "
+        "totals describe only the modeled AMSR2 subset and are modeled "
+        "opportunities, not confirmed acquisitions. Cell-center samples are not "
+        "whole-cell coverage, and envelopes are not continuous viewing time."
+    )
+    trace = Trace(prompt="partial mixed study", calls=calls, final=final)
+    case = next(
+        case
+        for case in build_cases(_clock())
+        if case.id == "mixed_partial_amsr2_unsupported"
+    )
+    checks = case.checks(trace, _clock())
+    assert all(checks.values()), checks
+
+    trace.calls[1].args.pop("accepted_omissions")
+    checks = case.checks(trace, _clock())
+    assert checks["completed"]
+    assert not checks["accepted_exact_omission_scope"]
+
+    trace.calls[1].args["accepted_omissions"] = [omission_id]
+    trace.calls[1].parsed["completeness_status"] = "complete"
+    checks = case.checks(trace, _clock())
+    assert not checks["completed"]
+
+    trace.calls[1].parsed["completeness_status"] = "partial"
+    trace.final = "SeaWiFS had zero access; the study is complete."
+    checks = case.checks(trace, _clock())
+    assert not checks["reported_partial_limits"]

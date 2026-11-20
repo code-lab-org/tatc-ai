@@ -1199,6 +1199,126 @@ def _mixed_complete(
     return checks
 
 
+def _mixed_partial(
+    expected_config_id: str,
+    expected_revision: str,
+    omitted_instrument: str,
+):
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        del clock
+        finish = successful_mixed_finish(trace)
+        if finish is None or not finish.parsed:
+            return {
+                "completed": False,
+                "omission_recorded": False,
+                "accepted_exact_omission_scope": False,
+                "fetch_headers": False,
+                "reported_partial_limits": False,
+            }
+
+        summary = finish.parsed
+        result_id = summary.get("result_id")
+        omitted = summary.get("omitted_configurations", [])
+        omitted_ids = [item.get("omission_id") for item in omitted]
+        preparations = [
+            call
+            for call in trace.calls
+            if call.name == "prepare_mixed_study" and not call.error and call.parsed
+        ]
+        prepared = preparations[-1] if preparations else None
+        raw_omissions = prepared.args.get("omissions", []) if prepared else []
+        omission_recorded = any(
+            isinstance(item, dict)
+            and item.get("instrument") == omitted_instrument
+            and item.get("status") == "omitted"
+            and item.get("reason_code")
+            and item.get("reason")
+            for item in raw_omissions
+        )
+        modeled = {
+            item.get("configuration_id"): item.get("configuration_revision")
+            for item in summary.get("modeled_configurations", [])
+        }
+        completed = (
+            summary.get("result_kind") == "mixed_study"
+            and summary.get("completeness_status") == "partial"
+            and modeled == {expected_config_id: expected_revision}
+            and len(omitted) == 1
+            and omitted[0].get("instrument") == omitted_instrument
+            and omitted[0].get("access_status") == "unknown"
+            and bool(omitted[0].get("omission_id"))
+        )
+        accepted_scope = bool(
+            prepared
+            and finish.args.get("accepted_setup_revision")
+            == summary.get("setup_revision")
+            and finish.args.get("accept_setup") is True
+            and sorted(finish.args.get("accepted_omissions") or [])
+            == sorted(omitted_ids)
+        )
+
+        result_fetches = [
+            call
+            for call in trace.calls
+            if call.name in MIXED_FETCH_TOOLS
+            and not call.error
+            and call.parsed
+            and call.args.get("result_id") == result_id
+        ]
+        required = {
+            None: {"get_mixed_events", "get_mixed_daily", "get_mixed_cells"},
+            expected_config_id: {"get_mixed_events"},
+        }
+        scopes_ok = all(
+            tools.issubset(
+                {
+                    call.name
+                    for call in result_fetches
+                    if call.args.get("configuration_id") == scope_id
+                }
+            )
+            for scope_id, tools in required.items()
+        )
+        headers_ok = bool(result_fetches) and all(
+            call.parsed.get("completeness_status") == "partial"
+            and [
+                item.get("omission_id")
+                for item in call.parsed.get("omitted_configurations", [])
+            ]
+            == omitted_ids
+            and all(
+                item.get("access_status") == "unknown"
+                for item in call.parsed.get("omitted_configurations", [])
+            )
+            and call.parsed.get("provenance", {}).get("setup_revision")
+            == summary.get("setup_revision")
+            and call.parsed.get("definitions", {}).get("omitted_access")
+            for call in result_fetches
+        )
+        final = trace.final.lower()
+        reported = (
+            "partial" in final
+            and omitted_instrument.lower() in final
+            and ("omitted" in final or "omission" in final)
+            and "unknown" in final
+            and ("modeled" in final or "modelled" in final)
+            and "acquisition" in final
+            and not re.search(
+                r"\b(?:zero|no|0)\s+(?:access|contact|coverage)\b", final
+            )
+            and _conical_reporting_is_limited(final)
+        )
+        return {
+            "completed": completed,
+            "omission_recorded": omission_recorded,
+            "accepted_exact_omission_scope": accepted_scope,
+            "fetch_headers": scopes_ok and headers_ok,
+            "reported_partial_limits": reported,
+        }
+
+    return checks
+
+
 def _conical_registry_complete(expected_config_id: str, expected_revision: str):
     base_checks = _conical_complete(expected_config_id)
 
@@ -1725,6 +1845,38 @@ def build_cases(clock: Clock) -> List[Case]:
                     },
                     DAYLIGHT_CONFIG["configuration_id"]: {"get_mixed_events"},
                 },
+            ),
+        ),
+        Case(
+            "mixed_partial_amsr2_unsupported",
+            ("mixed", "partial", "omission", "unknown_access"),
+            "Run one partial mixed access study over west=-65, south=0, east=-55, "
+            "north=10 with a 1x1 grid starting at 2026-10-04T00:00:00Z and ending "
+            "at the exclusive timestamp 2026-10-05T00:00:00Z. Copy the exact ISO "
+            "timestamps unchanged. I select the reviewed AMSR2 GCOM-W1 "
+            "configuration amsr2-gcom-w1-conical-product-sector revision "
+            "2026-10-27.1, and I also requested SeaWiFS on OrbView-2, which has no "
+            "reviewed configuration in this increment. Do not invent its geometry "
+            "and do not report its access as zero: record it as an omitted request "
+            "with unknown access. Stage only GCOM-W1. For prepare_mixed_study, pass "
+            "this exact JSON array as omissions: "
+            '[{"instrument":"SeaWiFS","spacecraft":"OrbView-2","status":"omitted",'
+            '"reason_code":"unsupported_instrument","reason":"No reviewed '
+            'configuration exists for SeaWiFS in this increment."}]. '
+            "Show the partial status, the omission reason, and the modeled AMSR2 "
+            "setup. I accept that exact partial proposal and omission scope. Run "
+            "with the returned setup revision and accepted_omissions set to exactly "
+            "the omission IDs returned. Then fetch the combined events, daily area, "
+            "and cells, and fetch AMSR2 events for its own contribution. Keep event "
+            "and cell pages small. Report partial completeness, name SeaWiFS and its "
+            "reason, say its access is unknown, and state that the totals describe "
+            "only the modeled AMSR2 subset. These are modeled opportunities, not "
+            "confirmed acquisitions; cells use cell-center samples and "
+            "field-of-regard envelopes are not continuous viewing time.",
+            _mixed_partial(
+                "amsr2-gcom-w1-conical-product-sector",
+                "2026-10-27.1",
+                "SeaWiFS",
             ),
         ),
     ]

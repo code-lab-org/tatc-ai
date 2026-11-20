@@ -208,8 +208,22 @@ SERVER_INSTRUCTIONS = (
     "For more than one selected configuration, use the mixed study preparation "
     "tool and mixed study finish tool. It accepts one to six exact registry revisions or "
     "complete study-specific configurations, across at most six spacecraft. "
-    "Every staged spacecraft must have at least one selected configuration, and "
-    "every configuration must cover the full UTC window. Keep each configuration's "
+    "Every staged spacecraft must have a selected configuration or recorded "
+    "omission, and "
+    "every included configuration must cover the full UTC window. "
+    "When a requested instrument cannot be modeled, prepare a partial proposal "
+    "with omissions: name the instrument and spacecraft, choose a reason_code, "
+    "give the reason, and attach evidence when a source conflict or missing "
+    "evidence caused it. Use awaiting_clarification plus the question when a "
+    "choice is still open. A partial proposal needs at least one calculable "
+    "configuration; never turn an all-unresolved request into a zero-coverage "
+    "study. Finish a partial proposal only with accepted_omissions set to exactly "
+    "the returned omission IDs. Report completeness_status partial, name every "
+    "omitted instrument and its reason, and say its access is unknown; never "
+    "report an omission as zero events. A modeled configuration with zero valid "
+    "events is a modeled zero over its interval, not an omission. If a "
+    "calculation fails after acceptance, name the failed configuration, save "
+    "nothing, and prepare a newly accepted proposal before dropping it. Keep each configuration's "
     "identity, source revision, orbit, geometry, and illumination setting separate. "
     "A target-sunlit filter may be a study assumption; report its note and do not "
     "call it a source-established scientific requirement. TAT-C applies each "
@@ -1793,6 +1807,7 @@ def prepare_mixed_study(
     grid_rows: int,
     grid_columns: int,
     configurations: List[Dict[str, Any]],
+    omissions: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Prepare one through six sourced conical or pointed configurations.
 
@@ -1800,14 +1815,25 @@ def prepare_mixed_study(
     exact registry selection with configuration_id and configuration_revision,
     or a complete study-specific configuration nested as an object under
     configuration; do not pass a JSON-encoded string. Every staged spacecraft
-    must have a selected configuration. Preparation checks full-window
-    applicability and workload limits but runs no viewing-event calculation.
+    must have a selected configuration or a recorded omission. Preparation
+    checks full-window applicability and workload limits but runs no
+    viewing-event calculation.
+
+    omissions is an optional JSON list of requested instruments this study
+    cannot calculate. Each item names instrument and spacecraft, a status of
+    omitted or awaiting_clarification, a reason_code, and a reason; awaiting
+    entries also carry the question to resolve. Evidence may be attached.
+    A partial proposal requires at least one calculable configuration.
 
     The returned proposal preserves each identity, revision, source evidence,
-    orbit, geometry, illumination setting, and acceptance revision. Accept the
-    proposal before calling the mixed finish tool.
+    orbit, geometry, illumination setting, and acceptance revision, plus every
+    omission and its reason. Accept the proposal before calling the mixed
+    finish tool; a partial proposal also requires accepting its exact omission
+    scope.
     """
-    return _prepare_mixed(draft_id, grid_rows, grid_columns, configurations)
+    return _prepare_mixed(
+        draft_id, grid_rows, grid_columns, configurations, omissions
+    )
 
 
 @mcp.tool
@@ -1815,9 +1841,18 @@ def finish_mixed_study(
     draft_id: str,
     accepted_setup_revision: str,
     accept_setup: bool,
+    accepted_omissions: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Run only the current, explicitly accepted mixed study proposal."""
-    return _finish_mixed(draft_id, accepted_setup_revision, accept_setup)
+    """Run only the current, explicitly accepted mixed study proposal.
+
+    When the proposal records omitted instruments, pass accepted_omissions
+    with exactly the omission IDs it returned, in addition to
+    accept_setup=true. An awaiting-clarification item must be resolved or
+    re-prepared as an explicit omission before the study can run.
+    """
+    return _finish_mixed(
+        draft_id, accepted_setup_revision, accept_setup, accepted_omissions
+    )
 
 
 @mcp.tool
