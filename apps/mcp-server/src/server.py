@@ -21,6 +21,7 @@ from .configuration_registry import (
     record_instrument_configuration_refresh as _record_instrument_configuration_refresh,
 )
 from .conical_config import ConicalConfiguration, SourceEvidence
+from .conical_study import OmissionRequest
 from .conical_study import finish_conical_study as _finish_conical
 from .conical_study import finish_mixed_study as _finish_mixed
 from .conical_study import get_conical_event_spacing as _conical_event_spacing
@@ -1807,7 +1808,7 @@ def prepare_mixed_study(
     grid_rows: int,
     grid_columns: int,
     configurations: List[Dict[str, Any]],
-    omissions: Optional[List[Dict[str, Any]]] = None,
+    omissions: Optional[List[OmissionRequest]] = None,
 ) -> Dict[str, Any]:
     """Prepare one through six sourced conical or pointed configurations.
 
@@ -1820,10 +1821,13 @@ def prepare_mixed_study(
     viewing-event calculation.
 
     omissions is an optional JSON list of requested instruments this study
-    cannot calculate. Each item names instrument and spacecraft, a status of
-    omitted or awaiting_clarification, a reason_code, and a reason; awaiting
-    entries also carry the question to resolve. Evidence may be attached.
-    A partial proposal requires at least one calculable configuration.
+    cannot calculate. Each item names instrument and spacecraft plus an
+    optional mode and norad_id, a status of omitted or awaiting_clarification,
+    a reason_code of missing_evidence, unsupported_instrument,
+    unsupported_mode, unresolved_source_conflict, or other, and a reason;
+    awaiting entries also carry the question to resolve. Evidence entries may
+    carry authority, title, url, locator, excerpt, and note. A partial proposal
+    requires at least one calculable configuration.
 
     The returned proposal preserves each identity, revision, source evidence,
     orbit, geometry, illumination setting, and acceptance revision, plus every

@@ -1879,4 +1879,33 @@ def build_cases(clock: Clock) -> List[Case]:
                 "SeaWiFS",
             ),
         ),
+        Case(
+            "mixed_partial_amsr2_self_built",
+            ("mixed", "partial", "omission", "schema"),
+            "Run one partial mixed access study over west=-65, south=0, east=-55, "
+            "north=10 with a 1x1 grid starting at 2026-10-04T00:00:00Z and ending "
+            "at the exclusive timestamp 2026-10-05T00:00:00Z. Copy the exact ISO "
+            "timestamps unchanged. I select the reviewed AMSR2 GCOM-W1 "
+            "configuration amsr2-gcom-w1-conical-product-sector revision "
+            "2026-10-27.1, and I also requested SeaWiFS on OrbView-2, which has no "
+            "reviewed configuration in this increment. Stage only GCOM-W1. Do not "
+            "invent SeaWiFS geometry and do not report its access as zero. Build "
+            "the omission yourself from the prepare_mixed_study schema: use reason "
+            "code unsupported_instrument, a clear reason, and status omitted. Show "
+            "the partial status, the omission reason, and the modeled AMSR2 setup. "
+            "I accept that exact partial proposal and omission scope. Run with the "
+            "returned setup revision and accepted_omissions set to exactly the "
+            "omission IDs returned. Then fetch the combined events, daily area, "
+            "and cells, and fetch AMSR2 events for its own contribution. Keep event "
+            "and cell pages small. Report partial completeness, name SeaWiFS and its "
+            "reason, say its access is unknown, and state that the totals describe "
+            "only the modeled AMSR2 subset. These are modeled opportunities, not "
+            "confirmed acquisitions; cells use cell-center samples and "
+            "field-of-regard envelopes are not continuous viewing time.",
+            _mixed_partial(
+                "amsr2-gcom-w1-conical-product-sector",
+                "2026-10-27.1",
+                "SeaWiFS",
+            ),
+        ),
     ]

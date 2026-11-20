@@ -92,12 +92,12 @@ class OmissionEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    authority: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    url: str = Field(min_length=1)
-    locator: Optional[str] = None
-    excerpt: Optional[str] = None
-    note: Optional[str] = None
+    authority: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    url: str = Field(min_length=1, max_length=2048)
+    locator: Optional[str] = Field(default=None, max_length=500)
+    excerpt: Optional[str] = Field(default=None, max_length=4000)
+    note: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("url")
     @classmethod
@@ -112,15 +112,17 @@ class OmissionRequest(BaseModel):
 
     Omitted entries are part of the accepted scope. An awaiting-clarification
     entry records the open question without pretending the instrument is either
-    modeled or explicitly omitted.
+    modeled or explicitly omitted. Mode comparison for duplicate detection is
+    exact text after trimming, so a descriptive alias does not match the
+    configuration's operating_mode.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    instrument: str = Field(min_length=1)
-    spacecraft: str = Field(min_length=1)
+    instrument: str = Field(min_length=1, max_length=200)
+    spacecraft: str = Field(min_length=1, max_length=200)
     norad_id: Optional[int] = Field(default=None, gt=0)
-    mode: Optional[str] = None
+    mode: Optional[str] = Field(default=None, max_length=200)
     status: Literal["omitted", "awaiting_clarification"] = "omitted"
     reason_code: Literal[
         "missing_evidence",
@@ -129,9 +131,9 @@ class OmissionRequest(BaseModel):
         "unresolved_source_conflict",
         "other",
     ]
-    reason: str = Field(min_length=1)
-    question: Optional[str] = None
-    evidence: List[OmissionEvidence] = Field(default_factory=list)
+    reason: str = Field(min_length=1, max_length=4000)
+    question: Optional[str] = Field(default=None, max_length=2000)
+    evidence: List[OmissionEvidence] = Field(default_factory=list, max_length=10)
 
     @field_validator("norad_id", mode="before")
     @classmethod
@@ -334,13 +336,15 @@ def _validate_applicability(
         )
     if uncovered:
         raise ValueError(
-            "The requested window is not fully covered by the configuration's "
-            "established applicability interval "
+            f"Configuration {configuration.configuration_id!r} revision "
+            f"{configuration.revision!r}: the requested window is not fully "
+            "covered by its established applicability interval "
             f"[{iso_utc(app_start)}, {iso_utc(app_end)}). Uncovered: "
             + "; ".join(uncovered)
             + ". This increment requires a fully covered window; partial-study "
             "applicability is not supported yet. Choose a window inside the "
-            "interval or supply a different sourced configuration."
+            "interval, supply a different sourced configuration, or, in a mixed "
+            "study, record this configuration as an omission with a reason."
         )
     return app_start, app_end
 
@@ -939,7 +943,7 @@ def _resolve_omissions(
         (
             configuration.instrument.strip().lower(),
             [
-                name.strip().lower()
+                _normalized_name(name)
                 for name in (
                     configuration.spacecraft.name,
                     *configuration.spacecraft.aliases,
@@ -947,6 +951,7 @@ def _resolve_omissions(
                 if name
             ],
             getattr(configuration, "operating_mode", "").strip().lower(),
+            int(configuration.spacecraft.norad_id),
         )
         for configuration in configurations
     ]
@@ -985,9 +990,13 @@ def _resolve_omissions(
         requested_mode = (request.mode or "").strip().lower()
         duplicates_model = any(
             instrument == request.instrument.strip().lower()
-            and any(_staged_name_matches(request.spacecraft, name) for name in names)
+            and (
+                request.norad_id == norad_id
+                if request.norad_id is not None
+                else _normalized_name(request.spacecraft) in names
+            )
             and (not requested_mode or requested_mode == mode)
-            for instrument, names, mode in modeled
+            for instrument, names, mode, norad_id in modeled
         )
         if duplicates_model:
             raise ValueError(
@@ -999,10 +1008,14 @@ def _resolve_omissions(
     return resolved
 
 
+def _normalized_name(value: str) -> str:
+    """Normalize a spacecraft name for exact, case-insensitive comparison."""
+    return " ".join(str(value).strip().casefold().split())
+
+
 def _staged_name_matches(requested: str, staged: str) -> bool:
-    requested = requested.strip().lower()
-    staged = staged.strip().lower()
-    return bool(requested) and (requested in staged or staged in requested)
+    requested = _normalized_name(requested)
+    return bool(requested) and requested == _normalized_name(staged)
 
 
 def _check_mixed_spacecraft(
@@ -1024,6 +1037,12 @@ def _check_mixed_spacecraft(
             for norad_id, satellite in staged_by_id.items()
             if _staged_name_matches(omission["spacecraft"], str(satellite["satellite"]))
         }
+        if len(matched_ids) > 1:
+            raise ValueError(
+                f"Omission {omission['omission_id']!r} names spacecraft "
+                f"{omission['spacecraft']!r}, which matches more than one staged "
+                "spacecraft. Name the exact spacecraft or include its norad_id."
+            )
         omitted_norad = omission.get("norad_id")
         if omitted_norad is not None:
             if omitted_norad in staged_by_id:
@@ -1141,6 +1160,18 @@ def _mixed_consequential_payload(
     }
 
 
+def _selection_label(selection: Any, index: int) -> str:
+    """Name one configuration by position and, when available, exact ID."""
+    identity = None
+    if isinstance(selection, dict):
+        identity = selection.get("configuration_id")
+        inline = selection.get("configuration")
+        if not identity and isinstance(inline, dict):
+            identity = inline.get("configuration_id")
+    label = f"Configuration {index + 1}"
+    return f"{label} ({identity!r})" if identity else label
+
+
 def prepare_mixed_study(
     draft_id: Any,
     grid_rows: Any,
@@ -1164,9 +1195,16 @@ def prepare_mixed_study(
             "instrument configurations. Reduce the selection and prepare again."
         )
 
-    resolved: List[Tuple[InstrumentConfiguration, Optional[Dict[str, Any]]]] = [
-        _resolve_mixed_configuration(selection) for selection in configurations
-    ]
+    resolved: List[Tuple[InstrumentConfiguration, Optional[Dict[str, Any]]]] = []
+    for index, selection in enumerate(configurations):
+        try:
+            resolved.append(_resolve_mixed_configuration(selection))
+        except ValueError as exc:
+            raise ValueError(
+                f"{_selection_label(selection, index)} cannot be modeled: {exc} "
+                "If the requested instrument cannot be modeled, record it as an "
+                "omission with a reason and prepare again."
+            ) from exc
     prepared_omissions = _resolve_omissions(
         [configuration for configuration, _ in resolved], omissions
     )
@@ -1342,10 +1380,17 @@ def prepare_mixed_study(
         "limits": limits,
         "acceptance": {
             "required": True,
+            "can_run": not awaiting_items,
             "setup_revision": revision,
             "accepted_omissions": [item["omission_id"] for item in omitted_items],
             "instruction": (
-                "Present each modeled configuration, each omitted request and its "
+                (
+                    "This proposal cannot run until every awaiting-clarification "
+                    "item is resolved or re-prepared as an explicit omission. "
+                    if awaiting_items
+                    else ""
+                )
+                + "Present each modeled configuration, each omitted request and its "
                 "reason, every unresolved question, the sources, illumination "
                 "settings, assumptions, warnings, region, grid, and window. Run only "
                 "after the researcher accepts this exact setup revision"
@@ -1946,10 +1991,17 @@ def finish_mixed_study(
             "proposal that explicitly omits or corrects the failed configuration, "
             "then obtain a new acceptance before running again."
         ) from exc
-    full = _mixed_result_payload(
-        stage, proposal, cells, raw_events, start, end, _utcnow()
-    )
-    result_id = _save_result(full)
+    try:
+        full = _mixed_result_payload(
+            stage, proposal, cells, raw_events, start, end, _utcnow()
+        )
+        result_id = _save_result(full)
+    except Exception as exc:
+        raise ValueError(
+            f"Mixed result assembly failed after calculation: {exc} No result was "
+            "saved. Prepare an updated proposal and obtain a new acceptance before "
+            "running again."
+        ) from exc
     return _compact_mixed_summary(full, result_id)
 
 
@@ -2792,11 +2844,17 @@ def _mixed_scope(
     configuration_id = configuration_id.strip()
     selected = payload["configuration_results"].get(configuration_id)
     if selected is None:
+        normalized = _normalized_name(configuration_id)
         omitted = next(
             (
                 item
                 for item in payload.get("omitted_configurations", [])
                 if item["omission_id"] == configuration_id
+                or normalized
+                in {
+                    _normalized_name(item["instrument"]),
+                    _normalized_name(item["spacecraft"]),
+                }
             ),
             None,
         )
@@ -2810,11 +2868,43 @@ def _mixed_scope(
         available = ", ".join(
             item["configuration_id"] for item in payload["modeled_configurations"]
         )
+        omitted_names = ", ".join(
+            f"{item['instrument']} on {item['spacecraft']} ({item['omission_id']})"
+            for item in payload.get("omitted_configurations", [])
+        )
         raise ValueError(
             f"Configuration {configuration_id!r} is not in this result. Choose one of: "
-            f"{available}. Omit configuration_id for the combined union."
+            f"{available}."
+            + (f" Omitted: {omitted_names}." if omitted_names else "")
+            + " Omit configuration_id for the combined union."
         )
     return result_id, payload, selected
+
+
+def _compact_omission(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep an omission's identity and reason without repeating long excerpts."""
+    evidence = item.get("evidence") or []
+    return {
+        "omission_id": item["omission_id"],
+        "instrument": item["instrument"],
+        "spacecraft": item["spacecraft"],
+        "norad_id": item.get("norad_id"),
+        "mode": item.get("mode"),
+        "status": item["status"],
+        "reason_code": item["reason_code"],
+        "reason": item["reason"],
+        "question": item.get("question"),
+        "access_status": item["access_status"],
+        "evidence": [
+            {
+                key: entry[key]
+                for key in ("authority", "title", "url")
+                if entry.get(key)
+            }
+            for entry in evidence
+            if isinstance(entry, dict)
+        ],
+    }
 
 
 def _mixed_fetch_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2895,6 +2985,10 @@ def _mixed_fetch_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
         "accepted_at_utc": provenance["accepted_at_utc"],
         "setup_snapshot": {
             "configurations": configurations,
+            "omissions": [
+                _compact_omission(item)
+                for item in setup_snapshot.get("omissions", [])
+            ],
             "window": setup_snapshot["window"],
             "region": setup_snapshot["region"],
             "grid": setup_snapshot["grid"],
@@ -2940,7 +3034,10 @@ def _mixed_fetch_header(
         "limits": payload["limits"],
         "completeness_status": payload["completeness_status"],
         "modeled_configurations": payload["modeled_configurations"],
-        "omitted_configurations": payload["omitted_configurations"],
+        "omitted_configurations": [
+            _compact_omission(item)
+            for item in payload["omitted_configurations"]
+        ],
         "applicable_dates": payload["applicable_dates"],
         "unresolved_dates": payload["unresolved_dates"],
         "definitions": definitions,
