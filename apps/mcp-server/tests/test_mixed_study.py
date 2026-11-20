@@ -1887,3 +1887,31 @@ def test_applicability_assumption_must_extend_the_established_interval():
     )
     assert error
     assert "adds no modeled time" in text
+
+
+def test_multi_day_mixed_study_handles_unmodeled_days(monkeypatch):
+    error, text, proposal = _prepared_mixed_study(
+        start="2026-10-04T00:00:00Z",
+        end="2026-10-06T00:00:00Z",
+        configurations=[
+            {"configuration": _limited_amsr2("2026-10-04T12:00:00Z")},
+            {
+                "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                "configuration_revision": "2026-10-30.1",
+            },
+        ],
+    )
+    assert not error, text
+    assert proposal["completeness_status"] == "partial"
+    monkeypatch.setattr(conical_study, "_collect_tasks", lambda *args, **kwargs: [])
+    error, text, summary = _call(
+        "finish_mixed_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    assert summary["completeness_status"] == "partial"
+    assert summary["summary_counts"]["unmodeled_days"] >= 0

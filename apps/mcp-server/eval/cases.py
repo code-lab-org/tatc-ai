@@ -1484,87 +1484,36 @@ def _conical_registry_failed_refresh(expected_config_id: str, expected_revision:
     return checks
 
 
-def _conical_partial_dates():
-    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
-        del clock
-        finish = successful_conical_finish(trace)
-        text = trace.final.lower()
-        calls = trace.calls
-        if finish is None or not finish.parsed:
-            return {
-                "completed_partial": False,
-                "reported_unresolved": False,
-                "fetched": False,
-                "not_complete_claim": False,
-            }
-        summary = finish.parsed
-        unresolved = summary.get("unresolved_dates") or []
-        preparings = [
-            call
-            for call in calls
-            if call.name == "prepare_conical_study" and not call.error and call.parsed
-        ]
-        prepared = preparings[-1].parsed if preparings else {}
-        return {
-            "completed_partial": summary.get("completeness_status") == "partial",
-            "reported_unresolved": bool(unresolved)
-            and "partial" in text
-            and any(cue in text for cue in ("unresolved", "unknown", "not modeled")),
-            "fetched": any(
-                call.name in {"get_access_events", "get_access_daily"}
-                and not call.error
-                for call in calls
-            ),
-            "not_complete_claim": prepared.get("completeness_status") == "partial"
-            and "unresolved_dates" in prepared,
-        }
-
-    return checks
-
-
-def _conical_partial_dates():
+def _conical_assumption_dates():
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         finish = successful_conical_finish(trace)
         if finish is None or not finish.parsed:
             return {
                 "completed": False,
-                "prepared": False,
-                "partial_status": False,
-                "unresolved_dates": False,
-                "daily_partial": False,
-                "reported_partial": False,
+                "assumption_used": False,
+                "complete_under_assumptions": False,
+                "reported": False,
             }
         summary = finish.parsed
-        unresolved = summary.get("unresolved_dates") or []
-        daily = next(
+        prepared = next(
             (
-                call.parsed.get("daily", [])
+                call
                 for call in trace.calls
-                if call.name == "get_access_daily" and not call.error and call.parsed
+                if call.name == "prepare_conical_study"
+                and not call.error
+                and call.parsed
             ),
-            [],
+            None,
         )
-        final = trace.final.lower()
-        reported = any(
-            cue in final
-            for cue in ("partial", "unresolved", "not complete", "unknown")
-        ) and not any(
-            cue in final
-            for cue in ("complete result", "fully modeled", "zero access")
-        )
+        text = trace.final.lower()
         return {
             "completed": summary.get("result_kind") == "conical_study",
-            "prepared": any(
-                call.name == "prepare_conical_study" and not call.error
-                for call in trace.calls
-            ),
-            "partial_status": summary.get("completeness_status") == "partial",
-            "unresolved_dates": bool(unresolved),
-            "daily_partial": any(
-                row.get("coverage_status") in {"partial_day", "unmodeled"}
-                for row in daily
-            ),
-            "reported_partial": reported,
+            "assumption_used": bool(prepared)
+            and bool(prepared.args.get("applicability_assumptions")),
+            "complete_under_assumptions": summary.get("completeness_status")
+            == "complete_under_assumptions",
+            "reported": "assumption" in text
+            and any(cue in text for cue in ("complete_under_assumptions", "not independently established", "sensitivity")),
         }
 
     return checks
@@ -1861,6 +1810,21 @@ def build_cases(clock: Clock) -> List[Case]:
             "unresolved interval, and do not describe unresolved time as zero access. "
             f"Configuration JSON: {json.dumps(_with_applicability_end(CONICAL_CONFIG, clock.d0 + timedelta(hours=1)), separators=(',', ':'))}",
             _conical_partial_dates(),
+        ),
+        Case(
+            "conical_applicability_assumption",
+            ("conical", "applicability", "assumption"),
+            f"Run a conical AMSR2 study for GCOM-W1 over west=0, south=-65, east=10, "
+            f"north=-55 with a 2x2 grid from {d0} for 2 hours. Use this exact "
+            "configuration. Its established applicability ends one hour after the "
+            "window starts, and I accept extending the second hour as an explicit "
+            "study assumption with this rationale: the researcher accepts extrapolating "
+            "the established scan record for this sensitivity study. Prepare with "
+            "applicability_assumptions, show the modeled and assumed intervals, then "
+            "run the accepted setup and report complete_under_assumptions with the "
+            "assumption named. Do not ask for another confirmation. "
+            f"Configuration JSON: {json.dumps(_with_applicability_end(CONICAL_CONFIG, clock.d0 + timedelta(hours=1)), separators=(',', ':'))}",
+            _conical_assumption_dates(),
         ),
         Case(
             "conical_unresolved_sector",

@@ -1659,3 +1659,72 @@ def test_conical_event_fetch_rejects_legacy_result():
         conical_study.get_conical_event_spacing(legacy_id)
     with pytest.raises(ValueError, match="Unknown result_id"):
         conical_study.get_conical_events("missing")
+
+
+def test_single_configuration_assumption_is_accepted_and_reported(monkeypatch):
+    configuration = copy.deepcopy(_config())
+    configuration["applicability"]["end_utc_exclusive"] = "2026-10-05T00:30:00Z"
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration": configuration,
+            "applicability_assumptions": [
+                {
+                    "configuration_id": configuration["configuration_id"],
+                    "start_utc": "2026-10-05T00:30:00Z",
+                    "end_utc_exclusive": "2026-10-05T01:00:00Z",
+                    "rationale": "Fixture study assumption for the second half hour.",
+                }
+            ],
+        },
+    )
+    assert not error, text
+    assert proposal["applicability_status"] == "complete_under_assumptions"
+    monkeypatch.setattr(conical_study, "_collect_tasks", lambda *args, **kwargs: [])
+    error, text, summary = _call(
+        "finish_conical_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    assert summary["completeness_status"] == "complete_under_assumptions"
+    assert summary["applicability_assumptions"][0]["rationale"].startswith("Fixture")
+
+
+def test_single_configuration_partial_study_finishes_with_unresolved_dates(monkeypatch):
+    configuration = copy.deepcopy(_config())
+    configuration["applicability"]["end_utc_exclusive"] = "2026-10-05T00:30:00Z"
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    error, text, proposal = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration": configuration,
+        },
+    )
+    assert not error, text
+    assert proposal["completeness_status"] == "partial"
+    monkeypatch.setattr(conical_study, "_collect_tasks", lambda *args, **kwargs: [])
+    error, text, summary = _call(
+        "finish_conical_study",
+        {
+            "draft_id": proposal["draft_id"],
+            "accepted_setup_revision": proposal["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    assert summary["completeness_status"] == "partial"
+    assert summary["unresolved_dates"]
+    assert summary["applicable_dates"]["start_utc"] == "2026-10-05T00:00:00Z"
