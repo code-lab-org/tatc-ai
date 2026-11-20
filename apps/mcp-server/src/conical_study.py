@@ -1071,7 +1071,7 @@ def _check_mixed_spacecraft(
             raise ValueError(
                 f"Omission {omission['omission_id']!r} names spacecraft "
                 f"{omission['spacecraft']!r}, which matches more than one staged "
-                "spacecraft. Name the exact spacecraft or include its norad_id."
+                "spacecraft. Name one exact staged spacecraft."
             )
         omitted_norad = omission.get("norad_id")
         if omitted_norad is not None:
@@ -1098,10 +1098,24 @@ def _check_mixed_spacecraft(
                 )
         covered_ids.update(matched_ids)
         resolved_omissions.append((omission, set(matched_ids)))
+    resolved_seen: List[Tuple[Dict[str, Any], str, str, int]] = []
     for omission, resolved_ids in resolved_omissions:
         instrument = omission["instrument"].strip().lower()
         mode = (omission.get("mode") or "").strip().lower()
         for norad_id in resolved_ids:
+            for previous, previous_instrument, previous_mode, previous_norad in resolved_seen:
+                if (
+                    instrument == previous_instrument
+                    and norad_id == previous_norad
+                    and (not mode or not previous_mode or mode == previous_mode)
+                ):
+                    raise ValueError(
+                        f"Omission {omission['omission_id']!r} repeats the requested "
+                        f"instrument from omission {previous['omission_id']!r} "
+                        f"({omission['instrument']!r} on NORAD {norad_id}). Record "
+                        "each requested instrument once."
+                    )
+            resolved_seen.append((omission, instrument, mode, norad_id))
             if any(
                 instrument == modeled_instrument
                 and norad_id == modeled_norad

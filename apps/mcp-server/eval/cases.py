@@ -1209,14 +1209,21 @@ def _mixed_partial(
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
         del clock
         finish = successful_mixed_finish(trace)
-        staged_norads = set()
-        for call in trace.calls:
-            if call.name == "begin_access_run" and not call.error and call.parsed:
-                staged_norads = {
-                    int(item["norad_id"])
-                    for item in call.parsed.get("satellites", [])
-                    if item.get("norad_id") is not None
-                }
+        if finish is not None and finish.parsed:
+            staged_norads = {
+                int(item["norad_id"])
+                for item in finish.parsed.get("satellites", [])
+                if item.get("norad_id") is not None
+            }
+        else:
+            staged_norads = set()
+            for call in trace.calls:
+                if call.name == "begin_access_run" and not call.error and call.parsed:
+                    staged_norads = {
+                        int(item["norad_id"])
+                        for item in call.parsed.get("satellites", [])
+                        if item.get("norad_id") is not None
+                    }
         staged_ok = set(required_staged_norads).issubset(staged_norads)
         if finish is None or not finish.parsed:
             return {

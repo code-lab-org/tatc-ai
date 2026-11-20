@@ -1521,3 +1521,44 @@ def test_partial_staged_case_requires_both_spacecraft():
 
     trace.calls[0].parsed["satellites"].append({"norad_id": 38337})
     assert case.checks(trace, clock)["staged_expected_spacecraft"]
+
+    abandoned_begin = Call(
+        "begin_access_run",
+        {},
+        False,
+        "{}",
+        parsed={"satellites": [{"norad_id": 62261}]},
+    )
+    finish_s1c_only = Call(
+        "finish_mixed_study",
+        {},
+        False,
+        "{}",
+        parsed={
+            "result_id": "mixed-staged-only-s1c",
+            "satellites": [{"norad_id": 62261}],
+        },
+    )
+    trace = Trace(
+        prompt="partial staged omission",
+        calls=[finish_s1c_only, abandoned_begin],
+        final="",
+    )
+    assert not case.checks(trace, clock)["staged_expected_spacecraft"]
+
+    finish_both = Call(
+        "finish_mixed_study",
+        {},
+        False,
+        "{}",
+        parsed={
+            "result_id": "mixed-staged-both",
+            "satellites": [{"norad_id": 62261}, {"norad_id": 38337}],
+        },
+    )
+    trace = Trace(
+        prompt="partial staged omission",
+        calls=[finish_both, abandoned_begin],
+        final="",
+    )
+    assert case.checks(trace, clock)["staged_expected_spacecraft"]

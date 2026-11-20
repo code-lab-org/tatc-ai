@@ -1527,6 +1527,41 @@ def test_omission_duplicate_is_rechecked_after_staged_name_resolution(monkeypatc
     assert "both a modeled configuration and an omission" in text
 
 
+def test_omissions_cannot_repeat_after_spacecraft_resolution(monkeypatch):
+    original = _sat_info
+
+    def display_names(identifier):
+        info = copy.deepcopy(original(identifier))
+        if int(info["norad_id"]) == 38337:
+            info["name"] = "GCOM-W1 (SHIZUKU)"
+        return info
+
+    monkeypatch.setattr(
+        generic_coverage.celestrak_client, "get_satellite_info", display_names
+    )
+    omission = {
+        "instrument": "AMSR2",
+        "status": "omitted",
+        "reason_code": "other",
+        "reason": "The researcher excluded AMSR2 from this study.",
+    }
+    for second in (
+        {**omission, "spacecraft": "SHIZUKU"},
+        {**omission, "spacecraft": "Shizuku-sat", "norad_id": 38337},
+    ):
+        error, text, _ = _prepared_mixed_study(
+            configurations=[
+                {
+                    "configuration_id": "sentinel-1c-c-sar-iw-fixed-view",
+                    "configuration_revision": "2026-10-30.1",
+                }
+            ],
+            omissions=[{**omission, "spacecraft": "GCOM-W1"}, second],
+        )
+        assert error
+        assert "repeats the requested instrument" in text
+
+
 def test_omission_entries_cannot_repeat():
     error, text, _ = _prepared_mixed_study(
         omissions=[OMITTED_NISAR, copy.deepcopy(OMITTED_NISAR)]
