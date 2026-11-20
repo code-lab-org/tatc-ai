@@ -1066,6 +1066,10 @@ def test_partial_proposal_requires_exact_omission_acceptance_and_reports_unknown
                 omission_id
             ]
             assert fetched["omitted_configurations"][0]["access_status"] == "unknown"
+            assert (
+                fetched["omitted_configurations"][0]["evidence"][0]["url"]
+                == "https://example.test/nisar"
+            )
             assert fetched["definitions"]["omitted_access"]
 
     error, text, _ = _call(
@@ -1303,3 +1307,20 @@ def test_omission_entries_are_validated_and_cannot_repeat_a_modeled_configuratio
     )
     assert error
     assert "both a modeled configuration and an omission" in text
+
+
+def test_omission_identity_must_agree_with_the_staged_spacecraft():
+    error, text, _ = _prepared_mixed_study(
+        omissions=[
+            {
+                "instrument": "AMSR-E",
+                "spacecraft": "GCOM-W1",
+                "norad_id": 62261,
+                "status": "omitted",
+                "reason_code": "unsupported_instrument",
+                "reason": "No reviewed configuration exists.",
+            }
+        ]
+    )
+    assert error
+    assert "Correct the omission identity" in text

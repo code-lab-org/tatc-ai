@@ -1019,11 +1019,32 @@ def _check_mixed_spacecraft(
     missing = sorted(configured_ids - set(staged_by_id))
     covered_ids = set(configured_ids)
     for omission in omissions:
-        for norad_id, satellite in staged_by_id.items():
-            if omission.get("norad_id") == norad_id or _staged_name_matches(
-                omission["spacecraft"], str(satellite["satellite"])
-            ):
-                covered_ids.add(norad_id)
+        matched_ids = {
+            norad_id
+            for norad_id, satellite in staged_by_id.items()
+            if _staged_name_matches(omission["spacecraft"], str(satellite["satellite"]))
+        }
+        omitted_norad = omission.get("norad_id")
+        if omitted_norad is not None:
+            if omitted_norad in staged_by_id:
+                if omitted_norad not in matched_ids:
+                    raise ValueError(
+                        f"Omission {omission['omission_id']!r} names spacecraft "
+                        f"{omission['spacecraft']!r} with NORAD {omitted_norad}, "
+                        f"but that staged spacecraft is "
+                        f"{staged_by_id[omitted_norad]['satellite']!r}. Correct "
+                        "the omission identity."
+                    )
+                covered_ids.add(omitted_norad)
+                continue
+            if matched_ids:
+                raise ValueError(
+                    f"Omission {omission['omission_id']!r} names NORAD "
+                    f"{omitted_norad}, but staged spacecraft "
+                    f"{', '.join(map(str, sorted(matched_ids)))} resolves from "
+                    f"{omission['spacecraft']!r}. Correct the omission identity."
+                )
+        covered_ids.update(matched_ids)
     uncovered = sorted(set(staged_by_id) - covered_ids)
     if missing or uncovered:
         details = []
