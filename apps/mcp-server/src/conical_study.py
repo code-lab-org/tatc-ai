@@ -61,6 +61,7 @@ from .pointed_config import (
     PointedConfiguration,
     configuration_from_snapshot as pointed_configuration_from_snapshot,
 )
+from .software import server_build
 from .coverage_core import (
     MAX_GRID_CELLS,
     MAX_YEAR_CELL_CONFIGURATIONS,
@@ -225,22 +226,6 @@ def _canonical(payload: Any) -> str:
 
 def _sha256(payload: Any) -> str:
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
-
-
-def _configuration_digest(snapshot: Dict[str, Any]) -> str:
-    """Hash a configuration without the app build identity.
-
-    The build commit is provenance, not a numerical input. Excluding it keeps
-    setup revisions stable across server rebuilds that do not change the
-    instrument mapping.
-    """
-    value = {key: item for key, item in snapshot.items() if key != "server_build"}
-    software = value.get("software")
-    if isinstance(software, dict):
-        value["software"] = {
-            key: item for key, item in software.items() if key != "server_build"
-        }
-    return _sha256(value)
 
 
 def _omission_id(item: Dict[str, Any]) -> str:
@@ -571,7 +556,7 @@ def _consequential_payload(
             "omm_hash": _omm_hash(satellite["omm_records"]),
             "omm_mean_altitude_km": satellite["omm_mean_altitude_km"],
         },
-        "configuration_digest": _configuration_digest(snapshot),
+        "configuration_digest": _sha256(snapshot),
         "configuration": snapshot,
         "registry_selection": registry_selection,
         "orbit_direction_filter": orbit_direction,
@@ -594,11 +579,7 @@ def _consequential_payload(
             "unresolved_intervals": [],
             "assumptions": [],
         },
-        "software": {
-            key: item
-            for key, item in snapshot["software"].items()
-            if key != "server_build"
-        },
+        "software": snapshot["software"],
         "evaluated_configuration_count": MAX_EVALUATED_CONFIGURATIONS,
     }
 
@@ -861,11 +842,6 @@ def _proposal_payload(
             "setting": "software",
             "value": consequential["software"],
             "why": "A TAT-C or Python change can change numerical results.",
-        },
-        {
-            "setting": "server_build",
-            "value": snapshot["software"].get("server_build"),
-            "why": "Build identity for provenance; it does not change the numerical setup hash.",
         },
         {
             "setting": "orbit_direction_filter",
@@ -1696,7 +1672,7 @@ def prepare_mixed_study(
                 "spacecraft": configuration.spacecraft.model_dump(mode="json"),
                 "satellite": satellite_snapshot,
                 "configuration": snapshot,
-                "configuration_digest": _configuration_digest(snapshot),
+                "configuration_digest": _sha256(snapshot),
                 "registry_selection": registry_selection,
                 "source_choices": source_choices_from_snapshot(snapshot),
                 "applicability": coverage,
@@ -2247,6 +2223,7 @@ def _mixed_result_payload(
                 "configuration_id": item["configuration_id"],
                 "configuration_revision": item["configuration_revision"],
                 **item["configuration"]["software"],
+                "server_build": server_build(),
             }
             for item in proposal["configurations"]
         ],
@@ -2773,7 +2750,7 @@ def _result_payload(
             "consequential_settings": proposal["consequential_settings"],
         },
         "accepted_choices": proposal["consequential"]["source_choices"],
-        "software": snapshot["software"],
+        "software": {**snapshot["software"], "server_build": server_build()},
         "orbit": {
             "norad_id": stage["satellites"][0]["norad_id"],
             "satellite": stage["satellites"][0]["satellite"],
@@ -2788,7 +2765,7 @@ def _result_payload(
         "accounting_method": accounting_method,
         "setup_revision": accepted_setup_revision,
         "accepted_setup_revision": accepted_setup_revision,
-        "configuration_digest": _configuration_digest(snapshot),
+        "configuration_digest": _sha256(snapshot),
         "satellite": stage["satellite"],
         "satellites": _public_satellites(stage),
         "instrument": configuration.instrument,

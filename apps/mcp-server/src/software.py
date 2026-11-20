@@ -13,11 +13,15 @@ def _version(name: str) -> str:
         return "unknown"
 
 
+def server_build() -> str:
+    """Return the application build identity, outside the numerical digest."""
+    return os.environ.get("TATC_AI_SERVER_VERSION", "dev")
+
+
 def software_versions() -> Dict[str, str]:
     """Return the versions that can change a study's numerical result."""
     return {
         "server": "tatc-ai-mcp-server",
-        "server_build": os.environ.get("TATC_AI_SERVER_VERSION", "dev"),
         "tatc": _version("tatc"),
         "python": platform.python_version(),
         "skyfield": _version("skyfield"),

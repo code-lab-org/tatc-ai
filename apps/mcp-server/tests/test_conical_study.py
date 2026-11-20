@@ -1866,3 +1866,38 @@ def test_direction_only_change_invalidates_the_setup_revision():
     )
     assert not error, text
     assert first["setup_revision"] != second["setup_revision"]
+
+
+def test_build_identity_does_not_change_the_setup_revision(monkeypatch):
+    draft = _begin()
+    _set_region(draft["draft_id"], [0.0, -65.0, 10.0, -55.0])
+    monkeypatch.setenv("TATC_AI_SERVER_VERSION", "build-a")
+    first = _prepare(draft["draft_id"])
+    monkeypatch.setenv("TATC_AI_SERVER_VERSION", "build-b")
+    error, text, second = _call(
+        "prepare_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configuration": _config(),
+        },
+    )
+    assert not error, text
+    assert first["setup_revision"] == second["setup_revision"]
+    assert first["configuration_digest"] == second["configuration_digest"]
+
+    error, text, summary = _call(
+        "finish_conical_study",
+        {
+            "draft_id": draft["draft_id"],
+            "accepted_setup_revision": second["setup_revision"],
+            "accept_setup": True,
+        },
+    )
+    assert not error, text
+    payload = result_store.get_result(summary["result_id"])
+    assert payload["provenance"]["software"]["server_build"] == "build-b"
+    assert "server_build" not in payload["provenance"]["setup_snapshot"][
+        "configuration"
+    ]["software"]
