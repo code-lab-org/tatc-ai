@@ -972,7 +972,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.request_timeout <= 0 or args.conversation_timeout <= 0:
         parser.error("request and conversation timeouts must be positive")
     if args.write_snapshot:
-        SNAPSHOT.write_text(snapshot_text(model_surface(args.hide)))
+        if args.hide:
+            parser.error("--write-snapshot records the full surface; do not pass --hide")
+        SNAPSHOT.write_text(snapshot_text(model_surface()))
         print(f"wrote model-facing surface snapshot: {SNAPSHOT}")
         return 0
     if args.compare:
