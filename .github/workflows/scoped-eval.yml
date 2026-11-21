@@ -1,0 +1,89 @@
+name: Scoped eval
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scoped-eval:
+    # The job always reports a status so branch protection can require it;
+    # the steps below skip when the eval does not apply. A fork PR and a
+    # PR without a model-facing change both finish green.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the scoped eval applies
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+          SNAPSHOT: apps/mcp-server/eval/fixtures/model_surface.json
+        run: |
+          if [ "$FORK" = "true" ]; then
+            echo "reason=fork" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA...$HEAD_SHA" -- "$SNAPSHOT"; then
+            echo "reason=not_model_facing" >> "$GITHUB_OUTPUT"
+          else
+            echo "reason=model_facing" >> "$GITHUB_OUTPUT"
+            # The base snapshot; a snapshot added by this PR diffs
+            # against an empty surface, so every tool is new.
+            if git cat-file -e "$BASE_SHA:$SNAPSHOT" 2>/dev/null; then
+              git show "$BASE_SHA:$SNAPSHOT" > "$RUNNER_TEMP/model-surface-before.json"
+            else
+              echo '{"tools": []}' > "$RUNNER_TEMP/model-surface-before.json"
+            fi
+          fi
+
+      - name: Explain the skipped fork pull request
+        if: steps.scope.outputs.reason == 'fork'
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### Scoped eval skipped
+          Fork pull requests do not receive repository secrets, so the eval
+          cannot reach the model proxy. A maintainer runs the scoped eval
+          before merge.
+          EOF
+
+      - name: Explain the skipped non-model-facing pull request
+        if: steps.scope.outputs.reason == 'not_model_facing'
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### Scoped eval skipped
+          The model-facing snapshot did not change, so no eval case applies.
+          EOF
+
+      - name: Set up Python 3.12
+        if: steps.scope.outputs.reason == 'model_facing'
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/mcp-server/requirements.txt
+
+      - name: Install server requirements
+        if: steps.scope.outputs.reason == 'model_facing'
+        run: python -m pip install -r apps/mcp-server/requirements.txt
+
+      # Needs the repository secret VOYAGER_API_KEY (an ASU Research
+      # Computing proxy key). The base URL matches
+      # apps/librechat/.env.example. The gate bounds itself to 420 seconds
+      # of eval time so two attempts fit this 10-minute job.
+      - name: Run the scoped eval
+        if: steps.scope.outputs.reason == 'model_facing'
+        working-directory: apps/mcp-server
+        env:
+          VOYAGER_API_KEY: ${{ secrets.VOYAGER_API_KEY }}
+          VOYAGER_BASE_URL: https://openai.rc.asu.edu/v1
+        run: |
+          python -m eval.ci gate \
+            --before "$RUNNER_TEMP/model-surface-before.json" \
+            --after eval/fixtures/model_surface.json \
+            --summary "$GITHUB_STEP_SUMMARY"

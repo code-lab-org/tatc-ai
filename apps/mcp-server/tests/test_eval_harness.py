@@ -334,6 +334,74 @@ def test_default_result_record_redacts_prompts_and_tool_text(tmp_path, monkeypat
     assert "SECRET" not in json.dumps(row)
 
 
+def test_run_writes_the_result_file_to_result_out(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from eval.cases import Trace
+
+    class FakeHarness:
+        tool_names = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def converse(self, _model, _prompt, **_kwargs):
+            return Trace(prompt="prompt", turns=1, stop="answered")
+
+    class FakeReplay:
+        recorded_at = datetime(2026, 11, 21, tzinfo=timezone.utc)
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def install(self):
+            pass
+
+        def save(self):
+            pass
+
+    class FakeCase:
+        id = "fake_case"
+        tags = ("short",)
+        prompt = "prompt"
+
+        def checks(self, _trace, _clock):
+            return {"check": True}
+
+    monkeypatch.setattr(run_eval, "Harness", FakeHarness)
+    monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
+    monkeypatch.setattr(run_eval, "load_env", lambda _path: {
+        "VOYAGER_BASE_URL": "http://example.invalid",
+        "VOYAGER_API_KEY": "test-key",
+    })
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+    monkeypatch.setattr(run_eval, "probe_streams", lambda _harness, _models: [])
+    monkeypatch.setattr(run_eval, "RESULTS", tmp_path)
+
+    out = tmp_path / "ci-scoped.jsonl"
+    args = SimpleNamespace(
+        label="ci-scoped",
+        models=["fake-model"],
+        all_models=False,
+        cases=["fake_case"],
+        repeats=1,
+        workers=1,
+        hide=[],
+        stream_only=False,
+        offline=True,
+        request_timeout=1.0,
+        conversation_timeout=1.0,
+        save_traces=False,
+        result_out=out,
+    )
+    run_eval.run(args)
+
+    rows = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
+    assert [row["case"] for row in rows] == ["fake_case"]
+    assert rows[0]["passed"] is True
+    assert not list(tmp_path.glob("20*.jsonl")), "no timestamped file next to it"
+
+
 def test_hanging_tool_call_cannot_outlive_the_conversation_budget(monkeypatch):
     class FakeClient:
         def __init__(self, _mcp):
@@ -367,6 +435,56 @@ def test_env_value_reads_a_private_env_file(tmp_path, monkeypatch):
         run_eval._env_value("OPENCODE_GO_API_KEY", [env_file])
         == "from-file"
     )
+
+
+def test_voyager_credentials_prefer_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_eval, "ENV_FILE", tmp_path / ".env")
+    monkeypatch.setenv("VOYAGER_API_KEY", "from-env")
+    monkeypatch.setenv("VOYAGER_BASE_URL", "http://env.invalid")
+    args = SimpleNamespace(provider="voyager", base_url=None)
+
+    base_url, key = run_eval._provider_credentials(args)
+
+    assert key == "from-env"
+    assert base_url == "http://env.invalid"
+
+
+def test_voyager_credentials_fall_back_to_the_env_file(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "VOYAGER_API_KEY=from-file\nVOYAGER_BASE_URL=http://file.invalid\n"
+    )
+    monkeypatch.setattr(run_eval, "ENV_FILE", env_file)
+    monkeypatch.delenv("VOYAGER_API_KEY", raising=False)
+    monkeypatch.delenv("VOYAGER_BASE_URL", raising=False)
+    args = SimpleNamespace(provider="voyager", base_url=None)
+
+    base_url, key = run_eval._provider_credentials(args)
+
+    assert (base_url, key) == ("http://file.invalid", "from-file")
+
+
+def test_voyager_base_url_flag_beats_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_eval, "ENV_FILE", tmp_path / ".env")
+    monkeypatch.setenv("VOYAGER_API_KEY", "from-env")
+    monkeypatch.setenv("VOYAGER_BASE_URL", "http://env.invalid")
+    args = SimpleNamespace(provider="voyager", base_url="http://flag.invalid")
+
+    base_url, _key = run_eval._provider_credentials(args)
+
+    assert base_url == "http://flag.invalid"
+
+
+def test_voyager_missing_credentials_name_the_variable_and_file(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(run_eval, "ENV_FILE", tmp_path / "missing.env")
+    monkeypatch.delenv("VOYAGER_API_KEY", raising=False)
+    monkeypatch.delenv("VOYAGER_BASE_URL", raising=False)
+    args = SimpleNamespace(provider="voyager", base_url=None)
+
+    with pytest.raises(ValueError, match="VOYAGER_API_KEY"):
+        run_eval._provider_credentials(args)
 
 
 def test_chat_sends_the_requested_reasoning_effort(monkeypatch):
