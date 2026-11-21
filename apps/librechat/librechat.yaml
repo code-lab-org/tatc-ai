@@ -151,6 +151,10 @@ interface:
 modelSpecs:
   prioritize: true
   enforce: false
+  # Every ASU spec sets maxContextTokens. LibreChat falls back to 32,000 for model
+  # IDs it does not recognize, which these dash-form IDs are, and keeps only 95% of
+  # that, so the TATC tool definitions left no room for the user's message.
+  # Voyager values come from that endpoint's /models context_window field.
   list:
     - name: glm-5-3
       label: GLM-5.3
@@ -164,6 +168,7 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: glm-5-3
+        maxContextTokens: 131072
     - name: glm-5-3-flash
       label: GLM-5.3-Flash
       description: Z.ai GLM chat model via ASU Voyager.
@@ -176,6 +181,7 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: glm-5-3-flash
+        maxContextTokens: 262144
     - name: deepseek-v4-1-flash
       label: DeepSeek V4.1 Flash
       description: DeepSeek chat model via ASU Voyager.
@@ -188,6 +194,7 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: deepseek-v4-1-flash
+        maxContextTokens: 262144
     - name: mimo-v2-6-flash
       label: MiMo-V2.6-Flash
       description: Xiaomi MiMo chat model via ASU Voyager.
@@ -200,6 +207,7 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: mimo-v2-6-flash
+        maxContextTokens: 524288
     - name: qwen38-27b
       label: Qwen 3.8 27B
       description: Alibaba Qwen chat model via ASU Voyager.
@@ -220,6 +228,9 @@ modelSpecs:
       preset:
         endpoint: ASU Voyager
         model: qwen38-27b
+        maxContextTokens: 262144
+    # CreateAI does not publish a per-model window; 128,000 is the smallest
+    # context among the listed models, so every value is safe.
     - name: createai-nova2-lite
       label: Nova 2 Lite
       description: Amazon Nova chat model via ASU CreateAI.
@@ -232,6 +243,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/nova2-lite
+        maxContextTokens: 128000
     - name: createai-nova-lite
       label: Nova Lite
       description: Amazon Nova chat model via ASU CreateAI.
@@ -244,6 +256,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/nova-lite
+        maxContextTokens: 128000
     - name: createai-nova-micro
       label: Nova Micro
       description: Amazon Nova chat model via ASU CreateAI.
@@ -256,6 +269,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/nova-micro
+        maxContextTokens: 128000
     - name: createai-nova-pro
       label: Nova Pro
       description: Amazon Nova chat model via ASU CreateAI.
@@ -268,6 +282,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/nova-pro
+        maxContextTokens: 128000
     - name: createai-claude4-5-haiku
       label: Claude Haiku 4.5
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -280,6 +295,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_5_haiku
+        maxContextTokens: 128000
     - name: createai-claude4-sonnet
       label: Claude Sonnet 4
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -292,6 +308,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_sonnet
+        maxContextTokens: 128000
     - name: createai-claude4-5-sonnet
       label: Claude Sonnet 4.5
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -304,6 +321,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_5_sonnet
+        maxContextTokens: 128000
     - name: createai-claude5-sonnet
       label: Claude Sonnet 5
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -316,6 +334,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude5_sonnet
+        maxContextTokens: 128000
     - name: createai-claude4-1-opus
       label: Claude Opus 4.1
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -328,6 +347,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_1_opus
+        maxContextTokens: 128000
     - name: createai-claude4-5-opus
       label: Claude Opus 4.5
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -340,6 +360,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_5_opus
+        maxContextTokens: 128000
     - name: createai-claude4-6-opus
       label: Claude Opus 4.6
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -352,6 +373,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_6_opus
+        maxContextTokens: 128000
     - name: createai-claude4-7-opus
       label: Claude Opus 4.7
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -364,6 +386,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_7_opus
+        maxContextTokens: 128000
     - name: createai-claude4-8-opus
       label: Claude Opus 4.8
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -376,6 +399,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude4_8_opus
+        maxContextTokens: 128000
     - name: createai-claude5-opus
       label: Claude Opus 5
       description: Anthropic Claude chat model via ASU CreateAI.
@@ -388,6 +412,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/claude5_opus
+        maxContextTokens: 128000
     - name: createai-geminiflash2-5
       label: Gemini 2.5 Flash
       description: Google Gemini chat model via ASU CreateAI.
@@ -400,6 +425,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminiflash2_5
+        maxContextTokens: 128000
     - name: createai-geminiflash2-5-lite
       label: Gemini 2.5 Flash-Lite
       description: Google Gemini chat model via ASU CreateAI.
@@ -412,6 +438,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminiflash2_5-lite
+        maxContextTokens: 128000
     - name: createai-geminiflash3
       label: Gemini 3 Flash
       description: Google Gemini chat model via ASU CreateAI.
@@ -424,6 +451,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminiflash3
+        maxContextTokens: 128000
     - name: createai-geminiflash3-1-lite
       label: Gemini 3.1 Flash-Lite
       description: Google Gemini chat model via ASU CreateAI.
@@ -436,6 +464,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminiflash3_1_lite
+        maxContextTokens: 128000
     - name: createai-geminipro3-1
       label: Gemini 3.1 Pro
       description: Google Gemini chat model via ASU CreateAI.
@@ -448,6 +477,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminipro3_1
+        maxContextTokens: 128000
     - name: createai-geminiflash3-5
       label: Gemini 3.5 Flash
       description: Google Gemini chat model via ASU CreateAI.
@@ -460,6 +490,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminiflash3_5
+        maxContextTokens: 128000
     - name: createai-geminiflash3-7
       label: Gemini 3.7 Flash
       description: Google Gemini chat model via ASU CreateAI.
@@ -472,6 +503,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: gcp-deepmind/geminiflash3_7
+        maxContextTokens: 128000
     - name: createai-gemma4-31b-it
       label: Gemma 4 31B IT
       description: Google Gemma chat model via ASU CreateAI.
@@ -484,6 +516,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: asu-air/gemma4_31b_it
+        maxContextTokens: 128000
     - name: createai-llama4-maverick-17b
       label: Llama 4 Maverick 17B
       description: Meta Llama chat model via ASU CreateAI.
@@ -496,6 +529,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: asu-air/llama4_maverick-17b
+        maxContextTokens: 128000
     - name: createai-llama4-scout-17b
       label: Llama 4 Scout 17B
       description: Meta Llama chat model via ASU CreateAI.
@@ -508,6 +542,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: asu-air/llama4_scout-17b
+        maxContextTokens: 128000
     - name: createai-muse-glimmer-30b
       label: Muse Glimmer 30B
       description: Meta Muse chat model via ASU CreateAI.
@@ -520,6 +555,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: asu-air/muse-glimmer-30b
+        maxContextTokens: 128000
     - name: createai-gpt-oss-20b
       label: GPT-OSS 20B
       description: OpenAI chat model via ASU CreateAI.
@@ -532,6 +568,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/gpt-oss-20b
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt-oss-120b
       label: GPT-OSS 120B
@@ -545,6 +582,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: aws/gpt-oss-120b
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt4o-mini
       label: GPT-4o mini
@@ -558,6 +596,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt4o_mini
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt4-1
       label: GPT-4.1
@@ -571,6 +610,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt4_1
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt4-1-mini
       label: GPT-4.1 mini
@@ -584,6 +624,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt4_1-mini
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-o3
       label: o3
@@ -597,6 +638,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/o3
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5
       label: GPT-5
@@ -610,6 +652,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-mini
       label: GPT-5 mini
@@ -623,6 +666,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_mini
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-nano
       label: GPT-5 nano
@@ -636,6 +680,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_nano
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-1
       label: GPT-5.1
@@ -649,6 +694,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_1
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-1-instant
       label: GPT-5.1 Instant
@@ -662,6 +708,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_1_instant
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-1-thinking
       label: GPT-5.1 Thinking
@@ -675,6 +722,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_1_thinking
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-2
       label: GPT-5.2
@@ -688,6 +736,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_2
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-2-pro
       label: GPT-5.2 Pro
@@ -701,6 +750,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_2_pro
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-4-mini
       label: GPT-5.4 mini
@@ -714,6 +764,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_4_mini
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-4-nano
       label: GPT-5.4 nano
@@ -727,6 +778,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_4_nano
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-4-thinking
       label: GPT-5.4 Thinking
@@ -740,6 +792,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_4_thinking
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-4-pro
       label: GPT-5.4 Pro
@@ -753,6 +806,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_4_pro
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-5
       label: GPT-5.5
@@ -766,6 +820,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_5
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-5-thinking
       label: GPT-5.5 Thinking
@@ -779,6 +834,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_5_thinking
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-5-pro
       label: GPT-5.5 Pro
@@ -792,6 +848,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_5_pro
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-6-luna
       label: GPT-5.6 Luna
@@ -805,6 +862,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_6_luna
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-6-sol
       label: GPT-5.6 Sol
@@ -818,6 +876,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_6_sol
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt5-6-terra
       label: GPT-5.6 Terra
@@ -831,6 +890,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt5_6_terra
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: createai-gpt6-astra
       label: GPT-6 Astra
@@ -844,6 +904,7 @@ modelSpecs:
       preset:
         endpoint: ASU CreateAI
         model: openai/gpt6_astra
+        maxContextTokens: 128000
         modelLabel: ASU CreateAI
     - name: openai-gpt-6-astra
       label: GPT-6 Astra · OpenAI key

@@ -29,7 +29,7 @@ Leave `VOYAGER_API_KEY` and `CREATEAI_API_KEY` as `replace-me`. ASU models stay 
 
 LibreChat encrypts each key and keeps it with your account, so other accounts cannot use it. LibreChat 0.8.7 shows "Your key will never expire" even when no key is saved. If no key is saved, sending a message shows "No key found".
 
-The model lists are short and chosen by hand. To offer another model, add it to `modelSpecs` in both LibreChat files. For OpenAI, Anthropic, and Google, also add it to the `*_MODELS` settings in both compose files. For OpenRouter, add it to that endpoint's `models` list. Set `maxContextTokens` if LibreChat does not know the model, because the TATC tool definitions alone are too large for its small default.
+The model lists are short and chosen by hand. To offer another model, add it to `modelSpecs` in both LibreChat files. For OpenAI, Anthropic, and Google, also add it to the `*_MODELS` settings in both compose files. For OpenRouter, add it to that endpoint's `models` list. Every ASU spec sets `maxContextTokens`, and a new model needs it too. LibreChat does not recognize the ASU model IDs, so it falls back to 32,000 tokens and keeps 5% in reserve; the TATC tool definitions alone are close to that, and a request with no room left for the user's message fails with `empty_messages`.
 
 OpenAI model specs set `useResponsesApi: true` because `/v1/chat/completions` rejects function tools on models that reason by default, such as GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna.
 
