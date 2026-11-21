@@ -3,9 +3,16 @@
 import copy
 import json
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
+from src import source_library
+from src.conical_config import ConicalConfiguration
+
+from eval import cases as eval_cases
 from eval.cases import (
+    CONICAL_CLAIMS_CONFIG,
     CONICAL_CONFIG,
+    SOURCE_LIBRARY_FIXTURE,
     Call,
     Clock,
     Trace,
@@ -1614,3 +1621,197 @@ def test_mixed_follow_up_grid_checker_requires_two_runs_and_a_new_revision():
     checks = case.checks(trace, _clock())
     assert not checks["same_scope"]
 
+
+def _compact_evidence(records):
+    """Project resolved evidence to the fields a study proposal returns."""
+    keys = (
+        "evidence_id",
+        "authority",
+        "title",
+        "url",
+        "document_revision",
+        "locator",
+        "supports",
+    )
+    return [{key: record[key] for key in keys} for record in records]
+
+
+def _claims_prepare_trace(clock, sent_configuration, proposal_configuration, final):
+    proposal = {
+        "configuration_id": CONICAL_CLAIMS_CONFIG["configuration_id"],
+        "configuration": proposal_configuration,
+    }
+    return Trace(
+        prompt="Run the conical AMSR2 study with the claim-form configuration.",
+        calls=[
+            Call(
+                "prepare_conical_study",
+                {
+                    "draft_id": "draft-1",
+                    "grid_rows": 2,
+                    "grid_columns": 2,
+                    "configuration": sent_configuration,
+                },
+                False,
+                "{}",
+                parsed=proposal,
+            )
+        ],
+        final=final,
+    )
+
+
+def test_claims_case_config_resolves_through_the_fixture_library(monkeypatch):
+    """The claim-form case cites the one-document fixture library.
+
+    Resolving its single claim yields one evidence record whose locator,
+    authority, title, url, and document revision come from the fixture
+    document, so the case exercises the claim form and the library
+    resolution, not the registry configuration's inline evidence.
+    """
+    monkeypatch.setattr(source_library, "SOURCES_DIR", SOURCE_LIBRARY_FIXTURE)
+
+    assert CONICAL_CLAIMS_CONFIG["schema_version"] == "conical-configuration-v2"
+    assert "evidence" not in CONICAL_CLAIMS_CONFIG
+    assert len(CONICAL_CLAIMS_CONFIG["source_claims"]) == 1
+    resolved = ConicalConfiguration.model_validate(
+        copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    )
+
+    assert resolved.schema_version == "conical-configuration-v1"
+    assert "source_claims" not in resolved.model_dump(mode="json")
+    records = resolved.model_dump(mode="json")["evidence"]
+    assert len(records) == 1
+    document = json.loads(
+        (SOURCE_LIBRARY_FIXTURE / "eval-amsr2-claims-source.json").read_text()
+    )
+    excerpt = document["excerpts"][0]
+    assert records[0]["evidence_id"] == "eval-source"
+    assert records[0]["authority"] == document["authority"]
+    assert records[0]["locator"] == excerpt["locator"]
+    assert records[0]["excerpt"] == excerpt["text"]
+
+
+def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
+    clock = _clock()
+    monkeypatch.setattr(source_library, "SOURCES_DIR", SOURCE_LIBRARY_FIXTURE)
+    case = next(
+        case for case in build_cases(clock) if case.id == "conical_amsr2_claims"
+    )
+    resolved = ConicalConfiguration.model_validate(
+        copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    )
+    proposal_configuration = {
+        "schema_version": "conical-configuration-v1",
+        "evidence": _compact_evidence(resolved.model_dump(mode="json")["evidence"]),
+    }
+    assert proposal_configuration["evidence"] == eval_cases._claims_expected_evidence()
+
+    def _trace(sent_configuration, proposal, final):
+        return _claims_prepare_trace(clock, sent_configuration, proposal, final)
+
+    ready = (
+        f"The {CONICAL_CLAIMS_CONFIG['configuration_id']} proposal is ready "
+        "and awaiting acceptance."
+    )
+    trace = _trace(copy.deepcopy(CONICAL_CLAIMS_CONFIG), proposal_configuration, ready)
+    checks = case.checks(trace, clock)
+    assert all(checks.values()), checks
+
+    # The prompt stops at preparation; a finish call fails the case.
+    trace.calls.append(
+        Call("finish_conical_study", {}, False, "{}", parsed={"result_id": "r"})
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
+    trace.calls[-1].error = True
+    checks = case.checks(trace, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
+    trace.calls.pop()
+
+    # The sent arguments must validate against the advertised tool
+    # schema. When the advertised surface required inline evidence
+    # (before b9e1437), the claim form the prompt mandates was invalid
+    # and the case failed even though the runtime accepted it; the
+    # checkout's own schema decides.
+    before_schema = copy.deepcopy(
+        eval_cases._advertised_input_schema("prepare_conical_study")
+    )
+    configuration_schema = before_schema["properties"]["configuration"]["anyOf"][0]
+    configuration_schema["required"] = configuration_schema["required"] + ["evidence"]
+    with mock.patch.object(
+        eval_cases, "_advertised_input_schema", return_value=before_schema
+    ):
+        checks = case.checks(trace, clock)
+    assert not checks["advertised_schema_ok"]
+    assert not all(checks.values())
+
+    # A sent argument the advertised schema rejects, such as grid_rows
+    # as a string, fails the schema check.
+    changed_args = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    trace = _trace(changed_args, proposal_configuration, ready)
+    trace.calls[0].args["grid_rows"] = "2"
+    checks = case.checks(trace, clock)
+    assert not checks["advertised_schema_ok"]
+    assert not all(checks.values())
+
+    # A model that rounds or changes a geometry value fails the
+    # unchanged-configuration check even though the schema accepts it.
+    changed = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    changed["geometry"]["along_track_field_of_view"]["value"] = 1.4
+    trace = _trace(changed, proposal_configuration, ready)
+    checks = case.checks(trace, clock)
+    assert checks["advertised_schema_ok"]
+    assert not checks["configuration_unchanged"]
+    assert not all(checks.values())
+
+    # A model that converted the claims to inline evidence, the form the
+    # advertised schema required before the advertised-schema fix, fails
+    # the unchanged-configuration check even though the server accepts
+    # the result.
+    inline = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    inline.pop("source_claims")
+    inline["schema_version"] = "conical-configuration-v1"
+    inline["evidence"] = resolved.model_dump(mode="json")["evidence"]
+    trace = _trace(inline, proposal_configuration, "The proposal is ready.")
+    checks = case.checks(trace, clock)
+    assert not checks["configuration_unchanged"]
+    assert not all(checks.values())
+
+    # A proposal that echoes the claims instead of resolving them through
+    # the library fails the resolution check.
+    unresolved = {
+        "schema_version": "conical-configuration-v1",
+        "evidence": CONICAL_CLAIMS_CONFIG["source_claims"],
+    }
+    trace = _trace(
+        copy.deepcopy(CONICAL_CLAIMS_CONFIG),
+        unresolved,
+        "The proposal is ready.",
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["claims_resolved"]
+    assert not all(checks.values())
+
+    # A prepare that never happened, or a reply that drops the
+    # configuration identity, fails too.
+    trace = _trace(
+        copy.deepcopy(CONICAL_CLAIMS_CONFIG),
+        proposal_configuration,
+        "The proposal is ready.",
+    )
+    trace.calls[0].error = True
+    trace.calls[0].parsed = None
+    checks = case.checks(trace, clock)
+    assert not checks["prepared"]
+    assert not all(checks.values())
+    trace = _trace(
+        copy.deepcopy(CONICAL_CLAIMS_CONFIG),
+        proposal_configuration,
+        "The study proposal is ready and awaiting acceptance.",
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["reported"]
+    assert not all(checks.values())

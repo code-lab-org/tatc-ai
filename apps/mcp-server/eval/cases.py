@@ -45,6 +45,143 @@ CONICAL_CONFIG["configuration_id"] += "-eval"
 CONICAL_SHARED_ID = "amsr2-gcom-w1-conical-product-sector"
 CONICAL_SHARED_REVISION = "2026-10-27.1"
 
+# The claim-form case cites this committed fixture library instead of the
+# production data/sources library, which stays empty; eval.run_eval points
+# src.source_library.SOURCES_DIR here for the run.
+SOURCE_LIBRARY_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "eval" / "fixtures" / "source_library"
+)
+CLAIM_SCHEMA_VERSION = "conical-configuration-v2"
+CLAIMS_DOCUMENT_ID = "eval-amsr2-claims-source"
+CLAIMS_EVIDENCE_ID = "eval-source"
+
+# A deliberately small claim-form configuration: one source claim over a
+# minimal fixture document, the same geometry values as the reviewed
+# registry record, and no approximations, conflicts, or extra checks. The
+# full 15 KB registry-derived configuration made the model's prepare call
+# exceed the scoped eval's request budget; this one keeps the advertised
+# claim-form path under it. The geometry is an evaluation fixture that
+# reuses the registry record's measured values, not a new source review.
+CONICAL_CLAIMS_CONFIG = {
+    "schema_version": CLAIM_SCHEMA_VERSION,
+    "configuration_id": "eval-amsr2-claims-minimal",
+    "revision": "eval-claims-1",
+    "instrument": "AMSR2",
+    "spacecraft": {
+        "name": "GCOM-W1",
+        "aliases": ["SHIZUKU"],
+        "norad_id": 38337,
+        "orbit_provider_identifier": "GCOM-W1",
+    },
+    "operating_mode": "conical_scan_product_sector",
+    "channel": {"name": "S1", "center_frequency_ghz": 10.65},
+    "applicability": {
+        "start_utc": "2012-08-10T00:00:00Z",
+        "end_utc_exclusive": "2026-10-27T00:00:00Z",
+        "evidence_ids": [CLAIMS_EVIDENCE_ID],
+        "basis": (
+            "Evaluation fixture window: it covers the eval's recorded clock "
+            "and is not a reviewed mission applicability interval."
+        ),
+    },
+    "geometry": {
+        "model_family": "conical",
+        "cone_angle": {"value": 47.564, "unit": "degree"},
+        "scan_center_azimuth": {"value": 0.498, "unit": "degree"},
+        "scan_half_width": {"value": 75.332, "unit": "degree"},
+        "along_track_field_of_view": {"value": 1.0, "unit": "degree"},
+        "velocity_frame": "inertial",
+        "nadir_reference": "geodetic",
+        "illumination_requirement": "none",
+    },
+    "source_claims": [
+        {
+            "evidence_id": CLAIMS_EVIDENCE_ID,
+            "source": f"{CLAIMS_DOCUMENT_ID}@rev-1#ex-01",
+            "interpretation": (
+                "The fixture excerpt supplies the cone angle, scan center and "
+                "half width, along-track field of view, velocity frame, nadir "
+                "reference, illumination requirement, and the applicability "
+                "window used by this evaluation configuration."
+            ),
+            "supports": [
+                "geometry.cone_angle",
+                "geometry.scan_center_azimuth",
+                "geometry.scan_half_width",
+                "geometry.along_track_field_of_view",
+                "geometry.velocity_frame",
+                "geometry.nadir_reference",
+                "geometry.illumination_requirement",
+                "applicability.start",
+                "applicability.end",
+                "source_revision",
+            ],
+        }
+    ],
+    "source_revision": {
+        "revision_id": "eval-claims-rev-1",
+        "checked_at_utc": "2026-10-27T00:00:00Z",
+        "authority": "TAT-C project (Arizona State University)",
+        "summary": "Eval fixture source checked on 2026-10-27.",
+        "evidence_ids": [CLAIMS_EVIDENCE_ID],
+    },
+    "interpretation": {
+        "summary": (
+            "AMSR2 on GCOM-W1 is modeled as a forward-looking conical scanner "
+            "in the inertial velocity frame using the product scan sector of "
+            "the eval fixture excerpt."
+        ),
+        "selected_mode": "conical_scan_product_sector",
+        "limitations": [
+            "The geometry values are an evaluation fixture, not a reviewed "
+            "mission source; the field-of-regard envelope is not continuous "
+            "viewing time."
+        ],
+    },
+    "approximation_status": "supported",
+    "geometry_checks": [
+        {
+            "check_id": "eval-cone-angle",
+            "description": "Fixture cone angle matches the configured value.",
+            "method": "Eval fixture self-check.",
+            "reported_value": 47.564,
+            "unit": "degree",
+            "tolerance": 0.1,
+            "geometry_parameter": "geometry.cone_angle",
+            "status": "passed",
+            "evidence_ids": [CLAIMS_EVIDENCE_ID],
+        }
+    ],
+}
+
+
+def _claims_expected_evidence():
+    """Return the compact evidence records resolving the case's claim yields.
+
+    The proposal keeps evidence_id, authority, title, url, document_revision,
+    locator, and supports for each resolved record. Deriving the expectation
+    from the fixture document and the case's claim keeps one source of truth
+    and needs no server import at case-build time.
+    """
+    document = json.loads(
+        (SOURCE_LIBRARY_FIXTURE / f"{CLAIMS_DOCUMENT_ID}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    excerpt = document["excerpts"][0]
+    claim = CONICAL_CLAIMS_CONFIG["source_claims"][0]
+    return [
+        {
+            "evidence_id": claim["evidence_id"],
+            "authority": document["authority"],
+            "title": document["title"],
+            "url": document["url"],
+            "document_revision": document["document_revision"],
+            "locator": excerpt["locator"],
+            "supports": list(claim["supports"]),
+        }
+    ]
+
 
 def _load_daylight_study_config():
     configuration = json.loads(
@@ -748,6 +885,106 @@ def _conical_complete(expected_config_id: str):
             and _conical_reporting_is_limited(final)
         )
         return result
+
+    return checks
+
+
+_ADVERTISED_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {}
+
+
+def _advertised_input_schema(tool_name: str) -> Dict[str, Any]:
+    """Return the advertised input schema of one server tool.
+
+    The schema comes from the checkout's own server through the
+    in-process FastMCP client, the same surface the eval sends to a
+    model, so a check built on it follows the code under test without a
+    second schema copy. The import is lazy to keep this module free of
+    server imports at build time; the cache holds one schema per tool.
+    """
+    if tool_name not in _ADVERTISED_INPUT_SCHEMAS:
+        import asyncio
+
+        from fastmcp import Client
+
+        import src.server as server
+
+        async def _list():
+            async with Client(server.mcp) as client:
+                return await client.list_tools()
+
+        for tool in asyncio.run(_list()):
+            _ADVERTISED_INPUT_SCHEMAS[tool.name] = tool.inputSchema
+    return _ADVERTISED_INPUT_SCHEMAS[tool_name]
+
+
+def _conical_claims_prepared(prompted_configuration, expected_evidence, expected_config_id):
+    """Check one prepare of the claim-form configuration.
+
+    The sent arguments must validate against the tool's advertised
+    input schema. The advertised surface once required inline evidence
+    while the runtime accepted the claim form, so a schema-following
+    client could not send what the server supports; validating the sent
+    arguments against the checkout's own schema scores exactly that
+    regression. The sent configuration must also equal the prompted
+    claim-form configuration exactly, the proposal must carry the
+    evidence the server resolved from the fixture library (the prompt
+    never states the authorities or locators, so an echoed claim cannot
+    pass), the snapshot must be normalized back to v1, and the reply
+    must name the configuration.
+    """
+    import jsonschema
+
+    expected = [
+        (item["evidence_id"], item["authority"], item["locator"], item["title"])
+        for item in expected_evidence
+    ]
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        schema = _advertised_input_schema("prepare_conical_study")
+        prepares = [
+            call
+            for call in trace.calls
+            if call.name == "prepare_conical_study"
+            and not call.error
+            and isinstance(call.parsed, dict)
+        ]
+        prepared = prepares[-1] if prepares else None
+        finished = any(call.name == "finish_conical_study" for call in trace.calls)
+        advertised = False
+        unchanged = False
+        resolved = False
+        normalized = False
+        if prepared is not None:
+            try:
+                jsonschema.validate(prepared.args, schema)
+                advertised = True
+            except jsonschema.ValidationError:
+                advertised = False
+            unchanged = prepared.args.get("configuration") == prompted_configuration
+            snapshot = prepared.parsed.get("configuration") or {}
+            normalized = (
+                snapshot.get("schema_version") == "conical-configuration-v1"
+            )
+            evidence = snapshot.get("evidence") or []
+            resolved = all(
+                any(
+                    record.get("evidence_id") == evidence_id
+                    and record.get("authority") == authority
+                    and record.get("locator") == locator
+                    and record.get("title") == title
+                    for record in evidence
+                )
+                for evidence_id, authority, locator, title in expected
+            )
+        return {
+            "prepared": prepared is not None,
+            "did_not_finish": not finished,
+            "advertised_schema_ok": advertised,
+            "configuration_unchanged": unchanged,
+            "claims_resolved": resolved,
+            "schema_normalized": normalized,
+            "reported": expected_config_id.lower() in trace.final.lower(),
+        }
 
     return checks
 
@@ -1821,6 +2058,29 @@ def build_cases(clock: Clock) -> List[Case]:
             "envelopes are not continuous viewing time. "
             f"Configuration JSON: {json.dumps(CONICAL_CONFIG, separators=(',', ':'))}",
             _conical_complete(CONICAL_CONFIG["configuration_id"]),
+        ),
+        Case(
+            "conical_amsr2_claims",
+            ("conical", "claims", "source_library"),
+            f"Run a conical AMSR2 study for GCOM-W1 over the box west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. "
+            "Use this exact sourced configuration. It cites its sources as "
+            "source_claims with schema_version conical-configuration-v2; the "
+            "server resolves those claims against the shared source library. "
+            "Send the configuration JSON exactly as given: keep source_claims "
+            "as claims, do not convert them to inline evidence, and do not "
+            "add, round, or change its angles, frame, dates, source claims, "
+            "or approximations. I have reviewed this configuration and accept "
+            "it. Prepare the study, then report the configuration ID and the "
+            "returned consequential choices and warnings. Do not accept or "
+            "run the study. "
+            "Configuration JSON: "
+            f"{json.dumps(CONICAL_CLAIMS_CONFIG, separators=(',', ':'))}",
+            _conical_claims_prepared(
+                CONICAL_CLAIMS_CONFIG,
+                _claims_expected_evidence(),
+                CONICAL_CLAIMS_CONFIG["configuration_id"],
+            ),
         ),
         Case(
             "conical_amsr2_registry_selection",
