@@ -18,7 +18,7 @@ OPENCODE_GO_API_KEY=... timeout -k 10 900 .venv312/bin/python -m eval.run_eval -
 
 Repeats default to 1 for a whole suite. Use repeat 3 for the cases affected by a change when the budget allows. Occasional second-model checks and an occasional `--all-models` run are manual, not routine. Every batch command keeps the `timeout -k` wrapper as its hard external deadline; keep a local job log with the owner, PID, start time, deadline, and checkpoint file.
 
-The eval reads the proxy key from `apps/librechat/.env` and sends prompts and tool schemas to the ASU proxy. One request is limited to 180 seconds and one complete conversation to 600 seconds. Override these with `--request-timeout` and `--conversation-timeout`. The harness retries at most once for a connection failure, 429, 502, or 503. It does not retry a read timeout, context overflow, or another client error. It bounds trickle reads and the wait for a tool call; a tool already running in the server may finish after the caller stops waiting. The external `timeout -k` covers the whole batch. A provider failure is recorded as unmeasured infrastructure failure, not a score; do not tune prompts or checkers to force a pass.
+The eval reads the proxy key and base URL from the process environment first (`VOYAGER_API_KEY`, `VOYAGER_BASE_URL`), then from `apps/librechat/.env`, and sends prompts and tool schemas to the ASU proxy. One request is limited to 180 seconds and one complete conversation to 600 seconds. Override these with `--request-timeout` and `--conversation-timeout`. The harness retries at most once for a connection failure, 429, 502, or 503. It does not retry a read timeout, context overflow, or another client error. It bounds trickle reads and the wait for a tool call; a tool already running in the server may finish after the caller stops waiting. The external `timeout -k` covers the whole batch. A provider failure is recorded as unmeasured infrastructure failure, not a score; do not tune prompts or checkers to force a pass.
 
 The run writes a timestamped JSONL file under `eval/results/` and prints its summary. The default file keeps scores, counts, and small partial failure progress, not prompts, replies, or full tool text. A companion `-requests.jsonl` file records model, case, turn, attempt, request and response bytes, duration, token usage, request ID, and error category. Pass `--save-traces` only when full traces are needed for diagnosis. `--rescore` needs saved traces, so use `--save-traces` on runs you expect to rescore. Results and request records are ignored local artifacts. Replace the two comparison paths with existing result files; `--compare` summarizes saved runs and does not start a new model evaluation.
 
@@ -47,6 +47,25 @@ The coverage cases include the legacy single-geometry workflow, the conical-scan
 The recorded Sentinel-1C GP response uses the exact CelesTrak TLE published in the TAT-C 3.6.0 validation reference (epoch 2026-10-02) re-encoded as OMM fields. This keeps the eval's recorded clock and OMM freshness checks consistent; it is a fixed test input, not a live refresh. The pointed configuration itself cites the source record and its later 2026-10-30 CelesTrak OMM snapshot.
 
 The eval is not a mission-accuracy test. Pointed reference tests cover direct TAT-C event counts and identities, event epochs, independently propagated WGS84 subpoint separation, and test-only Skyfield side/off-nadir classifications. The mixed cases check tool use, exact selectors, saved configuration snapshots, combined and per-configuration fetches, and study-specific illumination notes. Offline integration tests separately check the event-union accounting and shared-spacecraft TAT-C path.
+
+## Scoped eval in CI
+
+The `Scoped eval` workflow runs on every pull request. It compares the model-facing snapshot on the pull request base commit with the checkout's `apps/mcp-server/eval/fixtures/model_surface.json`, maps the changed tools through the table in `eval/scoped_cases.py`, and runs at most three cases with the recorded HTTP cache. A pull request whose snapshot does not change skips the job, and a skipped job satisfies branch protection.
+
+The job needs the repository secret `VOYAGER_API_KEY` (an ASU Research Computing proxy key, the same secret the model check workflow uses) and sends requests to `https://openai.rc.asu.edu/v1`. Fork pull requests receive no repository secrets, so the job skips them with a warning and a maintainer runs the scoped eval before merge.
+
+The gate (`python -m eval.ci gate`) classifies the result rows. A scored case that failed its checks is a checker failure and blocks the merge. A provider or harness failure is an infrastructure failure, is retried once within the job budget, and a second one is recorded as unmeasured without blocking. A timeout that stops before a row is written is an infrastructure failure and gets the retry. A run that exits without producing any result rows blocks, because the harness or its setup is broken. A changed tool with no entry in the mapping table fails the selection, and a change that maps to no case reports its coverage gaps without running anything. The gate bounds the eval to 480 seconds, reserving 180 seconds for the retry, so two attempts fit the 12-minute job with setup headroom.
+
+Reproduce the CI gate locally from the base commit's snapshot:
+
+```bash
+git show "$BASE_SHA:apps/mcp-server/eval/fixtures/model_surface.json" > /tmp/model-surface-before.json
+cd apps/mcp-server
+VOYAGER_API_KEY=... .venv312/bin/python -m eval.ci gate \
+  --before /tmp/model-surface-before.json --after eval/fixtures/model_surface.json
+```
+
+`python -m eval.ci select --before ... --after ...` prints only the selected cases and coverage gaps as JSON, and `python -m eval.ci classify --results ... --cases ...` classifies a saved result file. Pass `--result-out` to `eval.run_eval` to write the result file to a fixed path.
 
 ## Issue #51 review evaluation
 
