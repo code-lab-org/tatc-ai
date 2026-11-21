@@ -22,7 +22,10 @@ from pydantic import (
     model_validator,
 )
 
+from .source_library import SourceClaim, resolve_claim_form
+
 SCHEMA_VERSION = "conical-configuration-v1"
+CLAIM_SCHEMA_VERSION = "conical-configuration-v2"
 GeometryParameter = Literal[
     "geometry.cone_angle",
     "geometry.scan_center_azimuth",
@@ -350,7 +353,7 @@ class ConicalGeometry(_StrictModel):
 class ConicalConfiguration(_StrictModel):
     """One complete, sourced conical configuration."""
 
-    schema_version: Literal[SCHEMA_VERSION] = SCHEMA_VERSION
+    schema_version: Literal[SCHEMA_VERSION, CLAIM_SCHEMA_VERSION] = SCHEMA_VERSION
     configuration_id: str = Field(min_length=1)
     revision: str = Field(min_length=1)
     instrument: str = Field(min_length=1)
@@ -368,13 +371,23 @@ class ConicalConfiguration(_StrictModel):
         ),
     )
     geometry: ConicalGeometry
-    evidence: List[SourceEvidence] = Field(min_length=1)
+    evidence: List[SourceEvidence] = Field(default_factory=list)
+    source_claims: Optional[List[SourceClaim]] = Field(default=None, exclude=True)
     source_revision: SourceRevision
     interpretation: Interpretation
     approximation_status: Literal["supported", "approximate", "limited"]
     approximations: List[Approximation] = Field(default_factory=list)
     source_conflicts: List[SourceConflict] = Field(default_factory=list)
     geometry_checks: List[GeometryCheck] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_claims(cls, data: Any) -> Any:
+        return resolve_claim_form(
+            data,
+            schema_version=SCHEMA_VERSION,
+            claim_schema_version=CLAIM_SCHEMA_VERSION,
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -389,6 +402,10 @@ class ConicalConfiguration(_StrictModel):
 
     @model_validator(mode="after")
     def _check_references(self) -> "ConicalConfiguration":
+        if not self.evidence:
+            raise ValueError(
+                "configuration requires inline evidence or source_claims"
+            )
         evidence_ids = [item.evidence_id for item in self.evidence]
         if len(evidence_ids) != len(set(evidence_ids)):
             raise ValueError("evidence contains duplicate evidence_id values")

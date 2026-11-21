@@ -1177,7 +1177,9 @@ def _resolve_mixed_configuration(selection: Any) -> Tuple[
     version = raw.get("schema_version")
     expected = {
         "conical-configuration-v1": ConicalConfiguration,
+        "conical-configuration-v2": ConicalConfiguration,
         "pointed-configuration-v1": PointedConfiguration,
+        "pointed-configuration-v2": PointedConfiguration,
     }.get(version)
     if expected is None:
         raise ValueError(

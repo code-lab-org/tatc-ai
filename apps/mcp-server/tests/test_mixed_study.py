@@ -20,11 +20,22 @@ from src import (
     coverage_core,
     generic_coverage,
     result_store,
+    source_library,
     study_export,
 )
 from src import server as server_module
+from src.conical_config import CLAIM_SCHEMA_VERSION as CONICAL_CLAIM_VERSION
+from src.pointed_config import CLAIM_SCHEMA_VERSION as POINTED_CLAIM_VERSION
+from tests.test_source_library import _claims_record
 
 REFERENCE_DIR = Path(__file__).resolve().parent / "fixtures"
+CONFIGURATION_DIR = Path(__file__).resolve().parents[1] / "data" / "configurations"
+AMSR2_CONFIG = (
+    CONFIGURATION_DIR / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+)
+SENTINEL_CONFIG = (
+    CONFIGURATION_DIR / "sentinel-1c-c-sar-iw-fixed-view-2026-10-30.1.json"
+)
 AMSR2_REFERENCE = json.loads(
     (REFERENCE_DIR / "amsr2_conical_reference.json").read_text(encoding="utf-8")
 )
@@ -740,6 +751,34 @@ def test_mixed_preparation_rejects_spacecraft_identity_mismatch():
     )
     assert error
     assert "but staged norad 62261 resolves" in text.lower()
+
+
+def test_mixed_preparation_accepts_both_claim_versions(tmp_path, monkeypatch):
+    claims_amsr2, _ = _claims_record(
+        AMSR2_CONFIG, tmp_path, CONICAL_CLAIM_VERSION, prefix="amsr2"
+    )
+    claims_sentinel, _ = _claims_record(
+        SENTINEL_CONFIG, tmp_path, POINTED_CLAIM_VERSION, prefix="sentinel"
+    )
+    monkeypatch.setattr(source_library, "SOURCES_DIR", tmp_path)
+
+    baseline_error, baseline_text, baseline = _prepared_mixed_study()
+    assert not baseline_error, baseline_text
+
+    error, text, proposal = _prepared_mixed_study(
+        configurations=[
+            {"configuration": claims_amsr2},
+            {"configuration": claims_sentinel},
+        ]
+    )
+
+    assert not error, text
+    assert proposal["status"] == "awaiting_acceptance"
+    assert [
+        item["configuration_digest"] for item in proposal["configurations"]
+    ] == [
+        item["configuration_digest"] for item in baseline["configurations"]
+    ]
 
 
 def test_mixed_preparation_rejects_a_preexisting_single_configuration_proposal():

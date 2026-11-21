@@ -41,3 +41,27 @@ _Avoid_: Run log, when the file is the durable study record
 **Replay record**:
 The exported inputs needed to run the same study again.
 _Avoid_: Reproducible result, when no replay has been run
+
+**Instrument catalog**:
+A read-only external list of instruments, their carrying spacecraft, and their operating dates. OSCAR supplies it.
+_Avoid_: Source library, configuration registry
+
+**Configuration registry**:
+The reviewed set of instrument configurations the server may select by exact ID and revision.
+_Avoid_: Instrument catalog
+
+**Source library**:
+The reviewed set of documents and excerpts that configurations cite.
+_Avoid_: Instrument catalog
+
+**Document**:
+One source at one revision, such as a web page, PDF, or notebook, with its title, publisher, URL, and retrieval time.
+_Avoid_: Configuration
+
+**Excerpt**:
+A short passage copied from a document, with a locator and an ID that configurations cite.
+_Avoid_: Full document copy
+
+**Claim**:
+A configuration's use of an excerpt, naming the evidence ID, excerpt reference, interpretation, and supported fields.
+_Avoid_: Document
