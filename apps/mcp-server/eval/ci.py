@@ -48,6 +48,7 @@ REQUEST_TIMEOUT = 120
 CONVERSATION_TIMEOUT = 240
 WORKERS = 3
 GATE_BUDGET_SECONDS = 420.0
+RETRY_RESERVE_SECONDS = 180.0
 MIN_RETRY_SECONDS = 60.0
 
 PASSED = "passed"
@@ -93,12 +94,32 @@ def classify(rows: List[Dict[str, Any]], expected_cases: Sequence[str]) -> str:
 
 
 def read_rows(path: Path) -> List[Dict[str, Any]]:
-    """Read one result JSONL file."""
-    return [
-        json.loads(line)
-        for line in Path(path).read_text().splitlines()
-        if line.strip()
-    ]
+    """Read the complete rows of one result JSONL file.
+
+    A killed subprocess can leave a truncated last line. Keep the rows
+    before it instead of losing a checker failure that already scored.
+    """
+    rows: List[Dict[str, Any]] = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            break
+    return rows
+
+
+def _failed_checks(rows: List[Dict[str, Any]]) -> List[str]:
+    """Names of the failed checkers, written as case:check."""
+    failed = set()
+    for row in rows:
+        if row.get("status") != "ok" or row.get("passed"):
+            continue
+        for check, ok in (row.get("checks") or {}).items():
+            if not ok:
+                failed.add(f"{row.get('case')}:{check}")
+    return sorted(failed)
 
 
 def _run_eval(
@@ -144,22 +165,21 @@ def _run_eval(
 
 def _attempt_verdict(
     returncode: Optional[int], result_path: Optional[Path], cases: Sequence[str]
-) -> Tuple[str, Optional[str]]:
-    """Classify one attempt; the second value is a short reason."""
+) -> Tuple[str, Optional[str], List[str]]:
+    """Classify one attempt; return its verdict, reason, and failed checks."""
     if result_path is None or not Path(result_path).exists():
-        return HARNESS_FAILURE, "the eval wrote no result file"
+        return HARNESS_FAILURE, "the eval wrote no result file", []
     try:
         rows = read_rows(result_path)
-    except (OSError, json.JSONDecodeError):
-        # A killed subprocess can leave a truncated file; that is
-        # infrastructure, not a checker verdict.
-        return INFRA_FAILURE, "the result file is unreadable"
+    except OSError:
+        return INFRA_FAILURE, "the result file is unreadable", []
     if returncode not in (0, None) and not rows:
-        return HARNESS_FAILURE, "the eval exited before writing results"
+        return HARNESS_FAILURE, "the eval exited before writing results", []
     verdict = classify(rows, cases)
+    failed = _failed_checks(rows)
     if verdict == INFRA_FAILURE:
-        return verdict, "infrastructure errors or cases that never ran"
-    return verdict, None
+        return verdict, "infrastructure errors or cases that never ran", failed
+    return verdict, None, failed
 
 
 def _selection_payload(selection) -> Dict[str, Any]:
@@ -208,20 +228,29 @@ def run_gate(
         cases = list(selection.cases)
         log(f"running scoped cases: {', '.join(cases)}")
         deadline = time.monotonic() + budget_seconds
+        attempts_run = 0
         for attempt in (1, 2):
             remaining = deadline - time.monotonic()
             if attempt > 1 and remaining < MIN_RETRY_SECONDS:
                 log("no budget left for the second attempt")
                 break
+            if attempt == 1:
+                # Leave a real retry window instead of letting the first
+                # attempt spend the whole budget.
+                timeout_seconds = max(1.0, remaining - RETRY_RESERVE_SECONDS)
+            else:
+                timeout_seconds = remaining
+            attempts_run += 1
             returncode, result_path = run_cases(
-                cases, attempt=attempt, timeout_seconds=remaining
+                cases, attempt=attempt, timeout_seconds=timeout_seconds
             )
-            verdict, reason = _attempt_verdict(returncode, result_path, cases)
+            verdict, reason, failed = _attempt_verdict(returncode, result_path, cases)
             attempts.append(
                 {
                     "attempt": attempt,
                     "verdict": verdict,
                     "results": str(result_path) if result_path else None,
+                    "failed_checks": failed,
                 }
             )
             log(f"attempt {attempt}: {verdict}" + (f" ({reason})" if reason else ""))
@@ -229,10 +258,16 @@ def run_gate(
                 break
         if verdict == INFRA_FAILURE:
             verdict = UNMEASURED
-            log(
-                "warning: the scoped eval could not be measured after one retry; "
-                "this does not block, but the change is unmeasured"
-            )
+            if attempts_run < 2:
+                log(
+                    "warning: the scoped eval could not be measured and the "
+                    "retry did not run within the budget; this does not block"
+                )
+            else:
+                log(
+                    "warning: the scoped eval could not be measured after one "
+                    "retry; this does not block, but the change is unmeasured"
+                )
     payload["verdict"] = verdict
     payload["attempts"] = attempts
     log("gate: " + json.dumps(payload))
@@ -252,6 +287,8 @@ def _write_summary(summary: Optional[Path], payload: Dict[str, Any]) -> None:
     for attempt in payload.get("attempts", []):
         results = attempt.get("results") or "no result file"
         lines.append(f"Attempt {attempt['attempt']}: {attempt['verdict']} ({results})")
+        if attempt.get("failed_checks"):
+            lines.append("Failed checks: " + ", ".join(attempt["failed_checks"]))
     if payload["verdict"] == UNMEASURED:
         lines.append(
             "The run is unmeasured after an infrastructure retry; it does not block."

@@ -107,6 +107,12 @@ def test_no_rows_classify_as_a_harness_failure():
     assert ci.classify([], ["fetch_gaps"]) == ci.HARNESS_FAILURE
 
 
+def test_read_rows_keeps_complete_rows_before_a_truncated_line(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_text(json.dumps(_ok_row("fetch_gaps")) + "\n" + '{"case": "point_study')
+    assert ci.read_rows(path) == [_ok_row("fetch_gaps")]
+
+
 # --- selection entry point ------------------------------------------------
 
 
@@ -289,6 +295,99 @@ def test_gate_blocks_when_the_harness_produces_no_rows(tmp_path, monkeypatch):
 
     assert payload["verdict"] == ci.HARNESS_FAILURE
     assert len(calls) == 1
+
+
+def test_a_failed_check_before_a_truncated_line_still_blocks(tmp_path):
+    before, after = _write_snapshots(
+        tmp_path,
+        _snapshot(),
+        _with_description(_snapshot(), "get_access_cells"),
+    )
+
+    def run_cases(cases, *, attempt, timeout_seconds):
+        path = tmp_path / f"attempt-{attempt}.jsonl"
+        path.write_text(json.dumps(_failed_row("fetch_gaps")) + "\n" + '{"case": "fetch')
+        return 0, path
+
+    payload = ci.run_gate(before, after, run_cases=run_cases)
+    assert payload["verdict"] == ci.CHECKER_FAILURE
+
+
+def test_a_truncated_file_with_no_complete_rows_blocks(tmp_path):
+    before, after = _write_snapshots(
+        tmp_path,
+        _snapshot(),
+        _with_description(_snapshot(), "get_access_cells"),
+    )
+
+    def run_cases(cases, *, attempt, timeout_seconds):
+        path = tmp_path / f"attempt-{attempt}.jsonl"
+        path.write_text('{"case": "fetch')
+        return 0, path
+
+    payload = ci.run_gate(before, after, run_cases=run_cases)
+    assert payload["verdict"] == ci.HARNESS_FAILURE
+
+
+def test_the_first_attempt_reserves_time_for_the_retry(tmp_path, monkeypatch):
+    before, after = _write_snapshots(
+        tmp_path,
+        _snapshot(),
+        _with_description(_snapshot(), "get_access_cells"),
+    )
+    calls = []
+    monkeypatch.setattr(
+        ci,
+        "_run_eval",
+        _fake_runner(
+            tmp_path,
+            {1: [_infra_row("fetch_gaps")], 2: [_ok_row("fetch_gaps")]},
+            calls,
+        ),
+    )
+    payload = ci.run_gate(before, after, budget_seconds=600, run_cases=ci._run_eval)
+    assert payload["verdict"] == ci.PASSED
+    assert calls[0]["timeout"] <= 600 - ci.RETRY_RESERVE_SECONDS
+    assert calls[1]["timeout"] > 0
+
+
+def test_the_gate_reports_when_the_retry_did_not_run(tmp_path, monkeypatch):
+    before, after = _write_snapshots(
+        tmp_path,
+        _snapshot(),
+        _with_description(_snapshot(), "get_access_cells"),
+    )
+    ticks = iter([0.0, 0.0, 500.0])
+    monkeypatch.setattr(ci.time, "monotonic", lambda: next(ticks))
+
+    def run_cases(cases, *, attempt, timeout_seconds):
+        path = tmp_path / f"attempt-{attempt}.jsonl"
+        path.write_text(json.dumps(_infra_row("fetch_gaps")) + "\n")
+        return 0, path
+
+    logs = []
+    payload = ci.run_gate(
+        before, after, budget_seconds=420, run_cases=run_cases, log=logs.append
+    )
+    assert payload["verdict"] == ci.UNMEASURED
+    assert len(payload["attempts"]) == 1
+    assert any("retry did not run within the budget" in line for line in logs)
+
+
+def test_the_summary_lists_failed_checks(tmp_path, monkeypatch):
+    before, after = _write_snapshots(
+        tmp_path,
+        _snapshot(),
+        _with_description(_snapshot(), "get_access_cells"),
+    )
+    row = _failed_row("fetch_gaps")
+    row["checks"] = {"reported_gaps": False, "fetched_cells": True}
+    calls = []
+    monkeypatch.setattr(ci, "_run_eval", _fake_runner(tmp_path, {1: [row]}, calls))
+    summary = tmp_path / "summary.md"
+    payload = ci.run_gate(before, after, run_cases=ci._run_eval, summary=summary)
+    assert payload["verdict"] == ci.CHECKER_FAILURE
+    assert "Failed checks: fetch_gaps:reported_gaps" in summary.read_text()
 
 
 def test_gate_writes_a_summary_file(tmp_path, monkeypatch):
