@@ -1,0 +1,17 @@
+{
+  "schema_version": "source-library-v1",
+  "document_id": "eval-amsr2-claims-source",
+  "revision": "rev-1",
+  "authority": "TAT-C project (Arizona State University)",
+  "title": "Conical Scanner Validation: AMSR2 (eval claims fixture)",
+  "url": "https://tatc.readthedocs.io/en/latest/validation/ValidateConicalAMSR2.html",
+  "document_revision": "TAT-C 3.6.0 validation notebook",
+  "retrieved_at_utc": "2026-10-27T00:00:00Z",
+  "excerpts": [
+    {
+      "excerpt_id": "ex-01",
+      "locator": "Test 2, Scan Geometry, results paragraph",
+      "text": "Evaluation fixture text, not a reviewed source claim: AMSR2's lines of sight lie on a cone 47.564 degrees from geodetic nadir, scanning about 0.498 degrees in azimuth with a 75.332-degree product-sector half width and a 1.0-degree along-track field of view, in the inertial velocity frame with nadir referenced to the geodetic nadir and no illumination gating."
+    }
+  ]
+}

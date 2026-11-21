@@ -91,7 +91,11 @@ TOOL_CASES: Dict[str, Union[str, NoCase]] = {
     # Registry and conical study workflow
     "lookup_instrument_configurations": "conical_amsr2_registry_selection",
     "record_instrument_configuration_refresh": "conical_amsr2_failed_refresh",
-    "prepare_conical_study": "conical_amsr2_complete",
+    # The claims case drives prepare_conical_study with a v2
+    # source-claims configuration against the advertised input schema;
+    # the complete case drives the whole inline-evidence flow through
+    # prepare and finish.
+    "prepare_conical_study": "conical_amsr2_claims",
     "finish_conical_study": "conical_amsr2_complete",
     # Pointed study workflow
     "prepare_pointed_study": "pointed_s1c_iw_complete",

@@ -16,7 +16,6 @@ from eval.cases import (
     Call,
     Clock,
     Trace,
-    _load_study_config,
     _mixed_complete,
     build_cases,
 )
@@ -1662,24 +1661,35 @@ def _claims_prepare_trace(clock, sent_configuration, proposal_configuration, fin
     )
 
 
-def test_claims_case_config_resolves_to_the_inline_evidence(monkeypatch):
-    """The claim-form case cites the fixture library, not inline evidence.
+def test_claims_case_config_resolves_through_the_fixture_library(monkeypatch):
+    """The claim-form case cites the one-document fixture library.
 
-    Resolving its claims through the committed fixture library yields the
-    same evidence records the inline study configuration carries, so the
-    case exercises the claim form and nothing else about the configuration.
+    Resolving its single claim yields one evidence record whose locator,
+    authority, title, url, and document revision come from the fixture
+    document, so the case exercises the claim form and the library
+    resolution, not the registry configuration's inline evidence.
     """
     monkeypatch.setattr(source_library, "SOURCES_DIR", SOURCE_LIBRARY_FIXTURE)
-    inline = ConicalConfiguration.model_validate(_load_study_config())
 
     assert CONICAL_CLAIMS_CONFIG["schema_version"] == "conical-configuration-v2"
     assert "evidence" not in CONICAL_CLAIMS_CONFIG
-    assert CONICAL_CLAIMS_CONFIG["source_claims"]
-    resolved = ConicalConfiguration.model_validate(copy.deepcopy(CONICAL_CLAIMS_CONFIG))
+    assert len(CONICAL_CLAIMS_CONFIG["source_claims"]) == 1
+    resolved = ConicalConfiguration.model_validate(
+        copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    )
 
-    assert resolved.schema_version == inline.schema_version
-    assert resolved.evidence == inline.evidence
+    assert resolved.schema_version == "conical-configuration-v1"
     assert "source_claims" not in resolved.model_dump(mode="json")
+    records = resolved.model_dump(mode="json")["evidence"]
+    assert len(records) == 1
+    document = json.loads(
+        (SOURCE_LIBRARY_FIXTURE / "eval-amsr2-claims-source.json").read_text()
+    )
+    excerpt = document["excerpts"][0]
+    assert records[0]["evidence_id"] == "eval-source"
+    assert records[0]["authority"] == document["authority"]
+    assert records[0]["locator"] == excerpt["locator"]
+    assert records[0]["excerpt"] == excerpt["text"]
 
 
 def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
@@ -1695,6 +1705,7 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
         "schema_version": "conical-configuration-v1",
         "evidence": _compact_evidence(resolved.model_dump(mode="json")["evidence"]),
     }
+    assert proposal_configuration["evidence"] == eval_cases._claims_expected_evidence()
 
     def _trace(sent_configuration, proposal, final):
         return _claims_prepare_trace(clock, sent_configuration, proposal, final)
@@ -1750,7 +1761,7 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
     inline = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
     inline.pop("source_claims")
     inline["schema_version"] = "conical-configuration-v1"
-    inline["evidence"] = _load_study_config()["evidence"]
+    inline["evidence"] = resolved.model_dump(mode="json")["evidence"]
     trace = _trace(inline, proposal_configuration, "The proposal is ready.")
     checks = case.checks(trace, clock)
     assert not checks["configuration_unchanged"]

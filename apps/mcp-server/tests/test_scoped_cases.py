@@ -160,7 +160,7 @@ def test_duplicate_cases_are_removed():
     after = _with_description(before, "prepare_conical_study", "Changed description.")
     after = _with_description(after, "finish_conical_study", "Changed description.")
     selection = select_cases(before, after)
-    assert selection.cases == ["conical_amsr2_complete"]
+    assert selection.cases == ["conical_amsr2_claims", "conical_amsr2_complete"]
     assert selection.gaps == []
 
 
@@ -181,6 +181,7 @@ def test_the_selection_is_capped_at_three_cases():
     assert set(selection.cases) <= {
         "point_study_explicit",
         "fetch_gaps",
+        "conical_amsr2_claims",
         "conical_amsr2_complete",
         "mixed_amsr2_s1c_complete",
         "pointed_s1c_iw_complete",

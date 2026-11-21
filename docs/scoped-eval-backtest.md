@@ -1,23 +1,18 @@
 # Scoped eval backtest: the advertised claim-form schema
 
-Issue #99, parent #95. A new gate check ships only if it fails on the
-commit before a real fix and passes on the fix. This is that record for
-the advertised evidence schema regression fixed in b9e1437 ("Fix
-advertised schema, mixed dispatch, and library errors"), whose parent
-5537670 ("Accept source claims at the MCP boundary and harden the
-library") introduced the `conical-configuration-v2` source-claims form.
+Issue #99, parent #95. A new gate check ships only if a case the scoped
+gate selects fails on the commit before a real fix and passes on the
+fix. This is that record for the advertised evidence schema regression
+fixed in b9e1437 ("Fix advertised schema, mixed dispatch, and library
+errors"), whose parent 5537670 ("Accept source claims at the MCP
+boundary and harden the library") introduced the
+`conical-configuration-v2` source-claims form.
 
-Verdict: the regression is real and deterministic, and the gate's
-required coverage for it is the offline contract test
-`test_advertised_schema_accepts_both_forms` (in
-`tests/test_source_library.py`, added by b9e1437), which validates both
-configuration forms against the advertised model schema and fails on
-5537670. The model-level case `conical_amsr2_claims` added here is a
-manual, full-eval backtest artifact, not part of the scoped eval
-mapping: one conversation took 252 to 307 seconds, over the scoped
-gate's 300-second first-attempt budget, so mapping it into the gate
-would turn every selection into an unmeasured timeout. It runs in the
-full eval and in this recorded backtest.
+Verdict: the gate can be enabled for this regression. The scoped
+mapping sends `prepare_conical_study` changes to `conical_amsr2_claims`,
+and that case fails on 5537670 and passes on b9e1437 with the routine
+model, inside the gate's 120-second request, 240-second conversation,
+and 300-second first-attempt limits.
 
 ## The regression
 
@@ -47,9 +42,9 @@ claim-form configuration against the advertised
 in-process) records the exact failure at both commits:
 
 ```python
-# From apps/mcp-server at the commit under test; the configuration is the
-# claim form of data/configurations/amsr2-gcom-w1-conical-product-sector-
-# 2026-10-27.1.json with the source library resolved from a fixture.
+# From apps/mcp-server at the commit under test; the configuration is
+# the claim-form case configuration from eval/cases.py, with the source
+# library resolved from eval/fixtures/source_library/.
 import jsonschema, asyncio
 from fastmcp import Client
 import src.server as server
@@ -67,7 +62,7 @@ asyncio.run(_call(server, "prepare_conical_study", arguments))
 # the configuration itself validated and only the draft lookup failed
 ```
 
-Results at both commits:
+Results at both commits, with the compact case configuration:
 
 | probe | 5537670 (before) | b9e1437 (after) |
 | --- | --- | --- |
@@ -80,30 +75,30 @@ The before commit's unit suite passes (18 source-library tests) because
 those tests validate the Python model, not the advertised surface. The
 advertised schema is what models see, and it is what b9e1437 fixed. The
 schema contract test b9e1437 added
-(`test_advertised_schema_accepts_both_forms`, 2 parametrized cases for
-the conical and pointed models) is the check that fails on 5537670 and
-passes on b9e1437; it is offline, deterministic, and runs in the normal
-`pytest` suite, which is why the scoped gate can rely on it instead of a
-model conversation.
+(`test_advertised_schema_accepts_both_forms`, two parametrized cases for
+the conical and pointed models) is the offline check that fails on
+5537670 and passes on b9e1437; the scoped gate's coverage for this
+regression rests on that test plus the mapped model case below.
 
 ## The case
 
-`conical_amsr2_claims` (new, `eval/cases.py`) asks the model to prepare
-a conical AMSR2 study from a `conical-configuration-v2` configuration
-that cites the committed fixture library
-`eval/fixtures/source_library/` instead of carrying inline evidence.
-The five fixture documents are derived from the reviewed registry
-configuration `amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json`:
-evidence items that share one source identity (authority, title, URL,
-document revision, retrieval date) become one document with ordered
-excerpts, so resolving the claims yields the same evidence records the
-inline form carries and nothing else about the configuration differs
-from `conical_amsr2_complete`. `eval/cases.py` derives the claims from
-the registry record at build time and fails loudly if the fixture no
-longer matches. The runner points `src.source_library.SOURCES_DIR` at
-the fixture directory in `Harness.__init__`, the same place it pins the
-eval clock; the production `data/sources` library stays empty and
-untouched, and nothing under `data/` changes in this PR.
+`conical_amsr2_claims` (in `eval/cases.py`) asks the model to prepare a
+conical AMSR2 study from a compact `conical-configuration-v2`
+configuration that cites one synthetic fixture document
+(`eval/fixtures/source_library/eval-amsr2-claims-source.json`) as
+`source_claims` instead of inline evidence. The first version of this
+case derived a claim form from the full 15 KB registry record; its
+prompt was 15.2 KB, the configuration turn was the largest request in
+the conversation, and scored runs needed 252 to 307 seconds - over the
+scoped gate's budget. The compact configuration reuses the registry
+record's AMSR2 geometry values with one excerpt, no conflicts, and no
+approximations, which brings the prompt to 3.2 KB and the conversation
+inside the gate limits while still driving the same
+`prepare_conical_study` claim-resolution path. It is an evaluation
+fixture, not a reviewed registry entry; the runner points
+`src.source_library.SOURCES_DIR` at the fixture directory in
+`Harness.__init__`, the same place it pins the eval clock, and the
+production `data/sources` library stays empty.
 
 The checker requires one successful `prepare_conical_study` where:
 
@@ -113,38 +108,36 @@ The checker requires one successful `prepare_conical_study` where:
   5537670 the claim form always violates the required `evidence`
   property, so this check fails whatever the model does.
 - `configuration_unchanged`: the sent configuration equals the prompted
-  claim-form configuration exactly, so a model cannot pass by
-  converting the claims to inline evidence (the form the before commit
-  advertised) or by changing a geometry value.
+  claim-form configuration exactly, so a model cannot pass by rounding
+  a geometry value or by converting the claims to inline evidence (the
+  form the before commit advertised).
 - `claims_resolved`: the proposal carries the fixture-resolved evidence
-  records (the prompt never states the authorities or locators, so a
-  proposal that echoes unresolved claims cannot pass);
+  record (the prompt never states the authority, locator, or excerpt,
+  so a proposal that echoes unresolved claims cannot pass);
 - `schema_normalized`: the proposal is normalized back to v1;
 - `prepared` and `reported`: a prepare happened and the reply names the
   configuration.
 
 The case does not accept or run the study, so it needs no TAT-C
-calculation and no access results. The full suite is now 25 cases; the
-existing 24 are unchanged.
+event calculation and no access results. The full suite is now 25
+cases; the existing 24 are unchanged.
 
-## Why the case can fail before the fix
+This check is version-relative by design: rescoring a saved before-commit
+trace on the current checkout revalidates against the current schema and
+passes. The discrimination is only observed when the case runs against
+the commit under test, which is how the scoped gate runs it (at the
+pull-request checkout).
 
-The runtime accepted the claim form at 5537670, so a checker that only
-reads server responses cannot discriminate. The check
-`advertised_schema_ok` scores the advertised surface: it validates the
-arguments the model actually sent against the input schema the checkout
-under test advertises. At 5537670 a claim-form configuration is always
-missing the required `evidence` property, so the check fails whatever
-the model does; at b9e1437 it passes.
+## Scoped-gate selection
 
-This also means the check is version-relative by design: rescoring a
-saved before-commit trace on the current checkout revalidates against
-the current schema and passes. The discrimination is only observed when
-the case runs against the commit under test, which is how the scoped
-gate would run it (at the pull-request checkout). The unit test
-`test_claims_case_requires_the_claim_form_and_resolved_evidence` pins
-the schema-dependent behavior offline by patching the advertised schema
-to the before-commit form.
+`prepare_conical_study` maps to `conical_amsr2_claims`;
+`finish_conical_study` stays on `conical_amsr2_complete`. Diffing the
+model-facing snapshot of 5537670 against this branch selects
+`conical_amsr2_failed_refresh`, `conical_amsr2_claims`, and
+`pointed_s1c_iw_complete` - b9e1437 also changed the pointed tools'
+schema and the refresh tool's error text, so those cases light up too.
+The recorded backtest runs `conical_amsr2_claims` alone with `--cases`
+to isolate the regression and stay inside one gate attempt.
 
 ## Commands
 
@@ -168,97 +161,95 @@ done
 
 cd /tmp/opencode/bt-before/apps/mcp-server
 EVAL_ENV_FILE=/home/satyal/tatc-ai/apps/librechat/.env \
-  timeout -k 60 2400 /home/satyal/tatc-ai/apps/mcp-server/.venv312/bin/python \
+  timeout -k 60 300 /home/satyal/tatc-ai/apps/mcp-server/.venv312/bin/python \
   -m eval.run_eval --cases conical_amsr2_claims --offline --workers 1 \
-  --save-traces --request-timeout 300 --conversation-timeout 900 \
-  --label backtest-before-final-5537670
+  --save-traces --request-timeout 120 --conversation-timeout 240 \
+  --label backtest-before-gatelimits-5537670
 
 cd /tmp/opencode/bt-after/apps/mcp-server
 EVAL_ENV_FILE=/home/satyal/tatc-ai/apps/librechat/.env \
-  timeout -k 60 3000 /home/satyal/tatc-ai/apps/mcp-server/.venv312/bin/python \
+  timeout -k 60 300 /home/satyal/tatc-ai/apps/mcp-server/.venv312/bin/python \
   -m eval.run_eval --cases conical_amsr2_claims --offline --workers 1 \
-  --save-traces --request-timeout 600 --conversation-timeout 1800 \
-  --label backtest-after-r3-b9e1437
+  --save-traces --request-timeout 120 --conversation-timeout 240 \
+  --label backtest-after-gatelimits-b9e1437
 ```
 
-`EVAL_ENV_FILE` pointed the runner at the local `apps/librechat/.env`
-for the Voyager key; the key was never printed or committed. Both runs
-used the default routine model `deepseek-v4-1-flash`, one repeat, and
-the recorded CelesTrak/OSCAR cache (`--offline`).
+These are the scoped gate's limits: a 120-second request budget, a
+240-second conversation budget, and a hard 300-second first-attempt
+wall clock (`eval/ci.py`). `EVAL_ENV_FILE` pointed the runner at the
+local `apps/librechat/.env` for the Voyager key; the key was never
+printed or committed. Both runs used the default routine model
+`deepseek-v4-1-flash`, one repeat, and the recorded CelesTrak/OSCAR
+cache (`--offline`).
 
 ## Results
 
-Deterministic probe (no model):
+Deterministic probe (no model), with the compact case configuration:
 
 - 5537670: advertised schema rejects the claim-form arguments
   (`'evidence' is a required property`); runtime model and tool
-  boundary accept them. Unit suite: 18 passed.
+  boundary accept them.
 - b9e1437: advertised schema accepts the claim-form arguments; runtime
-  model and tool boundary accept them. Unit suite: 24 passed.
+  model and tool boundary accept them.
 
-Model runs, case `conical_amsr2_claims`, model `deepseek-v4-1-flash`,
-one repeat, scored rows:
+Model runs with the compact case at the gate's limits, model
+`deepseek-v4-1-flash`, one repeat:
 
-- Before (5537670), run
-  `eval/results/20261121T131413Z-backtest-before-final-5537670.jsonl`,
-  307 seconds wall clock, 1 conversation, 4 turns: `status: ok`,
-  `passed: false`. Failed check: `advertised_schema_ok`. The model sent
-  the exact v2 claim form (11 `source_claims`, no inline `evidence`,
-  arguments otherwise unchanged), the server accepted it and resolved
-  the fixture citations, and the conversation completed - the failure is
-  precisely the advertised schema, not model behavior.
-- After (b9e1437), run
-  `eval/results/20261121T140325Z-backtest-after-r3-b9e1437.jsonl`,
-  266 seconds wall clock, 1 conversation, 4 turns: `status: ok`,
-  `passed: true`, all checks green, same claim form sent and resolved.
+- Before (5537670),
+  `eval/results/20261121T201652Z-backtest-before-gatelimits-5537670.jsonl`:
+  173.8 seconds wall clock, 3 tool calls, `status: ok`, `passed: false`.
+  Failed check: `advertised_schema_ok`. The model sent the exact v2
+  claim form (one `source_claims` entry, no inline `evidence`), the
+  before-commit server accepted it and resolved the fixture citation,
+  and the conversation completed - the failure is precisely the
+  advertised schema, not model behavior. `eval.ci classify` on this file
+  returns `checker_failure` (exit 1), the blocking verdict.
+- After (b9e1437),
+  `eval/results/20261121T202130Z-backtest-after-gatelimits-b9e1437.jsonl`:
+  109.0 seconds wall clock, 3 tool calls, `status: ok`, `passed: true`,
+  all checks green, same claim form sent and resolved.
+  `eval.ci classify` returns `passed` (exit 0).
 
-Both scored traces were rescored with the final checker (the
-`advertised_schema_ok` check now validates the full sent arguments
-against the advertised schema and `configuration_unchanged` requires
-equality with the prompted configuration); both pass at the current
-checkout, for the version-relativity reason above. The before run's
-recorded failure was produced with the case running against the before
-commit's server, which is how a scoped gate at a pull-request checkout
-would encounter it.
+Both runs fit the gate budget with room for the retry (173.8 s and
+109.0 s against a 300-second first attempt and a 480-second gate budget
+at `WORKERS=3`, where the three selected cases run concurrently).
 
-Four attempts hit provider read timeouts on the turn that emits the
-roughly 15 KB configuration argument: one before attempt at the default
-180-second request budget, and two after attempts at 300 seconds. The
-scored runs completed at 300 seconds (before) and 600 seconds (after).
-The conversation needs a request budget above roughly 300 seconds; the
-scoped gate's 120-second request and 240-second conversation limits
-would not have completed either scored run.
-
-Raw traces stay in the local worktrees' `eval/results/` directories and
-copies in `apps/mcp-server/eval/results/` (git-ignored); the JSONL files
-are ~25 KB each with prompts.
+An earlier, wider configuration also backtested successfully but did not
+fit the gate limits. Those runs used a 15.2 KB prompt derived from the
+registry record, took 252 to 307 seconds when they completed, and timed
+out three times in six attempts: once at the default 180-second request
+budget on the before commit, and twice on the after commit (once at the
+default budget, once at 300 seconds). One before attempt with the
+earlier checker (which lacked `advertised_schema_ok` and
+`configuration_unchanged`) scored a pass that the current checker would
+not score the same way; that is why the checker now scores the
+advertised schema and the exact sent configuration, and why the gate-limit
+runs above supersede those attempts. The earlier traces were recorded at
+their commit with the checker as it stood; they are not rescored here.
 
 ## Gate decision
 
-The scoped gate's coverage for this regression is the offline contract
-test `test_advertised_schema_accepts_both_forms`, which fails on
-5537670 and passes on b9e1437 and runs in the normal `pytest` job. The
-scoped eval mapping is unchanged: `prepare_conical_study` selects
-`conical_amsr2_complete` only, because the claims case is too slow for
-the gate's 300-second first-attempt budget (one scored conversation took
-252 to 307 seconds). A schema change to `prepare_conical_study` still
-selects `conical_amsr2_complete`, which exercises the inline-evidence
-form end to end; the claim form is covered by the contract test and by
-this manual, full-eval backtest. Two residual risks:
+The scoped gate can be enabled for this regression. The mapping sends
+`prepare_conical_study` changes to `conical_amsr2_claims`, the case
+discriminates the two commits, and one scored conversation fits the
+gate's 300-second first-attempt budget with 173.8 s (before) and 109.0 s
+(after). The offline contract test
+`test_advertised_schema_accepts_both_forms` is the deterministic backstop
+that fails on 5537670 without a model call. Residual risks:
 
-- The scoped gate does not catch a model-facing regression that only
-  affects the claim-form path; the contract test covers the advertised
-  schema deterministically, but a model-behavior regression on the
-  claim form would only surface in a full eval run.
-- The model case needs a request budget above the scoped gate's limits.
-  Three of five attempts timed out at 180 seconds on the configuration
-  turn; a green run is one measured pass, not a proof the model always
-  complies.
+- The gate runs at most three cases; on this real diff it also selects
+  `conical_amsr2_failed_refresh` and `pointed_s1c_iw_complete` for the
+  pointed-tool and refresh-text changes in b9e1437. The recorded
+  backtest isolates `conical_amsr2_claims`; the full three-case
+  selection runs concurrently under the gate budget.
+- A green scoped run is one measured pass with one routine model, not a
+  proof the model always complies. Provider read timeouts stay possible
+  and are classified as unmeasured infrastructure, not failures.
 
 ## What this change does not do
 
 - It does not enable the CI gate; issue #98's workflow owns that.
-- It does not change the scoped-eval mapping, the production
-  `data/sources` library, the registry configurations, or any server
-  code.
-- It does not add pointed or mixed claim-form cases.
+- It does not change the production `data/sources` library, the registry
+  configurations, or any server code.
+- It does not add pointed or mixed claim-form cases; a pointed-only
+  regression of this kind would need its own case.
