@@ -43,11 +43,11 @@ RESULTS = HERE / "results"
 # The recorded HTTP cache means one attempt is bounded by the harness
 # itself: a startup, one streaming probe, and one wave of at most three
 # conversations. The gate budget bounds every attempt together so two
-# attempts fit the 10-minute CI job with setup headroom.
+# attempts fit the 12-minute CI job with setup headroom.
 REQUEST_TIMEOUT = 120
 CONVERSATION_TIMEOUT = 240
 WORKERS = 3
-GATE_BUDGET_SECONDS = 420.0
+GATE_BUDGET_SECONDS = 480.0
 RETRY_RESERVE_SECONDS = 180.0
 MIN_RETRY_SECONDS = 60.0
 
@@ -168,11 +168,15 @@ def _attempt_verdict(
 ) -> Tuple[str, Optional[str], List[str]]:
     """Classify one attempt; return its verdict, reason, and failed checks."""
     if result_path is None or not Path(result_path).exists():
+        if returncode is None:
+            return INFRA_FAILURE, "the attempt timed out before writing a result file", []
         return HARNESS_FAILURE, "the eval wrote no result file", []
     try:
         rows = read_rows(result_path)
     except OSError:
         return INFRA_FAILURE, "the result file is unreadable", []
+    if not rows and returncode is None:
+        return INFRA_FAILURE, "the attempt timed out before writing a complete row", []
     if returncode not in (0, None) and not rows:
         return HARNESS_FAILURE, "the eval exited before writing results", []
     verdict = classify(rows, cases)
@@ -290,9 +294,15 @@ def _write_summary(summary: Optional[Path], payload: Dict[str, Any]) -> None:
         if attempt.get("failed_checks"):
             lines.append("Failed checks: " + ", ".join(attempt["failed_checks"]))
     if payload["verdict"] == UNMEASURED:
-        lines.append(
-            "The run is unmeasured after an infrastructure retry; it does not block."
-        )
+        if len(payload.get("attempts", [])) < 2:
+            lines.append(
+                "The run is unmeasured and the retry did not run within the budget; "
+                "it does not block."
+            )
+        else:
+            lines.append(
+                "The run is unmeasured after one infrastructure retry; it does not block."
+            )
     with Path(summary).open("a") as handle:
         handle.write("\n".join(lines) + "\n")
 

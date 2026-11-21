@@ -12,7 +12,7 @@ jobs:
     # the steps below skip when the eval does not apply. A fork PR and a
     # PR without a model-facing change both finish green.
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -74,8 +74,9 @@ jobs:
 
       # Needs the repository secret VOYAGER_API_KEY (an ASU Research
       # Computing proxy key). The base URL matches
-      # apps/librechat/.env.example. The gate bounds itself to 420 seconds
-      # of eval time so two attempts fit this 10-minute job.
+      # apps/librechat/.env.example. The gate bounds itself to 480 seconds
+      # of eval time so two attempts fit this 12-minute job with setup
+      # headroom.
       - name: Run the scoped eval
         if: steps.scope.outputs.reason == 'model_facing'
         working-directory: apps/mcp-server

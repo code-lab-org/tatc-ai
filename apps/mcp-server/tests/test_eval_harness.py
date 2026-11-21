@@ -294,10 +294,8 @@ def test_default_result_record_redacts_prompts_and_tool_text(tmp_path, monkeypat
 
     monkeypatch.setattr(run_eval, "Harness", FakeHarness)
     monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
-    monkeypatch.setattr(run_eval, "load_env", lambda _path: {
-        "VOYAGER_BASE_URL": "http://example.invalid",
-        "VOYAGER_API_KEY": "test-key",
-    })
+    monkeypatch.setenv("VOYAGER_BASE_URL", "http://example.invalid")
+    monkeypatch.setenv("VOYAGER_API_KEY", "test-key")
     monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
     monkeypatch.setattr(run_eval, "probe_streams", lambda _harness, _models: [])
     monkeypatch.setattr(run_eval, "RESULTS", tmp_path)
@@ -370,10 +368,8 @@ def test_run_writes_the_result_file_to_result_out(tmp_path, monkeypatch):
 
     monkeypatch.setattr(run_eval, "Harness", FakeHarness)
     monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
-    monkeypatch.setattr(run_eval, "load_env", lambda _path: {
-        "VOYAGER_BASE_URL": "http://example.invalid",
-        "VOYAGER_API_KEY": "test-key",
-    })
+    monkeypatch.setenv("VOYAGER_BASE_URL", "http://example.invalid")
+    monkeypatch.setenv("VOYAGER_API_KEY", "test-key")
     monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
     monkeypatch.setattr(run_eval, "probe_streams", lambda _harness, _models: [])
     monkeypatch.setattr(run_eval, "RESULTS", tmp_path)
