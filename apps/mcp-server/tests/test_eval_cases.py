@@ -1718,6 +1718,15 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
     checks = case.checks(trace, clock)
     assert all(checks.values()), checks
 
+    # The prompt stops at preparation; a finish call fails the case.
+    trace.calls.append(
+        Call("finish_conical_study", {}, False, "{}", parsed={"result_id": "r"})
+    )
+    checks = case.checks(trace, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
+    trace.calls.pop()
+
     # The sent arguments must validate against the advertised tool
     # schema. When the advertised surface required inline evidence
     # (before b9e1437), the claim form the prompt mandates was invalid
@@ -1802,5 +1811,3 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
     checks = case.checks(trace, clock)
     assert not checks["reported"]
     assert not all(checks.values())
-
-

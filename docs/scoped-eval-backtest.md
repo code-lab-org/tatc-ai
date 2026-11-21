@@ -216,10 +216,11 @@ at `WORKERS=3`, where the three selected cases run concurrently).
 
 An earlier, wider configuration also backtested successfully but did not
 fit the gate limits. Those runs used a 15.2 KB prompt derived from the
-registry record, took 252 to 307 seconds when they completed, and timed
-out three times in six attempts: once at the default 180-second request
-budget on the before commit, and twice on the after commit (once at the
-default budget, once at 300 seconds). One before attempt with the
+registry record. The saved rows report 175.4, 291.5, and 252.3 seconds
+when they completed; the 175.4-second row used the earlier checker. They
+timed out three times in six attempts: once at the default 180-second
+request budget on the before commit, and twice on the after commit (once
+at the default budget, once at 300 seconds). One before attempt with the
 earlier checker (which lacked `advertised_schema_ok` and
 `configuration_unchanged`) scored a pass that the current checker would
 not score the same way; that is why the checker now scores the
