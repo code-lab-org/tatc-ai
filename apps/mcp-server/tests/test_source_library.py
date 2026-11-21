@@ -38,11 +38,13 @@ def _group_key(item):
     )
 
 
-def _write_library(evidence, root):
+def _write_library(evidence, root, prefix="doc"):
     """Split a record's evidence into documents plus claims, keeping order."""
     document_ids = {}
     for item in evidence:
-        document_ids.setdefault(_group_key(item), f"doc-{len(document_ids) + 1}")
+        document_ids.setdefault(
+            _group_key(item), f"{prefix}-{len(document_ids) + 1}"
+        )
 
     excerpts = {key: [] for key in document_ids}
     claims = []
@@ -69,7 +71,7 @@ def _write_library(evidence, root):
         authority, title, url, document_revision, retrieved_at = key
         document = {
             "schema_version": source_library.SCHEMA_VERSION,
-            "document_id": f"doc-{index}",
+            "document_id": f"{prefix}-{index}",
             "revision": "rev-1",
             "authority": authority,
             "title": title,
@@ -78,16 +80,16 @@ def _write_library(evidence, root):
             "retrieved_at_utc": retrieved_at,
             "excerpts": items,
         }
-        (Path(root) / f"doc-{index}.json").write_text(
+        (Path(root) / f"{prefix}-{index}.json").write_text(
             json.dumps(document), encoding="utf-8"
         )
     return claims
 
 
-def _claims_record(path, root, claim_version):
+def _claims_record(path, root, claim_version, prefix="doc"):
     raw = json.loads(path.read_text(encoding="utf-8"))
     expected = copy.deepcopy(raw)
-    raw["source_claims"] = _write_library(raw.pop("evidence"), root)
+    raw["source_claims"] = _write_library(raw.pop("evidence"), root, prefix)
     raw["schema_version"] = claim_version
     return raw, expected
 
@@ -250,6 +252,22 @@ def test_malformed_library_file_names_the_record(tmp_path, monkeypatch):
     assert raw["configuration_id"] in message
     assert "cannot read the source library" in message
     assert raw["source_claims"][0]["source"] in message
+
+
+def test_explicit_null_claims_with_inline_evidence_is_rejected():
+    raw = json.loads(AMSR2.read_text(encoding="utf-8"))
+    raw["source_claims"] = None
+
+    with pytest.raises(ValueError, match="both inline evidence and source_claims"):
+        ConicalConfiguration.model_validate(raw)
+
+
+def test_library_root_symlink_loop_is_reported(tmp_path):
+    root = tmp_path / "loop"
+    root.symlink_to(root)
+
+    with pytest.raises(ValueError, match="source library root"):
+        load_source_library(root)
 
 
 def test_mapping_input_is_normalized(tmp_path, monkeypatch):

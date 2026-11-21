@@ -158,10 +158,25 @@ def load_source_library(root: Path | None = None) -> SourceLibrary:
     """Read every document revision under the source library root."""
     source_root = SOURCES_DIR if root is None else Path(root)
     documents: Dict[tuple[str, str], SourceDocument] = {}
-    if not source_root.exists():
+    try:
+        source_root.stat()
+    except FileNotFoundError:
         return SourceLibrary(documents=documents)
-    resolved_root = source_root.resolve()
-    for path in sorted(source_root.rglob("*.json")):
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot read source library root {source_root}: {exc}"
+        ) from exc
+    try:
+        resolved_root = source_root.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(
+            f"Cannot resolve source library root {source_root}: {exc}"
+        ) from exc
+    try:
+        paths = sorted(source_root.rglob("*.json"))
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Cannot list source library {source_root}: {exc}") from exc
+    for path in paths:
         try:
             resolved_path = path.resolve()
         except (OSError, RuntimeError) as exc:
@@ -204,6 +219,13 @@ def resolve_claim_form(
     if not isinstance(data, Mapping):
         return data
     data = dict(data)
+    if "evidence" in data and "source_claims" in data:
+        identifier = data.get("configuration_id") or "<unknown>"
+        revision = data.get("revision") or "<unknown>"
+        raise ValueError(
+            f"Configuration {identifier!r} revision {revision!r} carries both "
+            "inline evidence and source_claims; keep exactly one form"
+        )
     identifier = data.get("configuration_id") or "<unknown>"
     revision = data.get("revision") or "<unknown>"
     version = data.get("schema_version")
@@ -221,11 +243,6 @@ def resolve_claim_form(
             f"Configuration {identifier!r} revision {revision!r} has "
             f"source_claims but schema_version {version!r}; claims require "
             f"{claim_schema_version!r}"
-        )
-    if "evidence" in data:
-        raise ValueError(
-            f"Configuration {identifier!r} revision {revision!r} carries both "
-            "inline evidence and source_claims; keep exactly one form"
         )
     if not isinstance(claims, list) or not claims:
         raise ValueError(
