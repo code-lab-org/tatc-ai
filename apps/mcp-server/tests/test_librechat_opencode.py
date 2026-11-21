@@ -2,10 +2,9 @@
 
 from tests.librechat_config import CONFIG_FILES, load_config
 
-# A key's plan decides which base URL works.
+# One group at the Go base URL, which is the plan the workspace key uses.
 ENDPOINTS = {
-    "OpenCode": "https://opencode.ai/inference/openai/v1",
-    "OpenCode Go": "https://opencode.ai/inference/go/openai/v1",
+    "OpenCode": "https://opencode.ai/inference/go/openai/v1",
 }
 # model ID -> context window reported by the models endpoint.
 MODELS = {
@@ -31,7 +30,7 @@ def _opencode_specs(path) -> list[dict]:
     ]
 
 
-def test_each_plan_has_its_own_endpoint_and_key():
+def test_endpoint_uses_a_user_key_and_the_go_base_url():
     for path in CONFIG_FILES:
         endpoints = _endpoints(path)
         for name, base_url in ENDPOINTS.items():

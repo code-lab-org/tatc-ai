@@ -8,7 +8,7 @@ Every model in the picker names who runs it and who pays. Each request goes only
 | --- | --- | --- | --- |
 | ASU Voyager, ASU CreateAI | Keys set by whoever runs the install | ASU | Local and deployed |
 | OpenAI, Anthropic, Google, and OpenRouter API key | Your own API key | Your account with that provider | Local and deployed |
-| OpenCode Go, OpenCode | Your OpenCode Console key | Your Go subscription or Console credits | Local and deployed |
+| OpenCode | Your OpenCode Console key | Your Go subscription | Local and deployed |
 | ChatGPT plan (local only) | Sign in with ChatGPT | Your plan limits | Local only |
 
 ## Run locally without ASU credentials
@@ -38,14 +38,11 @@ Claude Haiku 5.5 is not offered as a chat model because LibreChat 0.8.7 sends it
 
 ## Use an OpenCode key
 
-OpenCode issues one Console key per workspace at [opencode.ai/console](https://opencode.ai/console). The endpoint decides which balance pays, so the picker has a group for each:
+OpenCode issues one Console key per workspace at [opencode.ai/console](https://opencode.ai/console). Add it under **Settings**, **Data & Privacy**, **Provider API keys**, then choose a model from **OpenCode**.
 
-- **OpenCode Go** uses a Go, Go Plus, or Go Teams subscription.
-- **OpenCode** bills Console credits.
+The group uses OpenCode's Go base URL, so it needs a Go, Go Plus, or Go Teams subscription. A key with only Console credits gets OpenCode's "Insufficient balance" error.
 
-Add the key under **Settings**, **Data & Privacy**, **Provider API keys**, then choose a model from the matching group. A key with only a Go subscription fails on the credit endpoint with "Insufficient balance", and credits do not pay for the Go endpoint, so pick the group that matches the plan.
-
-Both groups offer GLM-5.3-Flash, DeepSeek V4.1 Flash, Kimi K3, and Qwen3.8 Flash, with the TATC tools. OpenCode asks every client for a stable `x-opencode-session`, and Go rejects requests without one. LibreChat fills it from the user and conversation IDs, so the endpoint config must keep both placeholders; title requests have no conversation ID and rely on the user ID. OpenCode Go is meant for coding-agent traffic and monitors for other use, so heavy research use may be limited.
+**OpenCode** offers GLM-5.3-Flash, DeepSeek V4.1 Flash, Kimi K3, and Qwen3.8 Flash, with the TATC tools. OpenCode asks every client for a stable `x-opencode-session`, and Go rejects requests without one. LibreChat fills it from the user and conversation IDs, so the endpoint config must keep both placeholders; title requests have no conversation ID and rely on the user ID. OpenCode's Go plan is meant for coding-agent traffic and monitors for other use, so heavy research use may be limited.
 
 ## Use a ChatGPT plan
 
