@@ -21,7 +21,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'apps/mcp-server' '.github/workflows/test-mcp-server.yml')"
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'apps/mcp-server' 'apps/librechat/librechat.yaml' 'apps/librechat/librechat.deploy.yaml.template' '.github/workflows/test-mcp-server.yml')"
           if [ -n "$changed" ]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
           else

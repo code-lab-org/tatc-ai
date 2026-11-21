@@ -106,6 +106,42 @@ endpoints:
       titleConvo: true
       titleModel: aws/claude4_5_haiku
       modelDisplayLabel: ASU CreateAI
+    # OpenCode keys come from https://opencode.ai/console. The base URL decides
+    # whether a subscription or Console credits pay, and a key with only one of
+    # them fails on the other endpoint, so each plan gets its own.
+    - name: OpenCode
+      apiKey: user_provided
+      baseURL: https://opencode.ai/inference/openai/v1
+      models:
+        default:
+          - glm-5.3-flash
+          - deepseek-v4.1-flash
+          - kimi-k3
+          - qwen3.8-flash
+        fetch: false
+      headers:
+        # OpenCode asks for a stable session and Go rejects a missing one. The
+        # body conversation ID keeps one session per chat; title requests have no
+        # conversation ID, so the user ID keeps the header non-empty.
+        x-opencode-session: "{{LIBRECHAT_USER_ID}}-{{LIBRECHAT_BODY_CONVERSATIONID}}"
+      titleConvo: true
+      titleModel: glm-5.3-flash
+      modelDisplayLabel: OpenCode
+    - name: OpenCode Go
+      apiKey: user_provided
+      baseURL: https://opencode.ai/inference/go/openai/v1
+      models:
+        default:
+          - glm-5.3-flash
+          - deepseek-v4.1-flash
+          - kimi-k3
+          - qwen3.8-flash
+        fetch: false
+      headers:
+        x-opencode-session: "{{LIBRECHAT_USER_ID}}-{{LIBRECHAT_BODY_CONVERSATIONID}}"
+      titleConvo: true
+      titleModel: glm-5.3-flash
+      modelDisplayLabel: OpenCode Go
     # People bring their own key in Settings > Account > Provider API Keys.
     # LibreChat stores it encrypted per user and only sends it to this endpoint.
     - name: OpenRouter
@@ -898,6 +934,110 @@ modelSpecs:
         model: openai/gpt6_astra
         maxContextTokens: 128000
         modelLabel: ASU CreateAI
+    - name: opencode-glm-5-3-flash
+      label: GLM-5.3-Flash
+      description: Z.ai GLM chat model via your OpenCode key.
+      group: OpenCode
+      iconURL: https://github.com/zai-org.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode
+        model: glm-5.3-flash
+        maxContextTokens: 1000000
+    - name: opencode-deepseek-v4-1-flash
+      label: DeepSeek V4.1 Flash
+      description: DeepSeek chat model via your OpenCode key.
+      group: OpenCode
+      iconURL: https://github.com/deepseek-ai.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode
+        model: deepseek-v4.1-flash
+        maxContextTokens: 1000000
+    - name: opencode-kimi-k3
+      label: Kimi K3
+      description: Moonshot Kimi chat model via your OpenCode key.
+      group: OpenCode
+      iconURL: https://github.com/MoonshotAI.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode
+        model: kimi-k3
+        maxContextTokens: 1048576
+    - name: opencode-qwen3-8-flash
+      label: Qwen3.8 Flash
+      description: Alibaba Qwen chat model via your OpenCode key.
+      group: OpenCode
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode
+        model: qwen3.8-flash
+        maxContextTokens: 1000000
+    - name: opencode-go-glm-5-3-flash
+      label: GLM-5.3-Flash
+      description: Z.ai GLM chat model via your OpenCode Go subscription.
+      group: OpenCode Go
+      iconURL: https://github.com/zai-org.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode Go
+        model: glm-5.3-flash
+        maxContextTokens: 1000000
+    - name: opencode-go-deepseek-v4-1-flash
+      label: DeepSeek V4.1 Flash
+      description: DeepSeek chat model via your OpenCode Go subscription.
+      group: OpenCode Go
+      iconURL: https://github.com/deepseek-ai.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode Go
+        model: deepseek-v4.1-flash
+        maxContextTokens: 1000000
+    - name: opencode-go-kimi-k3
+      label: Kimi K3
+      description: Moonshot Kimi chat model via your OpenCode Go subscription.
+      group: OpenCode Go
+      iconURL: https://github.com/MoonshotAI.png
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode Go
+        model: kimi-k3
+        maxContextTokens: 1048576
+    - name: opencode-go-qwen3-8-flash
+      label: Qwen3.8 Flash
+      description: Alibaba Qwen chat model via your OpenCode Go subscription.
+      group: OpenCode Go
+      iconURL: /assets/qwen.svg
+      showIconInMenu: true
+      showIconInHeader: true
+      mcpServers:
+        - tatc
+      preset:
+        endpoint: OpenCode Go
+        model: qwen3.8-flash
+        maxContextTokens: 1000000
     - name: openai-gpt-6-astra
       label: GPT-6 Astra · OpenAI key
       description: Your OpenAI API key. Billed to your OpenAI account.

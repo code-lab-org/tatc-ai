@@ -8,6 +8,7 @@ Every model in the picker names who runs it and who pays. Each request goes only
 | --- | --- | --- | --- |
 | ASU Voyager, ASU CreateAI | Keys set by whoever runs the install | ASU | Local and deployed |
 | OpenAI, Anthropic, Google, and OpenRouter API key | Your own API key | Your account with that provider | Local and deployed |
+| OpenCode Go, OpenCode | Your OpenCode Console key | Your Go subscription or Console credits | Local and deployed |
 | ChatGPT plan (local only) | Sign in with ChatGPT | Your plan limits | Local only |
 
 ## Run locally without ASU credentials
@@ -29,11 +30,22 @@ Leave `VOYAGER_API_KEY` and `CREATEAI_API_KEY` as `replace-me`. ASU models stay 
 
 LibreChat encrypts each key and keeps it with your account, so other accounts cannot use it. LibreChat 0.8.7 shows "Your key will never expire" even when no key is saved. If no key is saved, sending a message shows "No key found".
 
-The model lists are short and chosen by hand. To offer another model, add it to `modelSpecs` in both LibreChat files. For OpenAI, Anthropic, and Google, also add it to the `*_MODELS` settings in both compose files. For OpenRouter, add it to that endpoint's `models` list. Every ASU spec sets `maxContextTokens`, and a new model needs it too. LibreChat does not recognize the ASU model IDs, so it falls back to 32,000 tokens and keeps 5% in reserve; the TATC tool definitions alone are close to that, and a request with no room left for the user's message fails with `empty_messages`.
+The model lists are short and chosen by hand. To offer another model, add it to the endpoint's `models` list and to `modelSpecs` in both LibreChat files, with `maxContextTokens` in the spec. For OpenAI, Anthropic, and Google, also add it to the `*_MODELS` settings in both compose files. Every ASU spec sets `maxContextTokens`, and a new model needs it too. LibreChat does not recognize the ASU model IDs, so it falls back to 32,000 tokens and keeps 5% in reserve; the TATC tool definitions alone are close to that, and a request with no room left for the user's message fails with `empty_messages`.
 
 OpenAI model specs set `useResponsesApi: true` because `/v1/chat/completions` rejects function tools on models that reason by default, such as GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna.
 
 Claude Haiku 5.5 is not offered as a chat model because LibreChat 0.8.7 sends it a thinking setting that Anthropic's newer models do not accept. It does write conversation titles for Anthropic chats, because LibreChat's title requests send `thinking: disabled`, which Claude Opus 5.5 and Sonnet 5.5 reject and Haiku 5.5 accepts. Your Anthropic key pays for those title requests.
+
+## Use an OpenCode key
+
+OpenCode issues one Console key per workspace at [opencode.ai/console](https://opencode.ai/console). The endpoint decides which balance pays, so the picker has a group for each:
+
+- **OpenCode Go** uses a Go, Go Plus, or Go Teams subscription.
+- **OpenCode** bills Console credits.
+
+Add the key under **Settings**, **Data & Privacy**, **Provider API keys**, then choose a model from the matching group. A key with only a Go subscription fails on the credit endpoint with "Insufficient balance", and credits do not pay for the Go endpoint, so pick the group that matches the plan.
+
+Both groups offer GLM-5.3-Flash, DeepSeek V4.1 Flash, Kimi K3, and Qwen3.8 Flash, with the TATC tools. OpenCode asks every client for a stable `x-opencode-session`, and Go rejects requests without one. LibreChat fills it from the user and conversation IDs, so the endpoint config must keep both placeholders; title requests have no conversation ID and rely on the user ID. OpenCode Go is meant for coding-agent traffic and monitors for other use, so heavy research use may be limited.
 
 ## Use a ChatGPT plan
 

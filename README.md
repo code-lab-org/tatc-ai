@@ -101,6 +101,7 @@ LibreChat is configured with these model labels:
   - GPT-OSS 20B, GPT-OSS 120B, GPT-4o mini, GPT-4.1, GPT-4.1 mini, o3, GPT-5, GPT-5 mini, GPT-5 nano, GPT-5.1, GPT-5.1 Instant, GPT-5.1 Thinking, GPT-5.2, GPT-5.2 Pro, GPT-5.4 mini, GPT-5.4 nano, GPT-5.4 Thinking, GPT-5.4 Pro, GPT-5.5, GPT-5.5 Thinking, GPT-5.5 Pro, GPT-5.6 Luna, GPT-5.6 Sol, GPT-5.6 Terra, GPT-6 Astra.
 
 - **Your own API key:** OpenAI, Anthropic, Google, and OpenRouter models.
+- **Your own OpenCode key:** GLM-5.3-Flash, DeepSeek V4.1 Flash, Kimi K3, and Qwen3.8 Flash, through OpenCode Go or Console credits.
 - **ChatGPT plan (local only):** GPT-6.1 Sol, GPT-6 Astra, GPT-6 Luna.
 
 ## Deployment stack
