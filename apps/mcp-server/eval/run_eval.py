@@ -14,6 +14,7 @@ Usage, from apps/mcp-server:
     .venv312/bin/python -m eval.run_eval --label affected --repeats 3
     .venv312/bin/python -m eval.run_eval --compare eval/results/a.jsonl eval/results/b.jsonl
     .venv312/bin/python -m eval.run_eval --stream-only    # just the streaming probe
+    .venv312/bin/python -m eval.run_eval --write-snapshot  # pin the model-facing surface
 
 The routine model is deepseek-v4-1-flash. Select others explicitly with
 --models, or every Voyager model with --all-models. Budgets default to 180
@@ -57,6 +58,7 @@ HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("EVAL_ENV_FILE", HERE.parents[1] / "librechat" / ".env"))
 MCP_ENV_FILE = HERE.parent / ".env"
 RESULTS = HERE / "results"
+SNAPSHOT = HERE / "fixtures" / "model_surface.json"
 SUFFIX = "_mcp_tatc"
 MAX_TURNS = 20
 REQUEST_TIMEOUT = 180
@@ -317,6 +319,54 @@ def request_completion(
     raise ModelCallError(category or "harness_error", f"model call failed: {error!r}")
 
 
+def _list_tools(server):
+    """List the real server's tools through the in-process FastMCP client."""
+
+    async def run():
+        async with Client(server.mcp) as client:
+            return await client.list_tools()
+
+    return asyncio.run(run())
+
+
+def model_surface(hide: Sequence[str] = ()) -> Dict[str, Any]:
+    """Build the model-facing surface the eval sends to a model.
+
+    Returns the tool list exactly as it reaches the model (LibreChat's
+    ``_mcp_tatc`` suffix, description, input schema) and the server
+    instructions as the system message presents them. The eval runner and
+    the committed snapshot fixture both call this, so the snapshot cannot
+    describe a different surface than the one models see. Volatile values
+    such as the eval clock stay out; callers add them around this surface.
+    ``hide`` drops tools the way the runner's ``--hide`` option does.
+    """
+    import src.server as server
+
+    hidden = set(hide)
+    return {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name + SUFFIX,
+                    "description": tool.description or "",
+                    "parameters": tool.inputSchema,
+                },
+            }
+            for tool in _list_tools(server)
+            if tool.name not in hidden
+        ],
+        "server_instructions": (
+            "## MCP Server Instructions\n### tatc\n" + server.SERVER_INSTRUCTIONS
+        ),
+    }
+
+
+def snapshot_text(surface: Dict[str, Any]) -> str:
+    """Serialize the model-facing surface for the committed snapshot."""
+    return json.dumps(surface, indent=2, sort_keys=True) + "\n"
+
+
 class Harness:
     def __init__(
         self,
@@ -346,30 +396,18 @@ class Harness:
         self.user_agent = user_agent
         self.session_id = session_id
         self.reasoning_effort = reasoning_effort
-        tools = asyncio.run(self._list_tools())
-        self.tool_names = [t.name for t in tools if t.name not in hide]
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name + SUFFIX,
-                    "description": t.description or "",
-                    "parameters": t.inputSchema,
-                },
-            }
-            for t in tools
-            if t.name not in hide
+        tools = model_surface(hide)
+        self.tool_names = [
+            tool["function"]["name"][: -len(SUFFIX)] for tool in tools["tools"]
         ]
+        self.tools = tools["tools"]
         # LibreChat appends server instructions to the system message; it
         # adds no date by default, so the eval states "now" explicitly.
+        # The instructions block itself comes from model_surface.
         self.system = (
             f"Current date and time: {clock.now.strftime('%Y-%m-%d %H:%M')} UTC.\n\n"
-            f"## MCP Server Instructions\n### tatc\n{server.SERVER_INSTRUCTIONS}"
+            + tools["server_instructions"]
         )
-
-    async def _list_tools(self):
-        async with Client(self.server.mcp) as client:
-            return await client.list_tools()
 
     def call_tool(
         self, name: str, args: Dict[str, Any], *, deadline: Optional[float] = None
@@ -925,9 +963,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--now", help="freeze the eval clock at this ISO UTC time")
     parser.add_argument("--compare", nargs="+", type=Path, help="summarize saved result files and exit")
     parser.add_argument("--rescore", action="store_true", help="with --compare, recheck traces first")
+    parser.add_argument(
+        "--write-snapshot",
+        action="store_true",
+        help="record the model-facing surface in the committed snapshot and exit",
+    )
     args = parser.parse_args(argv)
     if args.request_timeout <= 0 or args.conversation_timeout <= 0:
         parser.error("request and conversation timeouts must be positive")
+    if args.write_snapshot:
+        if args.hide:
+            parser.error("--write-snapshot records the full surface; do not pass --hide")
+        SNAPSHOT.write_text(snapshot_text(model_surface()))
+        print(f"wrote model-facing surface snapshot: {SNAPSHOT}")
+        return 0
     if args.compare:
         if args.rescore:
             rescore(args.compare)
