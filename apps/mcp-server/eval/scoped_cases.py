@@ -2,12 +2,12 @@
 
 A model-facing change to one tool should run the eval cases that
 exercise that tool, not the full suite. TOOL_CASES maps every server
-tool name to the case whose checks call it or read its result, to a
-tuple of such cases, or to NoCase with the reason no case covers it.
-select_cases diffs two model-facing snapshots (the payload
-eval.run_eval.model_surface builds and eval/fixtures/model_surface.json
-records) and returns the affected cases plus the touched gaps, so a
-change with no covering case is reported instead of silently skipped.
+tool name to the case whose checks call it or read its result, or to
+NoCase with the reason no case covers it. select_cases diffs two
+model-facing snapshots (the payload eval.run_eval.model_surface builds
+and eval/fixtures/model_surface.json records) and returns the affected
+cases plus the touched gaps, so a change with no covering case is
+reported instead of silently skipped.
 
 Naming convention: mapping keys are bare server tool names. Snapshot
 tool names carry LibreChat's ``_mcp_tatc`` suffix; the selector strips
@@ -16,7 +16,7 @@ the legacy coverage case, and at most MAX_CASES cases run per change.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Union
 
 from .run_eval import SUFFIX
 
@@ -47,7 +47,7 @@ class Selection:
     gaps: List[Gap]
 
 
-TOOL_CASES: Dict[str, Union[str, Tuple[str, ...], NoCase]] = {
+TOOL_CASES: Dict[str, Union[str, NoCase]] = {
     # Satellite and instrument lookup
     "search_satellites": NoCase(
         "no case requires satellite search; point studies resolve names "
@@ -91,10 +91,7 @@ TOOL_CASES: Dict[str, Union[str, Tuple[str, ...], NoCase]] = {
     # Registry and conical study workflow
     "lookup_instrument_configurations": "conical_amsr2_registry_selection",
     "record_instrument_configuration_refresh": "conical_amsr2_failed_refresh",
-    # The claims case sends a v2 source-claims configuration, the form the
-    # advertised schema once rejected; the complete case drives the whole
-    # inline-evidence flow. Both exercise prepare_conical_study.
-    "prepare_conical_study": ("conical_amsr2_claims", "conical_amsr2_complete"),
+    "prepare_conical_study": "conical_amsr2_complete",
     "finish_conical_study": "conical_amsr2_complete",
     # Pointed study workflow
     "prepare_pointed_study": "pointed_s1c_iw_complete",
@@ -176,10 +173,8 @@ def select_cases(before: Dict[str, Any], after: Dict[str, Any]) -> Selection:
         if isinstance(entry, NoCase):
             if not any(gap.tool == name for gap in gaps):
                 gaps.append(Gap(name, entry.reason))
-        else:
-            for case_id in (entry,) if isinstance(entry, str) else entry:
-                if case_id not in selected:
-                    selected.append(case_id)
+        elif entry not in selected:
+            selected.append(entry)
     if before.get("server_instructions") != after.get("server_instructions"):
         if DEFAULT_CASE_ID not in selected:
             selected.append(DEFAULT_CASE_ID)

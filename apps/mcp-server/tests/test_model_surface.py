@@ -30,11 +30,14 @@ def test_model_surface_matches_the_committed_snapshot():
 
 def test_harness_sends_the_pinned_surface(monkeypatch):
     import src.generic_coverage as gc
+    import src.source_library as source_library
 
-    # Harness pins OMM freshness by replacing this module global. Register
-    # the original with monkeypatch so teardown restores it for later tests.
+    # Harness.__init__ pins OMM freshness and the eval source-library
+    # root by replacing module globals. Register the originals with
+    # monkeypatch so teardown restores them for later tests.
     original = gc._validate_omm_freshness
     monkeypatch.setattr(gc, "_validate_omm_freshness", original)
+    monkeypatch.setattr(source_library, "SOURCES_DIR", source_library.SOURCES_DIR)
 
     clock = run_eval.Clock(datetime(2026, 9, 18, 4, 0, tzinfo=timezone.utc))
     harness = run_eval.Harness("https://example.invalid", "test-key", [], clock)
@@ -44,6 +47,7 @@ def test_harness_sends_the_pinned_surface(monkeypatch):
         "Current date and time: 2026-09-18 04:00 UTC.\n\n"
         + surface["server_instructions"]
     )
+    assert source_library.SOURCES_DIR == run_eval.SOURCE_LIBRARY_FIXTURE
 
 
 def test_write_snapshot_rejects_hidden_tools(tmp_path, monkeypatch):

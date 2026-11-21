@@ -838,36 +838,58 @@ def _conical_complete(expected_config_id: str):
     return checks
 
 
-def _advertised_required_properties() -> Set[str]:
-    """Return the configuration properties the advertised schema requires.
+_ADVERTISED_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {}
 
-    Read from the checkout's own model, the same schema FastMCP embeds in
-    prepare_conical_study's input. A lazy import keeps this module free
-    of server imports at build time.
+
+def _advertised_input_schema(tool_name: str) -> Dict[str, Any]:
+    """Return the advertised input schema of one server tool.
+
+    The schema comes from the checkout's own server through the
+    in-process FastMCP client, the same surface the eval sends to a
+    model, so a check built on it follows the code under test without a
+    second schema copy. The import is lazy to keep this module free of
+    server imports at build time; the cache holds one schema per tool.
     """
-    from src.conical_config import ConicalConfiguration
+    if tool_name not in _ADVERTISED_INPUT_SCHEMAS:
+        import asyncio
 
-    return set(ConicalConfiguration.model_json_schema().get("required", []))
+        from fastmcp import Client
+
+        import src.server as server
+
+        async def _list():
+            async with Client(server.mcp) as client:
+                return await client.list_tools()
+
+        for tool in asyncio.run(_list()):
+            _ADVERTISED_INPUT_SCHEMAS[tool.name] = tool.inputSchema
+    return _ADVERTISED_INPUT_SCHEMAS[tool_name]
 
 
-def _conical_claims_prepared(expected_evidence, expected_config_id):
+def _conical_claims_prepared(prompted_configuration, expected_evidence, expected_config_id):
     """Check one prepare of the claim-form configuration.
 
-    The model must send the configuration in the claim form exactly as
-    the prompt gives it, the sent configuration must omit nothing the
-    advertised schema requires (the advertised surface once required
-    inline evidence, so a schema-following client could not send the
-    claim form at all), the proposal must carry the evidence the server
-    resolved from the fixture library (the prompt never states the
-    authorities or locators), and the reply must name the configuration.
+    The sent arguments must validate against the tool's advertised
+    input schema. The advertised surface once required inline evidence
+    while the runtime accepted the claim form, so a schema-following
+    client could not send what the server supports; validating the sent
+    arguments against the checkout's own schema scores exactly that
+    regression. The sent configuration must also equal the prompted
+    claim-form configuration exactly, the proposal must carry the
+    evidence the server resolved from the fixture library (the prompt
+    never states the authorities or locators, so an echoed claim cannot
+    pass), the snapshot must be normalized back to v1, and the reply
+    must name the configuration.
     """
+    import jsonschema
+
     expected = [
         (item["evidence_id"], item["authority"], item["locator"], item["title"])
         for item in expected_evidence
     ]
 
     def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
-        required = _advertised_required_properties()
+        schema = _advertised_input_schema("prepare_conical_study")
         prepares = [
             call
             for call in trace.calls
@@ -876,19 +898,17 @@ def _conical_claims_prepared(expected_evidence, expected_config_id):
             and isinstance(call.parsed, dict)
         ]
         prepared = prepares[-1] if prepares else None
-        claim_form = False
         advertised = False
+        unchanged = False
         resolved = False
         normalized = False
         if prepared is not None:
-            sent = prepared.args.get("configuration")
-            claim_form = (
-                isinstance(sent, dict)
-                and sent.get("schema_version") == CLAIM_SCHEMA_VERSION
-                and bool(sent.get("source_claims"))
-                and "evidence" not in sent
-            )
-            advertised = isinstance(sent, dict) and not (required - set(sent))
+            try:
+                jsonschema.validate(prepared.args, schema)
+                advertised = True
+            except jsonschema.ValidationError:
+                advertised = False
+            unchanged = prepared.args.get("configuration") == prompted_configuration
             snapshot = prepared.parsed.get("configuration") or {}
             normalized = (
                 snapshot.get("schema_version") == "conical-configuration-v1"
@@ -906,8 +926,8 @@ def _conical_claims_prepared(expected_evidence, expected_config_id):
             )
         return {
             "prepared": prepared is not None,
-            "claim_form_sent": claim_form,
             "advertised_schema_ok": advertised,
+            "configuration_unchanged": unchanged,
             "claims_resolved": resolved,
             "schema_normalized": normalized,
             "reported": expected_config_id.lower() in trace.final.lower(),
@@ -2004,6 +2024,7 @@ def build_cases(clock: Clock) -> List[Case]:
             "Configuration JSON: "
             f"{json.dumps(CONICAL_CLAIMS_CONFIG, separators=(',', ':'))}",
             _conical_claims_prepared(
+                CONICAL_CLAIMS_CONFIG,
                 _load_study_config()["evidence"],
                 CONICAL_CLAIMS_CONFIG["configuration_id"],
             ),

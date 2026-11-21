@@ -1695,40 +1695,65 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
         "schema_version": "conical-configuration-v1",
         "evidence": _compact_evidence(resolved.model_dump(mode="json")["evidence"]),
     }
-    trace = _claims_prepare_trace(
-        clock,
-        copy.deepcopy(CONICAL_CLAIMS_CONFIG),
-        proposal_configuration,
-        f"The {CONICAL_CLAIMS_CONFIG['configuration_id']} proposal is ready "
-        "and awaiting acceptance.",
-    )
 
+    def _trace(sent_configuration, proposal, final):
+        return _claims_prepare_trace(clock, sent_configuration, proposal, final)
+
+    ready = (
+        f"The {CONICAL_CLAIMS_CONFIG['configuration_id']} proposal is ready "
+        "and awaiting acceptance."
+    )
+    trace = _trace(copy.deepcopy(CONICAL_CLAIMS_CONFIG), proposal_configuration, ready)
     checks = case.checks(trace, clock)
     assert all(checks.values()), checks
 
-    # The sent configuration must omit nothing the advertised schema
-    # requires. When the advertised surface required inline evidence
+    # The sent arguments must validate against the advertised tool
+    # schema. When the advertised surface required inline evidence
     # (before b9e1437), the claim form the prompt mandates was invalid
-    # and the case failed; the checkout's own schema decides.
+    # and the case failed even though the runtime accepted it; the
+    # checkout's own schema decides.
+    before_schema = copy.deepcopy(
+        eval_cases._advertised_input_schema("prepare_conical_study")
+    )
+    configuration_schema = before_schema["properties"]["configuration"]["anyOf"][0]
+    configuration_schema["required"] = configuration_schema["required"] + ["evidence"]
     with mock.patch.object(
-        eval_cases, "_advertised_required_properties", return_value={"evidence"}
+        eval_cases, "_advertised_input_schema", return_value=before_schema
     ):
         checks = case.checks(trace, clock)
     assert not checks["advertised_schema_ok"]
     assert not all(checks.values())
 
+    # A sent argument the advertised schema rejects, such as grid_rows
+    # as a string, fails the schema check.
+    changed_args = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    trace = _trace(changed_args, proposal_configuration, ready)
+    trace.calls[0].args["grid_rows"] = "2"
+    checks = case.checks(trace, clock)
+    assert not checks["advertised_schema_ok"]
+    assert not all(checks.values())
+
+    # A model that rounds or changes a geometry value fails the
+    # unchanged-configuration check even though the schema accepts it.
+    changed = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    changed["geometry"]["along_track_field_of_view"]["value"] = 1.4
+    trace = _trace(changed, proposal_configuration, ready)
+    checks = case.checks(trace, clock)
+    assert checks["advertised_schema_ok"]
+    assert not checks["configuration_unchanged"]
+    assert not all(checks.values())
+
     # A model that converted the claims to inline evidence, the form the
     # advertised schema required before the advertised-schema fix, fails
-    # the claim-form check even though the server accepts the result.
-    sent = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
-    sent.pop("source_claims")
-    sent["schema_version"] = "conical-configuration-v1"
-    sent["evidence"] = _load_study_config()["evidence"]
-    trace = _claims_prepare_trace(
-        clock, sent, proposal_configuration, "The proposal is ready."
-    )
+    # the unchanged-configuration check even though the server accepts
+    # the result.
+    inline = copy.deepcopy(CONICAL_CLAIMS_CONFIG)
+    inline.pop("source_claims")
+    inline["schema_version"] = "conical-configuration-v1"
+    inline["evidence"] = _load_study_config()["evidence"]
+    trace = _trace(inline, proposal_configuration, "The proposal is ready.")
     checks = case.checks(trace, clock)
-    assert not checks["claim_form_sent"]
+    assert not checks["configuration_unchanged"]
     assert not all(checks.values())
 
     # A proposal that echoes the claims instead of resolving them through
@@ -1737,8 +1762,7 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
         "schema_version": "conical-configuration-v1",
         "evidence": CONICAL_CLAIMS_CONFIG["source_claims"],
     }
-    trace = _claims_prepare_trace(
-        clock,
+    trace = _trace(
         copy.deepcopy(CONICAL_CLAIMS_CONFIG),
         unresolved,
         "The proposal is ready.",
@@ -1749,8 +1773,7 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
 
     # A prepare that never happened, or a reply that drops the
     # configuration identity, fails too.
-    trace = _claims_prepare_trace(
-        clock,
+    trace = _trace(
         copy.deepcopy(CONICAL_CLAIMS_CONFIG),
         proposal_configuration,
         "The proposal is ready.",
@@ -1760,8 +1783,7 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
     checks = case.checks(trace, clock)
     assert not checks["prepared"]
     assert not all(checks.values())
-    trace = _claims_prepare_trace(
-        clock,
+    trace = _trace(
         copy.deepcopy(CONICAL_CLAIMS_CONFIG),
         proposal_configuration,
         "The study proposal is ready and awaiting acceptance.",
