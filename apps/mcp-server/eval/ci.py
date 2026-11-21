@@ -8,7 +8,8 @@ the recorded HTTP cache and a bounded wall-clock budget, and classifies
 the result rows:
 
 - ``passed``: every selected case ran and passed its checks.
-- ``checker_failure``: a scored case failed its checks. This blocks.
+- ``checker_failure``: a scored case failed its checks or its checker
+  raised. This blocks.
 - ``infra_failure``: the harness or provider could not measure a case.
   The gate retries once within its budget; a second infrastructure
   failure is recorded as ``unmeasured`` and does not block.
@@ -23,7 +24,7 @@ a checker failure, a harness failure, and a selection error. The
 ``select`` subcommand exits 1 when the selection raises. The
 ``classify`` subcommand exits 0 for passed, 2 for an infrastructure
 failure (retryable, so the caller decides), and 1 when a scored case
-failed or the harness produced nothing.
+failed, a checker raised, or the harness produced nothing.
 """
 
 import argparse
@@ -117,6 +118,9 @@ def _failed_checks(rows: List[Dict[str, Any]]) -> List[str]:
     """Names of the failed checkers, written as case:check."""
     failed = set()
     for row in rows:
+        if row.get("status") == "checker_error":
+            failed.add(f"{row.get('case')}:raised")
+            continue
         if row.get("status") != "ok" or row.get("passed"):
             continue
         for check, ok in (row.get("checks") or {}).items():

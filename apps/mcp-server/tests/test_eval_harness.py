@@ -400,6 +400,8 @@ def test_a_raising_checker_is_recorded_as_a_checker_error(tmp_path, monkeypatch)
     ]
     assert len(rows) == 1
     assert rows[0]["status"] == "checker_error"
+    assert rows[0]["error_category"] == "checker_error"
+    assert "RuntimeError" in rows[0]["checker_exception"]
 
 
 def test_run_writes_the_result_file_to_result_out(tmp_path, monkeypatch):

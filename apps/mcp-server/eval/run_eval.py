@@ -839,7 +839,8 @@ def run(args: argparse.Namespace) -> None:
                     # checker failure and blocks.
                     record.update(
                         status="checker_error",
-                        error_category=_error_category(exc),
+                        error_category="checker_error",
+                        checker_exception=f"{type(exc).__name__}: {exc}",
                     )
                 else:
                     summary_id = next(
@@ -867,7 +868,12 @@ def run(args: argparse.Namespace) -> None:
         with lock:
             with out.open("a") as handle:
                 handle.write(json.dumps(record, default=str) + "\n")
-            mark = "infra" if record["status"] != "ok" else ("PASS" if record["passed"] else "fail")
+            if record["status"] == "checker_error":
+                mark = "check"
+            elif record["status"] != "ok":
+                mark = "infra"
+            else:
+                mark = "PASS" if record["passed"] else "fail"
             print(f"{mark:5} {model:32} {case.id:15} r{repeat} {record['seconds']}s", flush=True)
 
     try:
@@ -911,9 +917,13 @@ def summarize(paths: Sequence[Path]) -> None:
             group = by[(label, model, "*")]
             scored = [r for r in group if r["status"] == "ok"]
             errors = sum(r["tool_errors"] for r in scored) / len(scored) if scored else 0
-            infra = len(group) - len(scored)
+            checker_errors = sum(1 for r in group if r["status"] == "checker_error")
+            infra = len(group) - len(scored) - checker_errors
             line = f"{model[:33]:34}" + "".join(f"{_rate(by[(label, model, c)]):>13}" for c in cases)
-            print(line + f"{_rate(group):>7}{errors:>10.1f}" + (f"  ({infra} infra)" if infra else ""))
+            note = f"  ({infra} infra)" if infra else ""
+            if checker_errors:
+                note += f"  ({checker_errors} checker error)"
+            print(line + f"{_rate(group):>7}{errors:>10.1f}" + note)
         print(f"{'ALL':34}" + "".join(f"{_rate(by[(label, '*', c)]):>13}" for c in cases) + f"{_rate(by[(label, '*', '*')]):>7}")
         print(f"result ID reported in reply: {_rate(by[(label, '*', '*')], 'reported_result_id').strip()}")
     if len(labels) > 1:
@@ -933,7 +943,7 @@ def rescore(paths: Sequence[Path]) -> None:
     for path in paths:
         rows = _load([path])
         for row in rows:
-            if row["status"] != "ok" or row["case"] not in cases or "trace" not in row:
+            if row["status"] not in ("ok", "checker_error") or row["case"] not in cases or "trace" not in row:
                 continue
             raw = row["trace"]
             trace = Trace(
@@ -944,7 +954,9 @@ def rescore(paths: Sequence[Path]) -> None:
                 stop=raw["stop"],
             )
             checks = cases[row["case"]].checks(trace, clock)
-            row.update(checks=checks, passed=all(checks.values()))
+            row.pop("checker_exception", None)
+            row.pop("error_category", None)
+            row.update(status="ok", checks=checks, passed=all(checks.values()))
         Path(path).write_text("".join(json.dumps(r, default=str) + "\n" for r in rows))
 
 
