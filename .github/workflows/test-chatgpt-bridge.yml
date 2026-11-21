@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  test-chatgpt-bridge:
     runs-on: ubuntu-26.04
     steps:
       - name: Check out repository
