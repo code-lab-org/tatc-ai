@@ -71,24 +71,16 @@ TOOL_CASES: Dict[str, Union[str, NoCase]] = {
         "prompts supply geometry values directly; no case requires the converter"
     ),
     # Legacy coverage workflow
-    "begin_access_run": NoCase(
-        "legacy cases accept any successful finish path, so no check requires "
-        "the begin step"
-    ),
-    "set_access_region": NoCase(
-        "legacy cases accept any successful finish path, so no check requires "
-        "the region step"
-    ),
-    "finish_access_run": NoCase(
-        "legacy cases accept any finish tool, so no check requires this one"
-    ),
+    "begin_access_run": "fetch_gaps",
+    "set_access_region": "fetch_gaps",
+    "finish_access_run": "fetch_gaps",
     "get_access_events": NoCase(
-        "the conical cases accept an events, daily, or cells fetch, so no check "
-        "requires events"
+        "the complete case accepts events, daily, or cells; the partial case "
+        "accepts events or daily, so no check requires events"
     ),
     "get_access_daily": NoCase(
-        "the conical cases accept an events, daily, or cells fetch, so no check "
-        "requires daily rows"
+        "the complete case accepts events, daily, or cells; the partial case "
+        "accepts events or daily, so no check requires daily rows"
     ),
     "get_access_cells": "fetch_gaps",
     "get_access_revisit": NoCase("no case checks the legacy revisit view"),

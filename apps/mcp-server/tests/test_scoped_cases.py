@@ -71,6 +71,11 @@ def test_default_case_is_the_legacy_coverage_case():
     assert DEFAULT_CASE_ID in _case_ids()
 
 
+def test_legacy_setup_tools_select_the_case_that_requires_their_result():
+    for tool in ("begin_access_run", "set_access_region", "finish_access_run"):
+        assert TOOL_CASES[tool] == "fetch_gaps"
+
+
 def test_identical_snapshots_select_no_cases():
     before = _snapshot()
     selection = select_cases(before, copy.deepcopy(before))
