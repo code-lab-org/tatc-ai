@@ -61,6 +61,7 @@ from .pointed_config import (
     PointedConfiguration,
     configuration_from_snapshot as pointed_configuration_from_snapshot,
 )
+from .source_library import resolve_configuration_data
 from .software import server_build
 from .coverage_core import (
     MAX_GRID_CELLS,
@@ -633,7 +634,11 @@ def _load_configuration(configuration: Any, study_kind: str) -> InstrumentConfig
             "multiple configured instruments are not supported in this increment"
         )
     try:
-        return expected.model_validate(configuration)
+        resolved = resolve_configuration_data(configuration)
+    except ValueError as exc:
+        raise ValueError(f"Configuration rejected: {exc}") from exc
+    try:
+        return expected.model_validate(resolved)
     except ValidationError as exc:
         raise ValueError(f"Configuration rejected: {_configuration_error(exc)}") from exc
 
@@ -1185,7 +1190,11 @@ def _resolve_mixed_configuration(selection: Any) -> Tuple[
             "supported conical or pointed configuration."
         )
     try:
-        return expected.model_validate(raw), None, direction
+        resolved = resolve_configuration_data(raw)
+    except ValueError as exc:
+        raise ValueError(f"Configuration rejected: {exc}") from exc
+    try:
+        return expected.model_validate(resolved), None, direction
     except ValidationError as exc:
         raise ValueError(
             f"Configuration rejected: {_configuration_error(exc)}"
