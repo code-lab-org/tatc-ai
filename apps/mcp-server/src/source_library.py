@@ -12,6 +12,7 @@ the server continues to consume the existing evidence shape.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal
@@ -161,16 +162,23 @@ def load_source_library(root: Path | None = None) -> SourceLibrary:
         return SourceLibrary(documents=documents)
     resolved_root = source_root.resolve()
     for path in sorted(source_root.rglob("*.json")):
-        resolved_path = path.resolve()
+        try:
+            resolved_path = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(
+                f"Cannot resolve source document {path}: {exc}"
+            ) from exc
         if not resolved_path.is_relative_to(resolved_root):
             raise ValueError(
                 f"Source document {path} resolves outside the source library"
             )
         try:
-            document = SourceDocument.model_validate_json(
-                resolved_path.read_text(encoding="utf-8")
-            )
-        except (OSError, ValidationError) as exc:
+            text = resolved_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Cannot read source document {path}: {exc}") from exc
+        try:
+            document = SourceDocument.model_validate_json(text)
+        except ValidationError as exc:
             raise ValueError(f"Invalid source document {path}: {exc}") from exc
         key = (document.document_id, document.revision)
         if key in documents:
@@ -193,8 +201,9 @@ def resolve_claim_form(
     The claim form has its own schema version. A record carries either inline
     evidence or claims, never both. Data without claims is returned unchanged.
     """
-    if not isinstance(data, dict):
+    if not isinstance(data, Mapping):
         return data
+    data = dict(data)
     identifier = data.get("configuration_id") or "<unknown>"
     revision = data.get("revision") or "<unknown>"
     version = data.get("schema_version")
@@ -223,22 +232,25 @@ def resolve_claim_form(
             f"Configuration {identifier!r} revision {revision!r} has no usable "
             "source_claims; supply at least one claim or use inline evidence"
         )
-    try:
-        library = load_source_library()
-    except ValueError as exc:
-        raise ValueError(
-            f"Configuration {identifier!r} revision {revision!r} cannot read "
-            f"the source library: {exc}"
-        ) from exc
-    resolved: List[Dict[str, Any]] = []
+    parsed: List[SourceClaim] = []
     for raw_claim in claims:
         try:
-            claim = SourceClaim.model_validate(raw_claim)
+            parsed.append(SourceClaim.model_validate(raw_claim))
         except ValidationError as exc:
             raise ValueError(
                 f"Configuration {identifier!r} revision {revision!r} has an "
                 f"invalid source claim: {exc}"
             ) from exc
+    references = ", ".join(claim.source for claim in parsed)
+    try:
+        library = load_source_library()
+    except ValueError as exc:
+        raise ValueError(
+            f"Configuration {identifier!r} revision {revision!r} cannot read "
+            f"the source library for {references}: {exc}"
+        ) from exc
+    resolved: List[Dict[str, Any]] = []
+    for claim in parsed:
         try:
             resolved.append(library.resolve(claim))
         except ValueError as exc:

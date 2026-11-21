@@ -4,7 +4,9 @@ import asyncio
 import copy
 import json
 from pathlib import Path
+from types import MappingProxyType
 
+import jsonschema
 import pytest
 from fastmcp import Client
 
@@ -13,7 +15,7 @@ from src.conical_config import (
     CLAIM_SCHEMA_VERSION as CONICAL_CLAIM_VERSION,
     ConicalConfiguration,
 )
-from src.conical_study import _load_configuration
+from src.conical_study import _load_configuration, _resolve_mixed_configuration
 from src.pointed_config import (
     CLAIM_SCHEMA_VERSION as POINTED_CLAIM_VERSION,
     PointedConfiguration,
@@ -247,6 +249,26 @@ def test_malformed_library_file_names_the_record(tmp_path, monkeypatch):
     message = str(error.value)
     assert raw["configuration_id"] in message
     assert "cannot read the source library" in message
+    assert raw["source_claims"][0]["source"] in message
+
+
+def test_mapping_input_is_normalized(tmp_path, monkeypatch):
+    raw, _ = _claims_record(AMSR2, tmp_path, CONICAL_CLAIM_VERSION)
+    monkeypatch.setattr(source_library, "SOURCES_DIR", tmp_path)
+    raw["evidence"] = copy.deepcopy(
+        json.loads(AMSR2.read_text(encoding="utf-8"))["evidence"]
+    )
+
+    with pytest.raises(ValueError, match="both inline evidence and source_claims"):
+        ConicalConfiguration.model_validate(MappingProxyType(raw))
+
+
+def test_symlink_loop_is_reported_as_a_library_error(tmp_path):
+    (tmp_path / "a.json").symlink_to(tmp_path / "b.json")
+    (tmp_path / "b.json").symlink_to(tmp_path / "a.json")
+
+    with pytest.raises(ValueError, match="Cannot resolve source document"):
+        load_source_library(tmp_path)
 
 
 def test_identifiers_reject_reference_separators(tmp_path):
@@ -317,6 +339,61 @@ def test_prepare_pointed_study_accepts_claims_at_the_tool_boundary(
     assert error
     assert "source_claims" not in text
     assert "draft" in text.lower()
+
+
+@pytest.mark.parametrize(
+    "path,model,claim_version",
+    [
+        (AMSR2, ConicalConfiguration, CONICAL_CLAIM_VERSION),
+        (SENTINEL, PointedConfiguration, POINTED_CLAIM_VERSION),
+    ],
+)
+def test_advertised_schema_accepts_both_forms(
+    path, model, claim_version, tmp_path, monkeypatch
+):
+    raw, inline = _claims_record(path, tmp_path, claim_version)
+    monkeypatch.setattr(source_library, "SOURCES_DIR", tmp_path)
+    schema = model.model_json_schema()
+
+    assert "evidence" not in schema.get("required", [])
+    assert "source_claims" in schema["properties"]
+    jsonschema.validate(inline, schema)
+    jsonschema.validate(raw, schema)
+
+
+def test_mixed_dispatch_accepts_the_claim_version(tmp_path, monkeypatch):
+    raw, inline = _claims_record(AMSR2, tmp_path, CONICAL_CLAIM_VERSION)
+    monkeypatch.setattr(source_library, "SOURCES_DIR", tmp_path)
+    expected = ConicalConfiguration.model_validate(inline)
+
+    configuration, selection, direction = _resolve_mixed_configuration(
+        {"configuration": raw}
+    )
+
+    assert configuration.evidence == expected.evidence
+    assert selection is None
+    assert direction is None
+
+
+def test_prepare_mixed_study_accepts_claims_at_the_tool_boundary(
+    tmp_path, monkeypatch
+):
+    raw, _ = _claims_record(AMSR2, tmp_path, CONICAL_CLAIM_VERSION)
+    monkeypatch.setattr(source_library, "SOURCES_DIR", tmp_path)
+
+    error, text, _ = _call(
+        "prepare_mixed_study",
+        {
+            "draft_id": "missing-draft",
+            "grid_rows": 2,
+            "grid_columns": 2,
+            "configurations": [{"configuration": raw}],
+        },
+    )
+
+    assert error
+    assert "Unsupported mixed configuration schema_version" not in text
+    assert "source_claims" not in text
 
 
 def _registry_tree(root, configuration, manifest):

@@ -371,7 +371,7 @@ class ConicalConfiguration(_StrictModel):
         ),
     )
     geometry: ConicalGeometry
-    evidence: List[SourceEvidence] = Field(min_length=1)
+    evidence: List[SourceEvidence] = Field(default_factory=list)
     source_claims: Optional[List[SourceClaim]] = Field(default=None, exclude=True)
     source_revision: SourceRevision
     interpretation: Interpretation
@@ -402,6 +402,10 @@ class ConicalConfiguration(_StrictModel):
 
     @model_validator(mode="after")
     def _check_references(self) -> "ConicalConfiguration":
+        if not self.evidence:
+            raise ValueError(
+                "configuration requires inline evidence or source_claims"
+            )
         evidence_ids = [item.evidence_id for item in self.evidence]
         if len(evidence_ids) != len(set(evidence_ids)):
             raise ValueError("evidence contains duplicate evidence_id values")
