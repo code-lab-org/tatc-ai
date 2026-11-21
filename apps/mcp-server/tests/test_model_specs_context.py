@@ -5,20 +5,14 @@ uses a 32,000-token default and keeps 5% in reserve.  The TATC tool definitions
 alone are close to that, which left no room for the user's message.
 """
 
-import yaml
-from pathlib import Path
+from tests.librechat_config import CONFIG_FILES, load_config
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CONFIG_FILES = (
-    REPO_ROOT / "apps/librechat/librechat.yaml",
-    REPO_ROOT / "apps/librechat/librechat.deploy.yaml.template",
-)
 # The smallest real window among the models offered through ASU.
 MIN_CONTEXT_TOKENS = 100_000
 
 
-def _asu_specs(path: Path) -> dict[str, dict]:
-    config = yaml.safe_load(path.read_text())
+def _asu_specs(path) -> dict[str, dict]:
+    config = load_config(path)
     return {
         spec["name"]: spec["preset"]
         for spec in config["modelSpecs"]["list"]
