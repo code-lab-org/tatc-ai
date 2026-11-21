@@ -1,8 +1,12 @@
-# Mixed-instrument studies
+# Glossary
+
+The project uses two vocabularies: one for mixed-instrument studies and one for verification.
+
+## Mixed-instrument studies
 
 A study estimates geometric access for specified instruments over a region and time window. These terms distinguish the modeled opportunities from actual observations.
 
-## Language
+### Language
 
 **Instrument configuration**:
 A set of modeling settings for one instrument on a specified spacecraft, including its operating mode, viewing geometry, applicable period, assumptions, and source revision. Different modes and revisions remain separately identifiable.
@@ -65,3 +69,31 @@ _Avoid_: Full document copy
 **Claim**:
 A configuration's use of an excerpt, naming the evidence ID, excerpt reference, interpretation, and supported fields.
 _Avoid_: Document
+
+## Verification
+
+### Language
+
+**Model-facing change**:
+A change to a tool name, argument names or types, description, server instructions, or documented result shape. These are the parts a model reads when it chooses and calls a tool.
+_Avoid_: Tool contract, tool surface change
+
+**Test**:
+A deterministic check with no model in the loop.
+_Avoid_: Eval, when no model is called
+
+**Eval**:
+A model-in-the-loop check that sends prompts and tool schemas to a model, then scores the resulting tool calls and replies.
+_Avoid_: Test, when a model is called
+
+**Scoped eval**:
+The one or a few eval cases that exercise the tools a change touches.
+_Avoid_: Smoke test, smoke eval
+
+**Full eval**:
+The complete eval suite.
+_Avoid_: Routine eval, when every case runs
+
+**Gate**:
+A check that blocks a merge or a release.
+_Avoid_: Check, when it does not block
