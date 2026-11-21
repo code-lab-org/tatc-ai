@@ -323,6 +323,24 @@ def request_completion(
     raise ModelCallError(category or "harness_error", f"model call failed: {error!r}")
 
 
+def _scored_fields(trace: Trace, checks: Dict[str, bool]) -> Dict[str, Any]:
+    """Build the result row fields a scored conversation carries."""
+    summary_id = next(
+        (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
+        None,
+    )
+    return {
+        "status": "ok",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "tool_errors": sum(c.error for c in trace.calls),
+        "tool_calls": len(trace.calls),
+        "turns": trace.turns,
+        "stop": trace.stop,
+        "reported_result_id": bool(summary_id and summary_id in trace.final),
+    }
+
+
 def _list_tools(server):
     """List the real server's tools through the in-process FastMCP client."""
 
@@ -843,20 +861,7 @@ def run(args: argparse.Namespace) -> None:
                         checker_exception=f"{type(exc).__name__}: {exc}",
                     )
                 else:
-                    summary_id = next(
-                        (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
-                        None,
-                    )
-                    record.update(
-                        status="ok",
-                        passed=all(checks.values()),
-                        checks=checks,
-                        tool_errors=sum(c.error for c in trace.calls),
-                        tool_calls=len(trace.calls),
-                        turns=trace.turns,
-                        stop=trace.stop,
-                        reported_result_id=bool(summary_id and summary_id in trace.final),
-                    )
+                    record.update(_scored_fields(trace, checks))
             if args.save_traces:
                 record["trace"] = asdict(trace)
         except Exception as exc:  # infra failures are reported, not scored
@@ -953,10 +958,18 @@ def rescore(paths: Sequence[Path]) -> None:
                 turns=raw["turns"],
                 stop=raw["stop"],
             )
-            checks = cases[row["case"]].checks(trace, clock)
+            try:
+                checks = cases[row["case"]].checks(trace, clock)
+            except Exception as exc:
+                row.update(
+                    status="checker_error",
+                    error_category="checker_error",
+                    checker_exception=f"{type(exc).__name__}: {exc}",
+                )
+                continue
             row.pop("checker_exception", None)
             row.pop("error_category", None)
-            row.update(status="ok", checks=checks, passed=all(checks.values()))
+            row.update(_scored_fields(trace, checks))
         Path(path).write_text("".join(json.dumps(r, default=str) + "\n" for r in rows))
 
 

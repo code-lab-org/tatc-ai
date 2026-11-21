@@ -404,6 +404,83 @@ def test_a_raising_checker_is_recorded_as_a_checker_error(tmp_path, monkeypatch)
     assert "RuntimeError" in rows[0]["checker_exception"]
 
 
+def test_rescore_fills_scored_fields_for_a_checker_error_row(tmp_path, monkeypatch):
+    class FakeCase:
+        id = "fake_case"
+
+        def checks(self, _trace, _clock):
+            return {"ok": True}
+
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+    path = tmp_path / "rows.jsonl"
+    row = {
+        "label": "rescore",
+        "model": "fake-model",
+        "case": "fake_case",
+        "status": "checker_error",
+        "error_category": "checker_error",
+        "checker_exception": "RuntimeError: broken",
+        "trace": {
+            "prompt": "prompt",
+            "calls": [
+                {
+                    "name": "get_satellite_info",
+                    "args": {},
+                    "error": False,
+                    "text": "{}",
+                    "parsed": {"result_id": "r"},
+                }
+            ],
+            "final": "r",
+            "turns": 1,
+            "stop": "done",
+        },
+    }
+    path.write_text(json.dumps(row) + "\n")
+
+    run_eval.rescore([path])
+    rescored = json.loads(path.read_text())
+    assert rescored["status"] == "ok"
+    assert rescored["passed"] is True
+    assert rescored["tool_errors"] == 0
+    assert rescored["tool_calls"] == 1
+    assert rescored["turns"] == 1
+    assert rescored["stop"] == "done"
+    assert rescored["reported_result_id"] is True
+    run_eval.summarize([path])
+
+
+def test_rescore_keeps_a_still_raising_checker_as_checker_error(tmp_path, monkeypatch):
+    class FakeCase:
+        id = "fake_case"
+
+        def checks(self, _trace, _clock):
+            raise RuntimeError("still broken")
+
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+    path = tmp_path / "rows.jsonl"
+    row = {
+        "label": "rescore",
+        "model": "fake-model",
+        "case": "fake_case",
+        "status": "checker_error",
+        "trace": {
+            "prompt": "prompt",
+            "calls": [],
+            "final": "",
+            "turns": 0,
+            "stop": "",
+        },
+    }
+    path.write_text(json.dumps(row) + "\n")
+
+    run_eval.rescore([path])
+    rescored = json.loads(path.read_text())
+    assert rescored["status"] == "checker_error"
+    assert rescored["error_category"] == "checker_error"
+    assert "still broken" in rescored["checker_exception"]
+
+
 def test_run_writes_the_result_file_to_result_out(tmp_path, monkeypatch):
     from datetime import datetime, timezone
 
