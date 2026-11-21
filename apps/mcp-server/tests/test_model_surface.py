@@ -28,7 +28,14 @@ def test_model_surface_matches_the_committed_snapshot():
     assert run_eval.snapshot_text(model_surface()) == SNAPSHOT.read_text()
 
 
-def test_harness_sends_the_pinned_surface():
+def test_harness_sends_the_pinned_surface(monkeypatch):
+    import src.generic_coverage as gc
+
+    # Harness pins OMM freshness by replacing this module global. Register
+    # the original with monkeypatch so teardown restores it for later tests.
+    original = gc._validate_omm_freshness
+    monkeypatch.setattr(gc, "_validate_omm_freshness", original)
+
     clock = run_eval.Clock(datetime(2026, 9, 18, 4, 0, tzinfo=timezone.utc))
     harness = run_eval.Harness("https://example.invalid", "test-key", [], clock)
     surface = model_surface()
