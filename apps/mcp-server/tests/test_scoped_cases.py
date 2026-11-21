@@ -63,7 +63,9 @@ def test_mapped_case_ids_exist_in_build_cases():
         if isinstance(entry, NoCase):
             assert entry.reason.strip(), f"{name} states no reason for its gap"
         else:
-            assert entry in case_ids, f"{name} maps to unknown case {entry!r}"
+            mapped = [entry] if isinstance(entry, str) else list(entry)
+            for case_id in mapped:
+                assert case_id in case_ids, f"{name} maps to unknown case {case_id!r}"
 
 
 def test_default_case_is_the_legacy_coverage_case():
@@ -160,7 +162,21 @@ def test_duplicate_cases_are_removed():
     after = _with_description(before, "prepare_conical_study", "Changed description.")
     after = _with_description(after, "finish_conical_study", "Changed description.")
     selection = select_cases(before, after)
-    assert selection.cases == ["conical_amsr2_complete"]
+    assert selection.cases == ["conical_amsr2_claims", "conical_amsr2_complete"]
+    assert selection.gaps == []
+
+
+def test_a_prepare_schema_change_selects_the_claims_case():
+    """The advertised-schema regression's case runs on a prepare change.
+
+    The v2 source-claims form is exercised only by conical_amsr2_claims;
+    a change to prepare_conical_study's advertised schema must select it
+    alongside the complete flow case.
+    """
+    before = _snapshot()
+    after = _with_description(before, "prepare_conical_study", "Changed description.")
+    selection = select_cases(before, after)
+    assert selection.cases == ["conical_amsr2_claims", "conical_amsr2_complete"]
     assert selection.gaps == []
 
 
@@ -181,6 +197,7 @@ def test_the_selection_is_capped_at_three_cases():
     assert set(selection.cases) <= {
         "point_study_explicit",
         "fetch_gaps",
+        "conical_amsr2_claims",
         "conical_amsr2_complete",
         "mixed_amsr2_s1c_complete",
         "pointed_s1c_iw_complete",

@@ -45,6 +45,92 @@ CONICAL_CONFIG["configuration_id"] += "-eval"
 CONICAL_SHARED_ID = "amsr2-gcom-w1-conical-product-sector"
 CONICAL_SHARED_REVISION = "2026-10-27.1"
 
+# The claim-form case cites this committed fixture library instead of the
+# production data/sources library, which stays empty; eval.run_eval points
+# src.source_library.SOURCES_DIR here for the run.
+SOURCE_LIBRARY_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "eval" / "fixtures" / "source_library"
+)
+CLAIM_SCHEMA_VERSION = "conical-configuration-v2"
+
+_IDENTITY = (
+    "authority",
+    "title",
+    "url",
+    "document_revision",
+    "retrieved_at_utc",
+)
+
+
+def _fixture_excerpt_for(evidence_item, documents):
+    """Find the fixture document and excerpt one inline evidence item quotes."""
+    matches = []
+    for document in documents.values():
+        if any(
+            document[field] != evidence_item[field] for field in _IDENTITY
+        ):
+            continue
+        for excerpt in document["excerpts"]:
+            if (
+                excerpt["locator"] == evidence_item["locator"]
+                and excerpt["text"] == evidence_item["excerpt"]
+            ):
+                matches.append(
+                    f"{document['document_id']}@{document['revision']}"
+                    f"#{excerpt['excerpt_id']}"
+                )
+    if len(matches) != 1:
+        raise ValueError(
+            "eval/fixtures/source_library does not hold exactly one excerpt "
+            f"for evidence {evidence_item['evidence_id']!r}; regenerate the "
+            "fixture from the shared configuration"
+        )
+    return matches[0]
+
+
+def _load_claims_study_config():
+    """Derive the claim-form study configuration from the shared record.
+
+    The configuration is the shared study record with its inline evidence
+    rewritten as source_claims (schema_version
+    conical-configuration-v2) that reference the committed fixture
+    library. Resolving the claims yields the same evidence records the
+    inline form carries, so the case exercises the claim form and the
+    library resolution, not different source content.
+    """
+    configuration = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "configurations"
+            / "amsr2-gcom-w1-conical-product-sector-2026-10-27.1.json"
+        ).read_text()
+    )
+    configuration["configuration_id"] = (
+        "amsr2-gcom-w1-conical-product-sector-claims-eval"
+    )
+    configuration["revision"] = "2026-10-27.1-claims-eval"
+    for check in configuration["geometry_checks"]:
+        check.pop("geometry_parameter", None)
+    documents = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(SOURCE_LIBRARY_FIXTURE.glob("*.json"))
+    }
+    configuration["source_claims"] = [
+        {
+            "evidence_id": item["evidence_id"],
+            "source": _fixture_excerpt_for(item, documents),
+            "interpretation": item["interpretation"],
+            "supports": item["supports"],
+        }
+        for item in configuration.pop("evidence")
+    ]
+    configuration["schema_version"] = CLAIM_SCHEMA_VERSION
+    return configuration
+
+
+CONICAL_CLAIMS_CONFIG = _load_claims_study_config()
+
 
 def _load_daylight_study_config():
     configuration = json.loads(
@@ -748,6 +834,84 @@ def _conical_complete(expected_config_id: str):
             and _conical_reporting_is_limited(final)
         )
         return result
+
+    return checks
+
+
+def _advertised_required_properties() -> Set[str]:
+    """Return the configuration properties the advertised schema requires.
+
+    Read from the checkout's own model, the same schema FastMCP embeds in
+    prepare_conical_study's input. A lazy import keeps this module free
+    of server imports at build time.
+    """
+    from src.conical_config import ConicalConfiguration
+
+    return set(ConicalConfiguration.model_json_schema().get("required", []))
+
+
+def _conical_claims_prepared(expected_evidence, expected_config_id):
+    """Check one prepare of the claim-form configuration.
+
+    The model must send the configuration in the claim form exactly as
+    the prompt gives it, the sent configuration must omit nothing the
+    advertised schema requires (the advertised surface once required
+    inline evidence, so a schema-following client could not send the
+    claim form at all), the proposal must carry the evidence the server
+    resolved from the fixture library (the prompt never states the
+    authorities or locators), and the reply must name the configuration.
+    """
+    expected = [
+        (item["evidence_id"], item["authority"], item["locator"], item["title"])
+        for item in expected_evidence
+    ]
+
+    def checks(trace: Trace, clock: Clock) -> Dict[str, bool]:
+        required = _advertised_required_properties()
+        prepares = [
+            call
+            for call in trace.calls
+            if call.name == "prepare_conical_study"
+            and not call.error
+            and isinstance(call.parsed, dict)
+        ]
+        prepared = prepares[-1] if prepares else None
+        claim_form = False
+        advertised = False
+        resolved = False
+        normalized = False
+        if prepared is not None:
+            sent = prepared.args.get("configuration")
+            claim_form = (
+                isinstance(sent, dict)
+                and sent.get("schema_version") == CLAIM_SCHEMA_VERSION
+                and bool(sent.get("source_claims"))
+                and "evidence" not in sent
+            )
+            advertised = isinstance(sent, dict) and not (required - set(sent))
+            snapshot = prepared.parsed.get("configuration") or {}
+            normalized = (
+                snapshot.get("schema_version") == "conical-configuration-v1"
+            )
+            evidence = snapshot.get("evidence") or []
+            resolved = all(
+                any(
+                    record.get("evidence_id") == evidence_id
+                    and record.get("authority") == authority
+                    and record.get("locator") == locator
+                    and record.get("title") == title
+                    for record in evidence
+                )
+                for evidence_id, authority, locator, title in expected
+            )
+        return {
+            "prepared": prepared is not None,
+            "claim_form_sent": claim_form,
+            "advertised_schema_ok": advertised,
+            "claims_resolved": resolved,
+            "schema_normalized": normalized,
+            "reported": expected_config_id.lower() in trace.final.lower(),
+        }
 
     return checks
 
@@ -1821,6 +1985,28 @@ def build_cases(clock: Clock) -> List[Case]:
             "envelopes are not continuous viewing time. "
             f"Configuration JSON: {json.dumps(CONICAL_CONFIG, separators=(',', ':'))}",
             _conical_complete(CONICAL_CONFIG["configuration_id"]),
+        ),
+        Case(
+            "conical_amsr2_claims",
+            ("conical", "claims", "source_library"),
+            f"Run a conical AMSR2 study for GCOM-W1 over the box west=0, south=-65, "
+            f"east=10, north=-55 with a 2x2 grid, from {d0} for 2 hours. "
+            "Use this exact sourced configuration. It cites its sources as "
+            "source_claims with schema_version conical-configuration-v2; the "
+            "server resolves those claims against the shared source library. "
+            "Send the configuration JSON exactly as given: keep source_claims "
+            "as claims, do not convert them to inline evidence, and do not "
+            "add, round, or change its angles, frame, dates, source claims, "
+            "or approximations. I have reviewed this configuration and accept "
+            "it. Prepare the study, then report the configuration ID and the "
+            "returned consequential choices and warnings. Do not accept or "
+            "run the study. "
+            "Configuration JSON: "
+            f"{json.dumps(CONICAL_CLAIMS_CONFIG, separators=(',', ':'))}",
+            _conical_claims_prepared(
+                _load_study_config()["evidence"],
+                CONICAL_CLAIMS_CONFIG["configuration_id"],
+            ),
         ),
         Case(
             "conical_amsr2_registry_selection",

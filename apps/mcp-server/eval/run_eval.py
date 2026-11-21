@@ -60,6 +60,9 @@ ENV_FILE = Path(os.environ.get("EVAL_ENV_FILE", HERE.parents[1] / "librechat" / 
 MCP_ENV_FILE = HERE.parent / ".env"
 RESULTS = HERE / "results"
 SNAPSHOT = HERE / "fixtures" / "model_surface.json"
+# The claim-form eval case cites the committed fixture library; the
+# production data/sources library stays empty and untouched.
+SOURCE_LIBRARY_FIXTURE = HERE / "fixtures" / "source_library"
 SUFFIX = "_mcp_tatc"
 MAX_TURNS = 20
 REQUEST_TIMEOUT = 180
@@ -384,10 +387,14 @@ class Harness:
     ):
         import src.generic_coverage as gc
         import src.server as server
+        import src.source_library as source_library
 
         # Pin "now" for OMM freshness so a replayed cache keeps validating.
         original = gc._validate_omm_freshness
         gc._validate_omm_freshness = lambda records, norad, now=None: original(records, norad, clock.now)
+        # Point the source library at the eval fixture so the claim-form
+        # case resolves its citations; production data/sources stays empty.
+        source_library.SOURCES_DIR = SOURCE_LIBRARY_FIXTURE
         self.server = server
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
