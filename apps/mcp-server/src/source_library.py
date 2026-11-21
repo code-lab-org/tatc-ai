@@ -5,17 +5,16 @@ carries the document metadata once and the excerpts taken from it. A
 configuration cites an excerpt by document ID, revision, and excerpt ID, and
 keeps its own interpretation of what that excerpt supports.
 
-Resolution happens before configuration validation, so the rest of the server
-continues to consume the existing evidence shape.
+Resolution happens inside the configuration's before-validator, so the rest of
+the server continues to consume the existing evidence shape.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -40,12 +39,23 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+def _check_identifier(value: str) -> str:
+    if "@" in value or "#" in value:
+        raise ValueError("identifiers must not contain '@' or '#'")
+    return value
+
+
 class SourceExcerpt(_StrictModel):
     """One short passage copied from a document, with a locator."""
 
     excerpt_id: str = Field(min_length=1)
     locator: str = Field(min_length=1)
     text: str = Field(min_length=1)
+
+    @field_validator("excerpt_id")
+    @classmethod
+    def _check_excerpt_id(cls, value: str) -> str:
+        return _check_identifier(value)
 
 
 class SourceDocument(_StrictModel):
@@ -60,6 +70,11 @@ class SourceDocument(_StrictModel):
     document_revision: str = Field(min_length=1)
     retrieved_at_utc: AwareDatetime
     excerpts: List[SourceExcerpt] = Field(min_length=1)
+
+    @field_validator("document_id", "revision")
+    @classmethod
+    def _check_document_identifier(cls, value: str) -> str:
+        return _check_identifier(value)
 
     @field_validator("url")
     @classmethod
@@ -102,7 +117,7 @@ class SourceClaim(_StrictModel):
 class SourceLibrary:
     """Documents keyed by document ID and revision."""
 
-    documents: Dict[Tuple[str, str], SourceDocument]
+    documents: Dict[tuple[str, str], SourceDocument]
 
     def resolve(self, claim: SourceClaim) -> Dict[str, Any]:
         match = _REFERENCE.match(claim.source)
@@ -138,16 +153,22 @@ class SourceLibrary:
         }
 
 
-def load_source_library(root: Optional[Path] = None) -> SourceLibrary:
+def load_source_library(root: Path | None = None) -> SourceLibrary:
     """Read every document revision under the source library root."""
     source_root = SOURCES_DIR if root is None else Path(root)
-    documents: Dict[Tuple[str, str], SourceDocument] = {}
+    documents: Dict[tuple[str, str], SourceDocument] = {}
     if not source_root.exists():
         return SourceLibrary(documents=documents)
+    resolved_root = source_root.resolve()
     for path in sorted(source_root.rglob("*.json")):
+        resolved_path = path.resolve()
+        if not resolved_path.is_relative_to(resolved_root):
+            raise ValueError(
+                f"Source document {path} resolves outside the source library"
+            )
         try:
             document = SourceDocument.model_validate_json(
-                path.read_text(encoding="utf-8")
+                resolved_path.read_text(encoding="utf-8")
             )
         except (OSError, ValidationError) as exc:
             raise ValueError(f"Invalid source document {path}: {exc}") from exc
@@ -161,37 +182,54 @@ def load_source_library(root: Optional[Path] = None) -> SourceLibrary:
     return SourceLibrary(documents=documents)
 
 
-def resolve_configuration_data(
+def resolve_claim_form(
     data: Any,
     *,
-    root: Optional[Path] = None,
+    schema_version: str,
+    claim_schema_version: str,
 ) -> Any:
     """Replace a configuration's claims with resolved evidence records.
 
-    A record carries either inline evidence or claims, never both. Data
-    without claims is returned unchanged so the configuration model can
-    validate it.
+    The claim form has its own schema version. A record carries either inline
+    evidence or claims, never both. Data without claims is returned unchanged.
     """
     if not isinstance(data, dict):
         return data
-    claims = data.get("source_claims")
-    if claims is None:
-        return data
-    if "evidence" in data:
-        identifier = data.get("configuration_id") or "<unknown>"
-        raise ValueError(
-            f"Configuration {identifier!r} carries both inline evidence and "
-            "source_claims; keep exactly one form"
-        )
-    if not isinstance(claims, list) or not claims:
-        identifier = data.get("configuration_id") or "<unknown>"
-        raise ValueError(
-            f"Configuration {identifier!r} has no usable source_claims; "
-            "supply at least one claim or use inline evidence"
-        )
     identifier = data.get("configuration_id") or "<unknown>"
     revision = data.get("revision") or "<unknown>"
-    library = load_source_library(root)
+    version = data.get("schema_version")
+    claims = data.get("source_claims")
+    if claims is None:
+        if version == claim_schema_version:
+            raise ValueError(
+                f"Configuration {identifier!r} revision {revision!r} uses "
+                f"{claim_schema_version!r} without source_claims; add claims or "
+                f"use {schema_version!r}"
+            )
+        return data
+    if version != claim_schema_version:
+        raise ValueError(
+            f"Configuration {identifier!r} revision {revision!r} has "
+            f"source_claims but schema_version {version!r}; claims require "
+            f"{claim_schema_version!r}"
+        )
+    if "evidence" in data:
+        raise ValueError(
+            f"Configuration {identifier!r} revision {revision!r} carries both "
+            "inline evidence and source_claims; keep exactly one form"
+        )
+    if not isinstance(claims, list) or not claims:
+        raise ValueError(
+            f"Configuration {identifier!r} revision {revision!r} has no usable "
+            "source_claims; supply at least one claim or use inline evidence"
+        )
+    try:
+        library = load_source_library()
+    except ValueError as exc:
+        raise ValueError(
+            f"Configuration {identifier!r} revision {revision!r} cannot read "
+            f"the source library: {exc}"
+        ) from exc
     resolved: List[Dict[str, Any]] = []
     for raw_claim in claims:
         try:
@@ -210,5 +248,6 @@ def resolve_configuration_data(
             ) from exc
     resolved_data = dict(data)
     resolved_data.pop("source_claims")
+    resolved_data["schema_version"] = schema_version
     resolved_data["evidence"] = resolved
     return resolved_data

@@ -21,8 +21,10 @@ from .conical_config import (
     _utc,
     iso_utc,
 )
+from .source_library import SourceClaim, resolve_claim_form
 
 SCHEMA_VERSION = "pointed-configuration-v1"
+CLAIM_SCHEMA_VERSION = "pointed-configuration-v2"
 
 REQUIRED_GEOMETRY_SUPPORT = {
     "identity.instrument",
@@ -379,7 +381,7 @@ class PointedGeometryCheck(_StrictModel):
 class PointedConfiguration(_StrictModel):
     """One complete, sourced pointed-instrument configuration."""
 
-    schema_version: Literal[SCHEMA_VERSION] = SCHEMA_VERSION
+    schema_version: Literal[SCHEMA_VERSION, CLAIM_SCHEMA_VERSION] = SCHEMA_VERSION
     configuration_id: str = Field(min_length=1)
     revision: str = Field(min_length=1)
     instrument: str = Field(min_length=1)
@@ -398,6 +400,7 @@ class PointedConfiguration(_StrictModel):
     )
     geometry: PointedGeometry
     evidence: List[SourceEvidence] = Field(min_length=1)
+    source_claims: Optional[List[SourceClaim]] = Field(default=None, exclude=True)
     source_revision: SourceRevision
     interpretation: Interpretation
     approximation_status: Literal["approximate", "limited"]
@@ -406,6 +409,15 @@ class PointedConfiguration(_StrictModel):
     reference_cases: List[PointedReferenceCase] = Field(min_length=4)
     mission_reference_checks: List[MissionReferenceCheck] = Field(min_length=1)
     geometry_checks: List[PointedGeometryCheck] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_claims(cls, data: Any) -> Any:
+        return resolve_claim_form(
+            data,
+            schema_version=SCHEMA_VERSION,
+            claim_schema_version=CLAIM_SCHEMA_VERSION,
+        )
 
     @model_validator(mode="before")
     @classmethod

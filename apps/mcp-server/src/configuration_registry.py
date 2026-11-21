@@ -24,7 +24,6 @@ from pydantic import (
 
 from .conical_config import ConicalConfiguration, SourceEvidence
 from .pointed_config import PointedConfiguration
-from .source_library import resolve_configuration_data
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 REGISTRY_PATH = DATA_DIR / "instrument_configuration_registry.json"
@@ -218,11 +217,10 @@ def _load_registry_entries(
         if not config_path.is_relative_to(DATA_DIR.resolve()):
             raise ValueError("Registry configuration_path must remain inside the data directory")
         try:
-            resolved_data = resolve_configuration_data(
-                json.loads(config_path.read_text(encoding="utf-8"))
+            configuration = configuration_type.model_validate_json(
+                config_path.read_text(encoding="utf-8")
             )
-            configuration = configuration_type.model_validate(resolved_data)
-        except (OSError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+        except (OSError, ValidationError) as exc:
             raise ValueError(
                 f"Invalid configuration in {entry.configuration_path}: {exc}"
             ) from exc
@@ -611,9 +609,9 @@ def record_instrument_configuration_refresh(
     if isinstance(updated_configuration, dict):
         try:
             updated_configuration = ConicalConfiguration.model_validate(
-                resolve_configuration_data(updated_configuration)
+                updated_configuration
             )
-        except (ValidationError, ValueError) as exc:
+        except ValidationError as exc:
             raise ValueError(f"Updated configuration rejected: {exc}") from exc
     source_evidence = list(source_evidence or [])
     evidence_ids = list(dict.fromkeys([*(evidence_ids or []), *(
