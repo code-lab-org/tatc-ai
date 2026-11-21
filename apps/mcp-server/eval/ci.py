@@ -8,7 +8,8 @@ the recorded HTTP cache and a bounded wall-clock budget, and classifies
 the result rows:
 
 - ``passed``: every selected case ran and passed its checks.
-- ``checker_failure``: a scored case failed its checks. This blocks.
+- ``checker_failure``: a scored case failed its checks or its checker
+  raised. This blocks.
 - ``infra_failure``: the harness or provider could not measure a case.
   The gate retries once within its budget; a second infrastructure
   failure is recorded as ``unmeasured`` and does not block.
@@ -23,7 +24,7 @@ a checker failure, a harness failure, and a selection error. The
 ``select`` subcommand exits 1 when the selection raises. The
 ``classify`` subcommand exits 0 for passed, 2 for an infrastructure
 failure (retryable, so the caller decides), and 1 when a scored case
-failed or the harness produced nothing.
+failed, a checker raised, or the harness produced nothing.
 """
 
 import argparse
@@ -76,14 +77,17 @@ def load_snapshots(before: Path, after: Path) -> Tuple[Dict[str, Any], Dict[str,
 def classify(rows: List[Dict[str, Any]], expected_cases: Sequence[str]) -> str:
     """Classify eval result rows into a gate verdict.
 
-    A scored row that failed its checks is a checker failure and wins
-    over infrastructure noise, because a real regression must block.
-    Rows that never ran, or that stopped with an infrastructure error,
-    are an infrastructure failure. No rows at all means the harness
-    never started, which blocks.
+    A scored row that failed its checks or whose checker raised is a
+    checker failure and wins over infrastructure noise, because a real
+    regression or a broken check must block. Rows that never ran, or
+    that stopped with an infrastructure error, are an infrastructure
+    failure. No rows at all means the harness never started, which
+    blocks.
     """
     if not rows:
         return HARNESS_FAILURE
+    if any(row.get("status") == "checker_error" for row in rows):
+        return CHECKER_FAILURE
     if any(row.get("status") == "ok" and not row.get("passed") for row in rows):
         return CHECKER_FAILURE
     scored = {row.get("case") for row in rows if row.get("status") == "ok"}
@@ -114,6 +118,9 @@ def _failed_checks(rows: List[Dict[str, Any]]) -> List[str]:
     """Names of the failed checkers, written as case:check."""
     failed = set()
     for row in rows:
+        if row.get("status") == "checker_error":
+            failed.add(f"{row.get('case')}:raised")
+            continue
         if row.get("status") != "ok" or row.get("passed"):
             continue
         for check, ok in (row.get("checks") or {}).items():

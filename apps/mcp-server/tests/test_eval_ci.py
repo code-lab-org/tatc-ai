@@ -93,6 +93,18 @@ def test_a_failed_check_is_a_checker_failure_even_beside_infra():
     )
 
 
+def test_a_checker_error_blocks():
+    rows = [
+        _ok_row("fetch_gaps"),
+        {
+            "case": "point_study_explicit",
+            "status": "checker_error",
+            "error_category": "checker_error",
+        },
+    ]
+    assert ci.classify(rows, ["fetch_gaps", "point_study_explicit"]) == ci.CHECKER_FAILURE
+
+
 def test_infra_error_rows_classify_as_infra_failure():
     rows = [_ok_row("fetch_gaps"), _infra_row("point_study_explicit")]
     assert ci.classify(rows, ["fetch_gaps", "point_study_explicit"]) == ci.INFRA_FAILURE
@@ -237,6 +249,37 @@ def test_gate_blocks_on_a_checker_failure_without_retrying(tmp_path, monkeypatch
 
     assert payload["verdict"] == ci.CHECKER_FAILURE
     assert len(calls) == 1
+
+
+def test_gate_blocks_on_a_checker_error_after_a_timeout(tmp_path):
+    before, after = _write_snapshots(
+        tmp_path,
+        _snapshot(),
+        _with_description(_snapshot(), "get_access_cells"),
+    )
+    calls = []
+
+    def run_cases(cases, *, attempt, timeout_seconds):
+        calls.append(attempt)
+        path = tmp_path / f"attempt-{attempt}.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "case": "fetch_gaps",
+                    "status": "checker_error",
+                    "error_category": "checker_error",
+                    "checker_exception": "RuntimeError: broken checker",
+                }
+            )
+            + "\n"
+        )
+        return None, path
+
+    summary = tmp_path / "summary.md"
+    payload = ci.run_gate(before, after, run_cases=run_cases, summary=summary)
+    assert payload["verdict"] == ci.CHECKER_FAILURE
+    assert calls == [1]
+    assert "fetch_gaps:raised" in summary.read_text()
 
 
 def test_gate_retries_an_infrastructure_failure_once_and_passes(tmp_path, monkeypatch):

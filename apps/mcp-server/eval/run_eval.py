@@ -323,6 +323,24 @@ def request_completion(
     raise ModelCallError(category or "harness_error", f"model call failed: {error!r}")
 
 
+def _scored_fields(trace: Trace, checks: Dict[str, bool]) -> Dict[str, Any]:
+    """Build the result row fields a scored conversation carries."""
+    summary_id = next(
+        (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
+        None,
+    )
+    return {
+        "status": "ok",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "tool_errors": sum(c.error for c in trace.calls),
+        "tool_calls": len(trace.calls),
+        "turns": trace.turns,
+        "stop": trace.stop,
+        "reported_result_id": bool(summary_id and summary_id in trace.final),
+    }
+
+
 def _list_tools(server):
     """List the real server's tools through the in-process FastMCP client."""
 
@@ -831,21 +849,19 @@ def run(args: argparse.Namespace) -> None:
                     },
                 )
             else:
-                checks = case.checks(trace, clock)
-                summary_id = next(
-                    (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
-                    None,
-                )
-                record.update(
-                    status="ok",
-                    passed=all(checks.values()),
-                    checks=checks,
-                    tool_errors=sum(c.error for c in trace.calls),
-                    tool_calls=len(trace.calls),
-                    turns=trace.turns,
-                    stop=trace.stop,
-                    reported_result_id=bool(summary_id and summary_id in trace.final),
-                )
+                try:
+                    checks = case.checks(trace, clock)
+                except Exception as exc:
+                    # A checker that raises is a broken check, not an
+                    # unmeasured provider run. The gate treats this as a
+                    # checker failure and blocks.
+                    record.update(
+                        status="checker_error",
+                        error_category="checker_error",
+                        checker_exception=f"{type(exc).__name__}: {exc}",
+                    )
+                else:
+                    record.update(_scored_fields(trace, checks))
             if args.save_traces:
                 record["trace"] = asdict(trace)
         except Exception as exc:  # infra failures are reported, not scored
@@ -857,7 +873,12 @@ def run(args: argparse.Namespace) -> None:
         with lock:
             with out.open("a") as handle:
                 handle.write(json.dumps(record, default=str) + "\n")
-            mark = "infra" if record["status"] != "ok" else ("PASS" if record["passed"] else "fail")
+            if record["status"] == "checker_error":
+                mark = "check"
+            elif record["status"] != "ok":
+                mark = "infra"
+            else:
+                mark = "PASS" if record["passed"] else "fail"
             print(f"{mark:5} {model:32} {case.id:15} r{repeat} {record['seconds']}s", flush=True)
 
     try:
@@ -901,9 +922,13 @@ def summarize(paths: Sequence[Path]) -> None:
             group = by[(label, model, "*")]
             scored = [r for r in group if r["status"] == "ok"]
             errors = sum(r["tool_errors"] for r in scored) / len(scored) if scored else 0
-            infra = len(group) - len(scored)
+            checker_errors = sum(1 for r in group if r["status"] == "checker_error")
+            infra = len(group) - len(scored) - checker_errors
             line = f"{model[:33]:34}" + "".join(f"{_rate(by[(label, model, c)]):>13}" for c in cases)
-            print(line + f"{_rate(group):>7}{errors:>10.1f}" + (f"  ({infra} infra)" if infra else ""))
+            note = f"  ({infra} infra)" if infra else ""
+            if checker_errors:
+                note += f"  ({checker_errors} checker error)"
+            print(line + f"{_rate(group):>7}{errors:>10.1f}" + note)
         print(f"{'ALL':34}" + "".join(f"{_rate(by[(label, '*', c)]):>13}" for c in cases) + f"{_rate(by[(label, '*', '*')]):>7}")
         print(f"result ID reported in reply: {_rate(by[(label, '*', '*')], 'reported_result_id').strip()}")
     if len(labels) > 1:
@@ -923,7 +948,7 @@ def rescore(paths: Sequence[Path]) -> None:
     for path in paths:
         rows = _load([path])
         for row in rows:
-            if row["status"] != "ok" or row["case"] not in cases or "trace" not in row:
+            if row["status"] not in ("ok", "checker_error") or row["case"] not in cases or "trace" not in row:
                 continue
             raw = row["trace"]
             trace = Trace(
@@ -933,8 +958,20 @@ def rescore(paths: Sequence[Path]) -> None:
                 turns=raw["turns"],
                 stop=raw["stop"],
             )
-            checks = cases[row["case"]].checks(trace, clock)
-            row.update(checks=checks, passed=all(checks.values()))
+            try:
+                checks = cases[row["case"]].checks(trace, clock)
+            except Exception as exc:
+                row.pop("passed", None)
+                row.pop("checks", None)
+                row.update(
+                    status="checker_error",
+                    error_category="checker_error",
+                    checker_exception=f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            row.pop("checker_exception", None)
+            row.pop("error_category", None)
+            row.update(_scored_fields(trace, checks))
         Path(path).write_text("".join(json.dumps(r, default=str) + "\n" for r in rows))
 
 
