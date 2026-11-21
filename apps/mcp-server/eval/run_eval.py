@@ -24,8 +24,9 @@ scores unless --save-traces is passed. A small per-request file records
 model, case, turn, attempt, bytes, duration, usage, request ID, and error
 category without prompts or tool text.
 
-Reads VOYAGER_API_KEY and VOYAGER_BASE_URL from apps/librechat/.env.
-Sends prompts and tool schemas to the ASU proxy; no project code or data.
+Reads VOYAGER_API_KEY and VOYAGER_BASE_URL from the environment, falling
+back to apps/librechat/.env. Sends prompts and tool schemas to the ASU
+proxy; no project code or data.
 """
 
 import argparse
@@ -656,8 +657,22 @@ def _provider_credentials(args: argparse.Namespace) -> tuple[str, str]:
                 "--provider opencode-go."
             )
         return (args.base_url or OPENCODE_GO_BASE_URL), key
-    env = load_env(ENV_FILE)
-    return env["VOYAGER_BASE_URL"], env["VOYAGER_API_KEY"]
+    key = _env_value("VOYAGER_API_KEY", (ENV_FILE,))
+    if not key:
+        raise ValueError(
+            f"VOYAGER_API_KEY is not set in the environment or {ENV_FILE}. "
+            "Add it to one of those before running the Voyager eval."
+        )
+    base_url = getattr(args, "base_url", None) or _env_value(
+        "VOYAGER_BASE_URL", (ENV_FILE,)
+    )
+    if not base_url:
+        raise ValueError(
+            f"VOYAGER_BASE_URL is not set in the environment or {ENV_FILE}. "
+            "Add it to one of those, or pass --base-url, before running the "
+            "Voyager eval."
+        )
+    return base_url, key
 
 
 def _selected_models(args: argparse.Namespace) -> List[str]:
@@ -747,8 +762,12 @@ def run(args: argparse.Namespace) -> None:
     ]
 
     RESULTS.mkdir(exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = RESULTS / f"{stamp}-{args.label}.jsonl"
+    if getattr(args, "result_out", None):
+        out = Path(args.result_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        out = RESULTS / f"{stamp}-{args.label}.jsonl"
     request_log = out.with_name(out.stem + "-requests.jsonl")
     lock = threading.Lock()
     print(
@@ -938,6 +957,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="optional reasoning effort sent to the provider",
     )
     parser.add_argument("--cases", nargs="+", help="case IDs to run, default all")
+    parser.add_argument(
+        "--result-out",
+        type=Path,
+        help="write the result JSONL to this path instead of a timestamped name",
+    )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument(
