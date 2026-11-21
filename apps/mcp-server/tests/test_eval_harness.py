@@ -332,6 +332,76 @@ def test_default_result_record_redacts_prompts_and_tool_text(tmp_path, monkeypat
     assert "SECRET" not in json.dumps(row)
 
 
+def test_a_raising_checker_is_recorded_as_a_checker_error(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from eval.cases import Trace
+
+    class FakeHarness:
+        tool_names = []
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def converse(self, _model, _prompt, **_kwargs):
+            trace = Trace(prompt="prompt")
+            trace.turns = 1
+            trace.stop = "done"
+            return trace
+
+    class FakeReplay:
+        def __init__(self, *_args, **_kwargs):
+            self.recorded_at = datetime(2026, 10, 10, tzinfo=timezone.utc)
+
+        def install(self):
+            pass
+
+        def save(self):
+            pass
+
+    class FakeCase:
+        id = "fake_case"
+        tags = ("short",)
+        prompt = "prompt"
+
+        def checks(self, _trace, _clock):
+            raise RuntimeError("broken checker")
+
+    monkeypatch.setattr(run_eval, "Harness", FakeHarness)
+    monkeypatch.setattr(run_eval, "HttpReplay", FakeReplay)
+    monkeypatch.setenv("VOYAGER_BASE_URL", "http://example.invalid")
+    monkeypatch.setenv("VOYAGER_API_KEY", "test-key")
+    monkeypatch.setattr(run_eval, "build_cases", lambda _clock: [FakeCase()])
+    monkeypatch.setattr(run_eval, "probe_streams", lambda _harness, _models: [])
+    monkeypatch.setattr(run_eval, "RESULTS", tmp_path)
+
+    args = SimpleNamespace(
+        label="checker-error",
+        models=["fake-model"],
+        all_models=False,
+        cases=None,
+        repeats=1,
+        workers=1,
+        hide=[],
+        stream_only=False,
+        offline=True,
+        request_timeout=1.0,
+        conversation_timeout=1.0,
+        save_traces=False,
+    )
+    run_eval.run(args)
+
+    rows = [
+        json.loads(line)
+        for path in tmp_path.glob("*.jsonl")
+        if not path.name.endswith("-requests.jsonl")
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["status"] == "checker_error"
+
+
 def test_run_writes_the_result_file_to_result_out(tmp_path, monkeypatch):
     from datetime import datetime, timezone
 

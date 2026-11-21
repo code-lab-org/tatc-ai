@@ -76,14 +76,17 @@ def load_snapshots(before: Path, after: Path) -> Tuple[Dict[str, Any], Dict[str,
 def classify(rows: List[Dict[str, Any]], expected_cases: Sequence[str]) -> str:
     """Classify eval result rows into a gate verdict.
 
-    A scored row that failed its checks is a checker failure and wins
-    over infrastructure noise, because a real regression must block.
-    Rows that never ran, or that stopped with an infrastructure error,
-    are an infrastructure failure. No rows at all means the harness
-    never started, which blocks.
+    A scored row that failed its checks or whose checker raised is a
+    checker failure and wins over infrastructure noise, because a real
+    regression or a broken check must block. Rows that never ran, or
+    that stopped with an infrastructure error, are an infrastructure
+    failure. No rows at all means the harness never started, which
+    blocks.
     """
     if not rows:
         return HARNESS_FAILURE
+    if any(row.get("status") == "checker_error" for row in rows):
+        return CHECKER_FAILURE
     if any(row.get("status") == "ok" and not row.get("passed") for row in rows):
         return CHECKER_FAILURE
     scored = {row.get("case") for row in rows if row.get("status") == "ok"}

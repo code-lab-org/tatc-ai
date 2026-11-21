@@ -831,21 +831,31 @@ def run(args: argparse.Namespace) -> None:
                     },
                 )
             else:
-                checks = case.checks(trace, clock)
-                summary_id = next(
-                    (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
-                    None,
-                )
-                record.update(
-                    status="ok",
-                    passed=all(checks.values()),
-                    checks=checks,
-                    tool_errors=sum(c.error for c in trace.calls),
-                    tool_calls=len(trace.calls),
-                    turns=trace.turns,
-                    stop=trace.stop,
-                    reported_result_id=bool(summary_id and summary_id in trace.final),
-                )
+                try:
+                    checks = case.checks(trace, clock)
+                except Exception as exc:
+                    # A checker that raises is a broken check, not an
+                    # unmeasured provider run. The gate treats this as a
+                    # checker failure and blocks.
+                    record.update(
+                        status="checker_error",
+                        error_category=_error_category(exc),
+                    )
+                else:
+                    summary_id = next(
+                        (c.parsed["result_id"] for c in reversed(trace.calls) if c.parsed and c.parsed.get("result_id")),
+                        None,
+                    )
+                    record.update(
+                        status="ok",
+                        passed=all(checks.values()),
+                        checks=checks,
+                        tool_errors=sum(c.error for c in trace.calls),
+                        tool_calls=len(trace.calls),
+                        turns=trace.turns,
+                        stop=trace.stop,
+                        reported_result_id=bool(summary_id and summary_id in trace.final),
+                    )
             if args.save_traces:
                 record["trace"] = asdict(trace)
         except Exception as exc:  # infra failures are reported, not scored

@@ -93,6 +93,18 @@ def test_a_failed_check_is_a_checker_failure_even_beside_infra():
     )
 
 
+def test_a_checker_error_blocks():
+    rows = [
+        _ok_row("fetch_gaps"),
+        {
+            "case": "point_study_explicit",
+            "status": "checker_error",
+            "error_category": "checker_error",
+        },
+    ]
+    assert ci.classify(rows, ["fetch_gaps", "point_study_explicit"]) == ci.CHECKER_FAILURE
+
+
 def test_infra_error_rows_classify_as_infra_failure():
     rows = [_ok_row("fetch_gaps"), _infra_row("point_study_explicit")]
     assert ci.classify(rows, ["fetch_gaps", "point_study_explicit"]) == ci.INFRA_FAILURE
