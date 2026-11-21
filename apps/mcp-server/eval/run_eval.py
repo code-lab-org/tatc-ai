@@ -961,6 +961,8 @@ def rescore(paths: Sequence[Path]) -> None:
             try:
                 checks = cases[row["case"]].checks(trace, clock)
             except Exception as exc:
+                row.pop("passed", None)
+                row.pop("checks", None)
                 row.update(
                     status="checker_error",
                     error_category="checker_error",

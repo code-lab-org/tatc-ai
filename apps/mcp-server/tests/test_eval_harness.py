@@ -463,7 +463,9 @@ def test_rescore_keeps_a_still_raising_checker_as_checker_error(tmp_path, monkey
         "label": "rescore",
         "model": "fake-model",
         "case": "fake_case",
-        "status": "checker_error",
+        "status": "ok",
+        "passed": True,
+        "checks": {"old": True},
         "trace": {
             "prompt": "prompt",
             "calls": [],
@@ -479,6 +481,8 @@ def test_rescore_keeps_a_still_raising_checker_as_checker_error(tmp_path, monkey
     assert rescored["status"] == "checker_error"
     assert rescored["error_category"] == "checker_error"
     assert "still broken" in rescored["checker_exception"]
+    assert "passed" not in rescored
+    assert "checks" not in rescored
 
 
 def test_run_writes_the_result_file_to_result_out(tmp_path, monkeypatch):
