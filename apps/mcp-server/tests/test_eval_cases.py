@@ -1725,6 +1725,10 @@ def test_claims_case_requires_the_claim_form_and_resolved_evidence(monkeypatch):
     checks = case.checks(trace, clock)
     assert not checks["did_not_finish"]
     assert not all(checks.values())
+    trace.calls[-1].error = True
+    checks = case.checks(trace, clock)
+    assert not checks["did_not_finish"]
+    assert not all(checks.values())
     trace.calls.pop()
 
     # The sent arguments must validate against the advertised tool

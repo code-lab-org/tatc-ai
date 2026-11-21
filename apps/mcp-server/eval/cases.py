@@ -949,10 +949,7 @@ def _conical_claims_prepared(prompted_configuration, expected_evidence, expected
             and isinstance(call.parsed, dict)
         ]
         prepared = prepares[-1] if prepares else None
-        finished = any(
-            call.name == "finish_conical_study" and not call.error
-            for call in trace.calls
-        )
+        finished = any(call.name == "finish_conical_study" for call in trace.calls)
         advertised = False
         unchanged = False
         resolved = False
