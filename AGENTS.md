@@ -21,7 +21,7 @@ This server is a model-facing interface to TAT-C, not a reimplementation of it.
 - Do not add fallback formulas for when TAT-C is missing. It is a hard dependency.
 - Our code may stage inputs, validate them, store results, and reshape TAT-C output into what the tools return. When it must compute something TAT-C lacks, such as per-UTC-day area rows, say so in a docstring.
 - Keep tools general: no satellite, instrument, or region defaults in tool code. Viewing geometry comes from the researcher or the OSCAR resolver with a source.
-- When changing tool names, arguments, descriptions, or server instructions, run `python -m eval.run_eval` from `apps/mcp-server` and compare it with the last run using `--compare`. It needs the ASU key in `apps/librechat/.env`, sends prompts and tool schemas to the ASU proxy, and takes about half an hour. Unit tests do not show whether models can still use the tools.
+- Changing a tool name, argument, description, or the server instructions is a model-facing change. Regenerate the snapshot with `python -m eval.run_eval --write-snapshot` from `apps/mcp-server` and commit the updated `eval/fixtures/model_surface.json` in the same pull request. CI maps the changed tools to eval cases and runs the scoped eval. Unit tests do not show whether models can still use the tools.
 
 ## Development and checks
 
@@ -29,6 +29,8 @@ This server is a model-facing interface to TAT-C, not a reimplementation of it.
 - With `apps/mcp-server/requirements.txt` and `pytest` installed, run `python -m pytest apps/mcp-server/tests` from the repository root.
 - Pull requests that change `apps/mcp-server/**` or `.github/workflows/test-mcp-server.yml` preload world-map coastline data, then run tests with fixed reference cases.
 - Docs-only pull requests skip Python setup and tests while the workflow stays successful.
+- Every pull request runs two gates: the `test` job and the `scoped-eval` job. A checker failure blocks the merge. An infrastructure failure retries once, then the run is recorded as unmeasured and does not block. A touched tool with no covering eval case is reported as a coverage gap instead of running the full suite.
+- The `scoped-eval` job runs only when the model-facing snapshot changed. A fork pull request skips it because forks receive no repository secrets, and a maintainer runs the scoped eval before merge. The full eval is a manual command (see `docs/evaluation.md`) until releases exist, when it becomes the release gate.
 - Report checks that you could not run and the reason.
 - Preserve UTC timestamps, latitude and longitude in degrees, altitude in meters, and GeoJSON coordinates in `[longitude, latitude]` order.
 - Keep credentials in private local environment files. Never commit API keys, OIDC secrets, or generated credentials.

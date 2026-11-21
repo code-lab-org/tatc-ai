@@ -52,7 +52,9 @@ The **Study** button in LibreChat opens a research pane filled by the `visualize
 tool: coverage results, charts, timelines, tables with CSV export, and 2D/3D
 Cesium maps with editable inputs. See the [coverage explorer guide](docs/coverage-explorer.md).
 
-### Tool-calling eval
+### Verification
+
+Every pull request runs two required checks: the `test` job (pytest plus the model-surface snapshot test) and the `scoped-eval` job. The scoped eval runs only when the pull request changes the model-facing snapshot; CI then maps the changed tools to eval cases and runs at most three of them. A checker failure blocks the merge, an infrastructure failure retries once and then records the run as unmeasured, and a fork pull request skips the scoped eval because it receives no secrets (a maintainer runs it before merge). The full 25-case eval is a manual command, not a pull request check; it becomes the release gate when releases exist.
 
 The eval checks how well Voyager models use the MCP tools. The server image
 uses Python 3.12; run tests and evals with a matching environment.
@@ -62,7 +64,7 @@ cd apps/mcp-server
 timeout -k 10 900 .venv312/bin/python -m eval.run_eval --label mychange
 ```
 
-The routine suite uses `deepseek-v4-1-flash` only, with one repeat and small local request records. See the [evaluation guide](docs/evaluation.md) for model selection, timeouts, comparison runs, full traces, and streaming checks.
+The routine suite uses `deepseek-v4-1-flash` only, with one repeat and small local request records. The eval reads `VOYAGER_API_KEY` from the process environment first, then from `apps/librechat/.env`. To reproduce a scoped-eval failure locally, see the [evaluation guide](docs/evaluation.md). The guide also covers model selection, timeouts, comparison runs, full traces, and streaming checks.
 
 ## Development stack
 

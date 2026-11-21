@@ -2,6 +2,16 @@
 
 The eval package checks how well ASU Voyager models use the MCP tools. It gives each model the server's tools and instructions, runs tool calls against the server with recorded CelesTrak and OSCAR responses, and scores the server's results.
 
+## Verification tiers
+
+There are three tiers:
+
+- **Test** (every pull request, required): `python -m pytest apps/mcp-server/tests`, plus the snapshot test that compares the model-facing surface with `eval/fixtures/model_surface.json`. Deterministic, no model in the loop.
+- **Scoped eval** (pull requests that change the snapshot, required): the CI gate maps each changed tool to its eval case through `eval/scoped_cases.py` and runs at most three cases with the recorded HTTP cache. A tool with no covering case is reported as a coverage gap; the full suite never runs in CI.
+- **Full eval** (manual): all 25 cases. It runs on demand with the commands below and never on pull requests. When the project starts cutting releases, the full eval becomes the release gate.
+
+The `test` and `scoped-eval` jobs are the required checks on `main`. A checker failure blocks the merge. An infrastructure failure (provider or harness trouble, not a wrong tool call) retries once inside the job budget; a second failure records the run as unmeasured and does not block. A fork pull request skips the scoped eval because it receives no repository secrets, and a maintainer runs the scoped eval before merge.
+
 ## Run the eval
 
 Run these commands from the repository root. The routine model is `deepseek-v4-1-flash` only. It is checked against the LibreChat ASU Voyager catalog before any request; a missing catalog entry fails loudly instead of falling back to another model. Pass `--models` with explicit model IDs to send them as given, or `--all-models` to run the catalog set. Only the routine default is catalog-validated.
@@ -18,7 +28,7 @@ OPENCODE_GO_API_KEY=... timeout -k 10 900 .venv312/bin/python -m eval.run_eval -
 
 Repeats default to 1 for a whole suite. Use repeat 3 for the cases affected by a change when the budget allows. Occasional second-model checks and an occasional `--all-models` run are manual, not routine. Every batch command keeps the `timeout -k` wrapper as its hard external deadline; keep a local job log with the owner, PID, start time, deadline, and checkpoint file.
 
-The eval reads the proxy key and base URL from the process environment first (`VOYAGER_API_KEY`, `VOYAGER_BASE_URL`), then from `apps/librechat/.env`, and sends prompts and tool schemas to the ASU proxy. One request is limited to 180 seconds and one complete conversation to 600 seconds. Override these with `--request-timeout` and `--conversation-timeout`. The harness retries at most once for a connection failure, 429, 502, or 503. It does not retry a read timeout, context overflow, or another client error. It bounds trickle reads and the wait for a tool call; a tool already running in the server may finish after the caller stops waiting. The external `timeout -k` covers the whole batch. A provider failure is recorded as unmeasured infrastructure failure, not a score; do not tune prompts or checkers to force a pass.
+The eval reads the proxy key and base URL from the process environment first (`VOYAGER_API_KEY`, `VOYAGER_BASE_URL`), then from `apps/librechat/.env`, and sends prompts and tool schemas to the ASU proxy. `VOYAGER_API_KEY` is the same repository secret the scoped-eval workflow uses, so a local run reproduces CI exactly when the environment variable is set. One request is limited to 180 seconds and one complete conversation to 600 seconds. Override these with `--request-timeout` and `--conversation-timeout`. The harness retries at most once for a connection failure, 429, 502, or 503. It does not retry a read timeout, context overflow, or another client error. It bounds trickle reads and the wait for a tool call; a tool already running in the server may finish after the caller stops waiting. The external `timeout -k` covers the whole batch. A provider failure is recorded as unmeasured infrastructure failure, not a score; do not tune prompts or checkers to force a pass.
 
 The run writes a timestamped JSONL file under `eval/results/` and prints its summary. The default file keeps scores, counts, and small partial failure progress, not prompts, replies, or full tool text. A companion `-requests.jsonl` file records model, case, turn, attempt, request and response bytes, duration, token usage, request ID, and error category. Pass `--save-traces` only when full traces are needed for diagnosis. `--rescore` needs saved traces, so use `--save-traces` on runs you expect to rescore. Results and request records are ignored local artifacts. Replace the two comparison paths with existing result files; `--compare` summarizes saved runs and does not start a new model evaluation.
 
