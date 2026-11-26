@@ -6,6 +6,7 @@ Read `README.md` before changing the stack or its deployment setup.
 
 - `apps/mcp-server/src/` contains MCP tools, input validation, TAT-C integration, data formatting, and map rendering.
 - `apps/mcp-server/tests/` covers server behavior and offline unit checks.
+- `apps/mcp-server/eval/run_eval.py` runs evals, `cases.py` builds cases and checks, `scoped_cases.py` maps tools to cases, `ci.py` gates scoped CI runs, and `fixtures/` stores the model-facing snapshot and source library.
 - `apps/librechat/librechat.yaml` configures the development LibreChat upstream image.
 - `apps/librechat/librechat.deploy.yaml.template` supplies deployment settings rendered into that upstream image at startup.
 - Keep shared LibreChat model and tool settings consistent across both files. Preserve the URLs and authentication settings for each environment. The ChatGPT Plan endpoint and spec are development only, because OpenAI offers plan usage to locally hosted apps.
@@ -38,7 +39,7 @@ This server is a model-facing interface to TAT-C, not a reimplementation of it.
 
 ## Merging
 
-- Before merging a pull request, run `gh pr checks <number>`.
+- Merge with `scripts/merge-pr.sh <number>`. The script runs `gh pr checks <number>` and calls `gh pr merge` only when no check is failing or pending. A skipped check is allowed. Additional arguments go to `gh pr merge`.
 - Do not merge if `test` or `scoped-eval` failed. A skipped check is fine for a pull request that does not touch that area.
 - If a required check is red, fix it or report it instead of merging.
 

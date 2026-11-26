@@ -15,6 +15,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
       - name: Check whether MCP tests are needed
         id: scope
         env:
@@ -39,6 +45,12 @@ jobs:
       - name: Install server requirements and pytest
         if: steps.scope.outputs.run_tests == 'true'
         run: python -m pip install -r apps/mcp-server/requirements.txt pytest
+
+      - name: Lint Python
+        if: steps.scope.outputs.run_tests == 'true'
+        run: |
+          python -m pip install ruff
+          ruff check --select E9,F63,F7,F82 apps/mcp-server
 
       - name: Preload Cartopy coastline
         if: steps.scope.outputs.run_tests == 'true'
