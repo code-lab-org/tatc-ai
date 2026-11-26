@@ -9,21 +9,32 @@ fi
 pr_number=$1
 shift
 
-# Split --repo/-R out of the gh pr merge arguments so that checks and view
-# look at the same repository that merge targets.
-repo_args=()
+# Resolve --repo/-R once, then pass a normalized --repo to every gh pr
+# command. gh repo view takes a positional repository, not a flag.
+repo_name=""
 extra_args=()
 while [ "$#" -gt 0 ]; do
     case $1 in
         --repo=*)
-            repo_args+=("$1")
+            repo_name=${1#--repo=}
+            if [ -z "$repo_name" ]; then
+                echo "$0: --repo needs a repository argument" >&2
+                exit 2
+            fi
+            ;;
+        -R=*)
+            repo_name=${1#-R=}
+            if [ -z "$repo_name" ]; then
+                echo "$0: -R needs a repository argument" >&2
+                exit 2
+            fi
             ;;
         --repo | -R)
             if [ "$#" -lt 2 ]; then
                 echo "$0: $1 needs a repository argument" >&2
                 exit 2
             fi
-            repo_args+=("$1" "$2")
+            repo_name=$2
             shift
             ;;
         --match-head-commit | --match-head-commit=*)
@@ -37,25 +48,37 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
-head_before=$(gh pr view "$pr_number" ${repo_args[@]+"${repo_args[@]}"} --json headRefOid --jq .headRefOid)
+repo_flag=()
+if [ -n "$repo_name" ]; then
+    repo_flag=(--repo "$repo_name")
+fi
 
-if ! gh pr checks "$pr_number" ${repo_args[@]+"${repo_args[@]}"}; then
+head_before=$(gh pr view "$pr_number" ${repo_flag[@]+"${repo_flag[@]}"} --json headRefOid --jq .headRefOid)
+
+if ! gh pr checks "$pr_number" ${repo_flag[@]+"${repo_flag[@]}"}; then
     echo "Refusing to merge pull request #$pr_number because its checks are failing or pending." >&2
     exit 1
 fi
 
-head_after=$(gh pr view "$pr_number" ${repo_args[@]+"${repo_args[@]}"} --json headRefOid --jq .headRefOid)
+head_after=$(gh pr view "$pr_number" ${repo_flag[@]+"${repo_flag[@]}"} --json headRefOid --jq .headRefOid)
 if [ "$head_before" != "$head_after" ]; then
     echo "Refusing to merge pull request #$pr_number because its head moved during the check." >&2
     exit 1
 fi
 
-repo=$(gh repo view ${repo_args[@]+"${repo_args[@]}"} --json nameWithOwner --jq .nameWithOwner)
+if [ -n "$repo_name" ]; then
+    repo=$repo_name
+else
+    repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+fi
+
 bad=$(gh api --paginate "repos/$repo/commits/$head_before/check-runs" \
     --jq '.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")) | .name')
-if [ -n "$bad" ]; then
-    echo "Refusing to merge pull request #$pr_number because checks for $head_before are not all green: $bad" >&2
+bad_status=$(gh api --paginate "repos/$repo/commits/$head_before/statuses" \
+    --jq '.[] | select(.state != "success") | .context')
+if [ -n "$bad" ] || [ -n "$bad_status" ]; then
+    echo "Refusing to merge pull request #$pr_number because checks for $head_before are not all green: $bad $bad_status" >&2
     exit 1
 fi
 
-gh pr merge "$pr_number" --match-head-commit "$head_before" --merge ${extra_args[@]+"${extra_args[@]}"} ${repo_args[@]+"${repo_args[@]}"}
+gh pr merge "$pr_number" --match-head-commit "$head_before" --merge ${extra_args[@]+"${extra_args[@]}"} ${repo_flag[@]+"${repo_flag[@]}"}

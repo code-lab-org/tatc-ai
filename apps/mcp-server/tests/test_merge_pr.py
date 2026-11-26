@@ -10,7 +10,12 @@ HEAD_SHA = "abc123def4567890abc123def4567890abc123de"
 
 
 def install_fake_gh(
-    tmp_path, checks_exit, head_before=HEAD_SHA, head_after=HEAD_SHA, bad_checks=""
+    tmp_path,
+    checks_exit,
+    head_before=HEAD_SHA,
+    head_after=HEAD_SHA,
+    bad_checks="",
+    bad_statuses="",
 ):
     """Stub gh: checks reports checks_exit, view reports the two head SHAs."""
     fake_bin = tmp_path / "bin"
@@ -37,7 +42,10 @@ def install_fake_gh(
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = api ]; then\n'
-        '  printf "%s" "$GH_BAD_CHECKS"\n'
+        '  case "$3" in\n'
+        '    */check-runs) printf "%s" "$GH_BAD_CHECKS" ;;\n'
+        '    */statuses) printf "%s" "$GH_BAD_STATUSES" ;;\n'
+        "  esac\n"
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = pr ] && [ "$2" = merge ]; then\n'
@@ -56,6 +64,7 @@ def install_fake_gh(
     env["GH_VIEW_COUNT"] = str(tmp_path / "view-count")
     env["GH_REPO"] = "org/repo"
     env["GH_BAD_CHECKS"] = bad_checks
+    env["GH_BAD_STATUSES"] = bad_statuses
     return env, log
 
 
@@ -94,7 +103,10 @@ def test_merge_pr_requires_clean_checks(tmp_path, checks_exit):
         assert commands[4].startswith(
             f"api --paginate repos/org/repo/commits/{HEAD_SHA}/check-runs"
         )
-        assert commands[5] == (
+        assert commands[5].startswith(
+            f"api --paginate repos/org/repo/commits/{HEAD_SHA}/statuses"
+        )
+        assert commands[6] == (
             f"pr merge 19 --match-head-commit {HEAD_SHA} --merge --delete-branch"
         )
 
@@ -113,12 +125,14 @@ def test_merge_pr_passes_repo_to_checks_and_view(tmp_path, repo_flag):
 
     assert completed.returncode == 0, completed.stderr
     commands = log.read_text(encoding="utf-8").splitlines()
-    flag = " ".join(repo_flag)
+    flag = "--repo org/repo"
     view = f"pr view 19 {flag} --json headRefOid --jq .headRefOid"
     assert commands[:3] == [view, f"pr checks 19 {flag}", view]
-    assert commands[3] == f"repo view {flag} --json nameWithOwner --jq .nameWithOwner"
-    assert commands[4].startswith(
+    assert commands[3].startswith(
         f"api --paginate repos/org/repo/commits/{HEAD_SHA}/check-runs"
+    )
+    assert commands[4].startswith(
+        f"api --paginate repos/org/repo/commits/{HEAD_SHA}/statuses"
     )
     assert commands[5] == f"pr merge 19 --match-head-commit {HEAD_SHA} --merge {flag}"
 
@@ -141,6 +155,16 @@ def test_merge_pr_refuses_when_the_head_moves(tmp_path):
 
 def test_merge_pr_refuses_when_the_pinned_sha_has_bad_checks(tmp_path):
     env, log = install_fake_gh(tmp_path, 0, bad_checks="test")
+
+    completed = run_script(env, "19")
+
+    assert completed.returncode != 0
+    assert "not all green" in completed.stderr
+    assert not any("pr merge" in line for line in log.read_text().splitlines())
+
+
+def test_merge_pr_refuses_when_the_pinned_sha_has_bad_statuses(tmp_path):
+    env, log = install_fake_gh(tmp_path, 0, bad_statuses="ci/test")
 
     completed = run_script(env, "19")
 
