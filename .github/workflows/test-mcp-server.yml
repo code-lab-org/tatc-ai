@@ -27,15 +27,21 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'apps/mcp-server' 'apps/librechat/librechat.yaml' 'apps/librechat/librechat.deploy.yaml.template' '.github/workflows/test-mcp-server.yml')"
-          if [ -n "$changed" ]; then
+          server_changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'apps/mcp-server' 'apps/librechat/librechat.yaml' 'apps/librechat/librechat.deploy.yaml.template' '.github/workflows/test-mcp-server.yml')"
+          guardrail_changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- 'docs/evaluation.md' 'README.md' '.github/workflows' 'apps/mcp-server/eval' 'scripts/merge-pr.sh' 'apps/mcp-server/tests/test_docs_consistency.py' 'apps/mcp-server/tests/test_workflows.py' 'apps/mcp-server/tests/test_merge_pr.py')"
+          if [ -n "$server_changed" ]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
           else
             echo "run_tests=false" >> "$GITHUB_OUTPUT"
           fi
+          if [ -n "$guardrail_changed" ]; then
+            echo "run_guardrails=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_guardrails=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python 3.12
-        if: steps.scope.outputs.run_tests == 'true'
+        if: steps.scope.outputs.run_tests == 'true' || steps.scope.outputs.run_guardrails == 'true'
         uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
@@ -45,6 +51,10 @@ jobs:
       - name: Install server requirements and pytest
         if: steps.scope.outputs.run_tests == 'true'
         run: python -m pip install -r apps/mcp-server/requirements.txt pytest
+
+      - name: Install guardrail test dependencies
+        if: steps.scope.outputs.run_guardrails == 'true' && steps.scope.outputs.run_tests != 'true'
+        run: python -m pip install pytest pyyaml jsonschema
 
       - name: Lint Python
         if: steps.scope.outputs.run_tests == 'true'
@@ -59,3 +69,7 @@ jobs:
       - name: Run MCP server tests
         if: steps.scope.outputs.run_tests == 'true'
         run: python -m pytest apps/mcp-server/tests
+
+      - name: Run guardrail tests
+        if: steps.scope.outputs.run_guardrails == 'true'
+        run: python -m pytest apps/mcp-server/tests/test_docs_consistency.py apps/mcp-server/tests/test_workflows.py apps/mcp-server/tests/test_merge_pr.py

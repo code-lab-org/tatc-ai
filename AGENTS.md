@@ -29,7 +29,7 @@ This server is a model-facing interface to TAT-C, not a reimplementation of it.
 - Match the Python minor version in `apps/mcp-server/Dockerfile` for local server work and checks.
 - With `apps/mcp-server/requirements.txt` and `pytest` installed, run `python -m pytest apps/mcp-server/tests` from the repository root.
 - Pull requests that change `apps/mcp-server/**` or `.github/workflows/test-mcp-server.yml` preload world-map coastline data, then run tests with fixed reference cases.
-- Docs-only pull requests skip Python setup and tests while the workflow stays successful.
+- Docs-only and workflow-only pull requests run the guardrail tests (docs consistency, workflow ownership, merge script) with pytest, pyyaml, and jsonschema, and skip the full server suite while the workflow stays successful.
 - Every pull request reports two checks: the `test` job and the `scoped-eval` job. A checker failure, a checker that raises, or a run that exits without result rows is a failed check; a timeout before any row is written is retried. A provider or harness error retries once while the job budget allows, then is recorded as unmeasured and does not block. A gaps-only change passes green with the gaps in the step summary; the reviewer decides whether to add a case. Agents must verify both checks before merging; see [Merging](#merging).
 - The `scoped-eval` job runs the eval only when the model-facing snapshot changed. A fork pull request skips the eval and gets a green check, so a maintainer runs the scoped eval before merge. The full eval is a manual command (see `docs/evaluation.md`) until releases exist, when it becomes the release gate.
 - Report checks that you could not run and the reason.
@@ -39,7 +39,7 @@ This server is a model-facing interface to TAT-C, not a reimplementation of it.
 
 ## Merging
 
-- Merge with `scripts/merge-pr.sh <number>`. The script runs `gh pr checks <number>` and calls `gh pr merge` only when no check is failing or pending. A skipped check is allowed. Additional arguments go to `gh pr merge`.
+- Merge with `scripts/merge-pr.sh <number>`. The script runs `gh pr checks <number>`, pins the merge to the checked head commit with `--match-head-commit`, and calls `gh pr merge` only when no check is failing or pending. Pass `--repo <owner/repo>` (or `-R`, also `--repo=...`) to target a repository other than the checkout default; the script forwards it to checks, view, and merge. A skipped check is allowed. Additional arguments go to `gh pr merge`.
 - Do not merge if `test` or `scoped-eval` failed. A skipped check is fine for a pull request that does not touch that area.
 - If a required check is red, fix it or report it instead of merging.
 
