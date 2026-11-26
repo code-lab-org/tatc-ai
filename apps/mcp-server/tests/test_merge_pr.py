@@ -42,9 +42,10 @@ def install_fake_gh(
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = api ]; then\n'
-        '  case "$3" in\n'
+        '  if [ "$2" = "--paginate" ]; then path=$3; else path=$2; fi\n'
+        '  case "$path" in\n'
         '    */check-runs) printf "%s" "$GH_BAD_CHECKS" ;;\n'
-        '    */statuses) printf "%s" "$GH_BAD_STATUSES" ;;\n'
+        '    */status) printf "%s" "$GH_BAD_STATUSES" ;;\n'
         "  esac\n"
         "  exit 0\n"
         "fi\n"
@@ -104,7 +105,7 @@ def test_merge_pr_requires_clean_checks(tmp_path, checks_exit):
             f"api --paginate repos/org/repo/commits/{HEAD_SHA}/check-runs"
         )
         assert commands[5].startswith(
-            f"api --paginate repos/org/repo/commits/{HEAD_SHA}/statuses"
+            f"api repos/org/repo/commits/{HEAD_SHA}/status"
         )
         assert commands[6] == (
             f"pr merge 19 --match-head-commit {HEAD_SHA} --merge --delete-branch"
@@ -132,7 +133,7 @@ def test_merge_pr_passes_repo_to_checks_and_view(tmp_path, repo_flag):
         f"api --paginate repos/org/repo/commits/{HEAD_SHA}/check-runs"
     )
     assert commands[4].startswith(
-        f"api --paginate repos/org/repo/commits/{HEAD_SHA}/statuses"
+        f"api repos/org/repo/commits/{HEAD_SHA}/status"
     )
     assert commands[5] == f"pr merge 19 --match-head-commit {HEAD_SHA} --merge {flag}"
 
@@ -184,6 +185,16 @@ def test_merge_pr_rejects_a_caller_head_pin(tmp_path, args):
     env, log = install_fake_gh(tmp_path, 0)
 
     completed = run_script(env, "19", *args)
+
+    assert completed.returncode == 2
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("flag", ["--repo", "-R"])
+def test_merge_pr_rejects_an_empty_repo_value(tmp_path, flag):
+    env, log = install_fake_gh(tmp_path, 0)
+
+    completed = run_script(env, "19", flag, "")
 
     assert completed.returncode == 2
     assert not log.exists()
