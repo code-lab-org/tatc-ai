@@ -33,11 +33,17 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
+head_before=$(gh pr view "$pr_number" ${repo_args[@]+"${repo_args[@]}"} --json headRefOid --jq .headRefOid)
+
 if ! gh pr checks "$pr_number" ${repo_args[@]+"${repo_args[@]}"}; then
     echo "Refusing to merge pull request #$pr_number because its checks are failing or pending." >&2
     exit 1
 fi
 
-head=$(gh pr view "$pr_number" ${repo_args[@]+"${repo_args[@]}"} --json headRefOid --jq .headRefOid)
+head_after=$(gh pr view "$pr_number" ${repo_args[@]+"${repo_args[@]}"} --json headRefOid --jq .headRefOid)
+if [ "$head_before" != "$head_after" ]; then
+    echo "Refusing to merge pull request #$pr_number because its head moved during the check." >&2
+    exit 1
+fi
 
-gh pr merge "$pr_number" --match-head-commit "$head" --merge ${extra_args[@]+"${extra_args[@]}"} ${repo_args[@]+"${repo_args[@]}"}
+gh pr merge "$pr_number" --match-head-commit "$head_before" --merge ${extra_args[@]+"${extra_args[@]}"} ${repo_args[@]+"${repo_args[@]}"}
