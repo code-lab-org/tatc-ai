@@ -82,6 +82,11 @@ def test_real_documents_match_the_code():
     [
         pytest.param(f"{BUDGET:g} seconds", f"{BUDGET + 1:g} seconds", id="gate-budget"),
         pytest.param(f"{RESERVE:g} seconds", f"{RESERVE + 1:g} seconds", id="retry-reserve"),
+        pytest.param(
+            f"less than {FLOOR:g} seconds",
+            f"less than {FLOOR + 100:g} seconds",
+            id="retry-floor",
+        ),
         pytest.param(f"{TIMEOUT}-minute", f"{TIMEOUT + 100}-minute", id="job-timeout"),
         pytest.param(f"{CASE_COUNT} cases", f"{CASE_COUNT + 1} cases", id="guide-case-count"),
         pytest.param(f"{CASE_COUNT}-case", f"{CASE_COUNT + 1}-case", id="readme-case-count"),

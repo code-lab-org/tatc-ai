@@ -93,7 +93,7 @@ def test_merge_pr_passes_repo_to_checks_and_view(tmp_path, repo_flag):
     assert log.read_text(encoding="utf-8").splitlines() == [
         f"pr checks 19 {flag}",
         f"pr view 19 {flag} --json headRefOid --jq .headRefOid",
-        f"pr merge 19 --match-head-commit {HEAD_SHA} --merge",
+        f"pr merge 19 --match-head-commit {HEAD_SHA} --merge {flag}",
     ]
 
 

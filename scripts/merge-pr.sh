@@ -40,4 +40,4 @@ fi
 
 head=$(gh pr view "$pr_number" ${repo_args[@]+"${repo_args[@]}"} --json headRefOid --jq .headRefOid)
 
-gh pr merge "$pr_number" --match-head-commit "$head" --merge ${extra_args[@]+"${extra_args[@]}"}
+gh pr merge "$pr_number" --match-head-commit "$head" --merge ${extra_args[@]+"${extra_args[@]}"} ${repo_args[@]+"${repo_args[@]}"}
