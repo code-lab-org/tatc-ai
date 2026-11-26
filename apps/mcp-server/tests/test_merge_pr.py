@@ -105,7 +105,7 @@ def test_merge_pr_requires_clean_checks(tmp_path, checks_exit):
             f"api --paginate repos/org/repo/commits/{HEAD_SHA}/check-runs"
         )
         assert commands[5].startswith(
-            f"api repos/org/repo/commits/{HEAD_SHA}/status"
+            f"api --paginate repos/org/repo/commits/{HEAD_SHA}/status"
         )
         assert commands[6] == (
             f"pr merge 19 --match-head-commit {HEAD_SHA} --merge --delete-branch"
@@ -133,7 +133,7 @@ def test_merge_pr_passes_repo_to_checks_and_view(tmp_path, repo_flag):
         f"api --paginate repos/org/repo/commits/{HEAD_SHA}/check-runs"
     )
     assert commands[4].startswith(
-        f"api repos/org/repo/commits/{HEAD_SHA}/status"
+        f"api --paginate repos/org/repo/commits/{HEAD_SHA}/status"
     )
     assert commands[5] == f"pr merge 19 --match-head-commit {HEAD_SHA} --merge {flag}"
 
@@ -172,6 +172,21 @@ def test_merge_pr_refuses_when_the_pinned_sha_has_bad_statuses(tmp_path):
     assert completed.returncode != 0
     assert "not all green" in completed.stderr
     assert not any("pr merge" in line for line in log.read_text().splitlines())
+
+
+def test_merge_pr_paginates_the_combined_status(tmp_path):
+    env, log = install_fake_gh(tmp_path, 0, bad_statuses="ci/late-page")
+
+    completed = run_script(env, "19")
+
+    assert completed.returncode != 0
+    assert "ci/late-page" in completed.stderr
+    status_calls = [
+        line
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line.startswith("api --paginate") and "/status" in line
+    ]
+    assert status_calls, "the combined status call must paginate"
 
 
 @pytest.mark.parametrize(

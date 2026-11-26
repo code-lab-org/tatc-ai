@@ -74,7 +74,7 @@ fi
 
 bad=$(gh api --paginate "repos/$repo/commits/$head_before/check-runs" \
     --jq '.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")) | .name')
-bad_status=$(gh api "repos/$repo/commits/$head_before/status" \
+bad_status=$(gh api --paginate "repos/$repo/commits/$head_before/status" \
     --jq '[.statuses[] | select(.state != "success") | .context] | join(",")')
 if [ -n "$bad" ] || [ -n "$bad_status" ]; then
     echo "Refusing to merge pull request #$pr_number because checks for $head_before are not all green: $bad $bad_status" >&2
